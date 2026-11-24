@@ -65,6 +65,54 @@ function model(name: string, schema: Schema<any>): LooseModel {
 }
 
 export const ReportModel = model('Report', reportSchema);
-export const UserModel = model('User', userSchema);
+// Đặt tên model nội bộ là AppUser (collection `app_users`) để tránh xung đột với model `User` chuẩn (`users`)
+export const UserModel = (mongoose.models.AppUser as LooseModel | undefined) ?? (mongoose.model('AppUser', userSchema, 'app_users') as unknown as LooseModel);
 export const OtpModel = model('Otp', otpSchema);
 export const AuditLogModel = model('AuditLog', auditSchema);
+
+// Export bộ Mongoose Models chuẩn Hybrid Local-First <-> MongoDB Atlas (users, incidents, spam_logs)
+export {
+  User,
+  userSchema,
+  USER_ROLES,
+  type AssignedArea,
+  type OtpVerificationState,
+  type IUser,
+  type UserDocument,
+  type UserRole,
+} from './User';
+export {
+  Incident,
+  incidentSchema,
+  INCIDENT_CATEGORIES,
+  INCIDENT_STATUSES,
+  MEDIA_TYPES,
+  generateIncidentCode,
+  computePriorityScore,
+  type IIncident,
+  type IncidentDocument,
+  type IncidentCategory,
+  type IncidentStatus,
+  type IncidentLocation,
+  type IncidentMediaItem,
+  type IncidentAiAnalysis,
+  type IncidentDuplicateControl,
+  type IncidentTimelineEntry,
+} from './Incident';
+export {
+  SpamLog,
+  spamLogSchema,
+  SPAM_REASONS,
+  SPAM_LOG_TTL_SECONDS,
+  type ISpamLog,
+  type SpamLogDocument,
+  type SpamReason,
+} from './SpamLog';
+export {
+  DONG_NAI_GEO_BOUNDS,
+  SYNC_STATUSES,
+  isWithinDongNaiBounds,
+  validateDongNaiCoordinates,
+  type HybridSyncFields,
+  type SyncStatus,
+} from './common';

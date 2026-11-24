@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server/src/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:dongnai": "tsx src/seed/seedDongNai.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",
