@@ -18,6 +18,9 @@ export function toProfile(u: UserRecord): UserProfile {
     staffCode: u.staffCode,
     wardCode: u.wardCode,
     unitCode: u.unitCode,
+    defaultWardCode: u.defaultWardCode ?? u.wardCode ?? null,
+    notificationsEnabled: u.notificationsEnabled ?? true,
+    revoked: Boolean(u.revoked),
     trustScore: u.trustScore,
     badges: u.badges,
     volunteerHours: u.volunteerHours,
@@ -31,8 +34,20 @@ export function toProfile(u: UserRecord): UserProfile {
 export class TrustService {
   constructor(private readonly users: UserRepository) {}
 
-  newUserDefaults(): Pick<UserRecord, 'trustScore' | 'badges' | 'volunteerHours' | 'points' | 'notifications'> {
-    return { trustScore: TRUST_START, badges: [], volunteerHours: 0, points: 0, notifications: [] };
+  newUserDefaults(): Pick<
+    UserRecord,
+    'trustScore' | 'badges' | 'volunteerHours' | 'points' | 'notifications' | 'defaultWardCode' | 'notificationsEnabled' | 'revoked'
+  > {
+    return {
+      trustScore: TRUST_START,
+      badges: [],
+      volunteerHours: 0,
+      points: 0,
+      notifications: [],
+      defaultWardCode: null,
+      notificationsEnabled: true,
+      revoked: false,
+    };
   }
 
   isSupervised(u: Pick<UserRecord, 'trustScore'>): boolean {
@@ -58,7 +73,7 @@ export class TrustService {
 
   async notify(userId: string, text: string, reportCode: string): Promise<void> {
     const u = await this.users.get(userId);
-    if (!u) return; // người dùng seed không có tài khoản thật
+    if (!u || u.notificationsEnabled === false) return;
     const n: Notification = { id: newId('nt'), text, reportCode, at: new Date().toISOString(), read: false };
     u.notifications = [n, ...u.notifications].slice(0, 50);
     await this.users.save(u);

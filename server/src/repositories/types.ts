@@ -1,4 +1,5 @@
 import type { AuditEntry, Notification, Report, ReportStatus, Role } from '../../../shared/types';
+import type { OtpChannel } from '../services/otpDelivery.service';
 
 export interface UserRecord {
   id: string;
@@ -10,6 +11,9 @@ export interface UserRecord {
   passwordHash: string | null;
   wardCode: string | null;
   unitCode: string | null;
+  defaultWardCode?: string | null;
+  notificationsEnabled?: boolean;
+  revoked?: boolean;
   trustScore: number;
   badges: string[];
   volunteerHours: number;
@@ -18,13 +22,36 @@ export interface UserRecord {
   createdAt: string;
 }
 
+/** Bảng otp_challenges: lưu HMAC-SHA256 hash, thời hạn 5 phút, số lần sai & đánh dấu consumedAt chống replay. */
 export interface OtpRecord {
-  phone: string;
+  identifier: string;
+  channel: OtpChannel;
+  purpose: 'login' | 'reset_password';
   codeHash: string;
   expiresAt: number;
   resendAt: number;
   failedAttempts: number;
   lockedUntil: number;
+  consumedAt: number | null;
+}
+
+/** Bảng sessions: quản lý Refresh Token rotation & thu hồi phiên trên từng hoặc mọi thiết bị. */
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  refreshHash: string;
+  userAgent: string;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt: number | null;
+  replacedBySessionId: string | null;
+}
+
+export interface BoundingBoxQuery {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
 }
 
 export interface ReportQuery {
@@ -32,6 +59,9 @@ export interface ReportQuery {
   statuses?: ReportStatus[];
   category?: string;
   reporterId?: string;
+  bbox?: BoundingBoxQuery;
+  /** Keyset/Cursor pagination: ISO timestamp `createdAt` của phần tử cuối trang trước */
+  cursor?: string;
   limit?: number;
 }
 
@@ -59,6 +89,7 @@ export interface ReportRepository {
 export interface UserRepository {
   get(id: string): Promise<UserRecord | null>;
   getByPhone(phone: string): Promise<UserRecord | null>;
+  getByEmail(email: string): Promise<UserRecord | null>;
   getByStaffCode(code: string): Promise<UserRecord | null>;
   save(user: UserRecord): Promise<void>;
   list(role?: Role): Promise<UserRecord[]>;
@@ -74,9 +105,16 @@ export interface AuditRepository {
 }
 
 export interface OtpRepository {
-  get(phone: string): Promise<OtpRecord | null>;
+  get(identifier: string): Promise<OtpRecord | null>;
   save(rec: OtpRecord): Promise<void>;
-  delete(phone: string): Promise<void>;
+  delete(identifier: string): Promise<void>;
+}
+
+export interface SessionRepository {
+  getByRefreshHash(refreshHash: string): Promise<SessionRecord | null>;
+  save(rec: SessionRecord): Promise<void>;
+  revoke(id: string, replacedBySessionId?: string | null): Promise<void>;
+  revokeAllForUser(userId: string): Promise<void>;
 }
 
 export interface Repositories {
@@ -85,6 +123,7 @@ export interface Repositories {
   users: UserRepository;
   audit: AuditRepository;
   otps: OtpRepository;
+  sessions: SessionRepository;
   ping(): Promise<boolean>;
   close(): Promise<void>;
 }

@@ -62,7 +62,7 @@ export default function AdminPage() {
           <Clock />
           <div className="hidden text-right leading-tight sm:block"><p className="max-w-[10rem] truncate text-xs font-semibold">{u.name}</p><p className="mono text-[10px] text-ioc-dim">{u.staffCode} · {t(`role.${u.role}`)}</p></div>
           <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}><SettingsIcon className="h-4 w-4" /></button>
-          <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => { authStore.clear(); nav('/auth'); }} aria-label={t('nav.logout')}><LogOut className="h-4 w-4" /></button>
+          <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => void authStore.signOut().then(() => nav('/auth'))} aria-label={t('nav.logout')}><LogOut className="h-4 w-4" /></button>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2">
           {isCity ? <ScopePicker dark /> : <span className="ioc-btn ioc-btn-cyan cursor-default">{scopeName}</span>}

@@ -1,6 +1,6 @@
 /**
  * Data Contract dùng chung cho client/ và server/ (Interface-First).
- * Mọi thay đổi schema phải bắt đầu từ file này.
+ * Mô hình chính quyền 2 cấp: Thành phố Đồng Nai -> 95 Phường/Xã (33 Phường, 62 Xã từ 30/04/2026).
  */
 
 export type Category = 'rac_thai' | 'den_duong' | 'ngap_nuoc' | 'mat_duong';
@@ -28,13 +28,34 @@ export type Department =
 
 export type WardZone = 'Trung tâm' | 'Công nghiệp' | 'Nông thôn - Sinh thái' | 'Liên vùng';
 
+export type CityRegionId =
+  | 'trung_tam'
+  | 'nam_san_bay_cang'
+  | 'dong_xuan_loc'
+  | 'dong_bac_cat_tien'
+  | 'bac_dong_nai';
+
+export interface QuickJumpRegion {
+  id: CityRegionId;
+  labelVi: string;
+  labelEn: string;
+  center: readonly [lat: number, lng: number];
+  zoom: number;
+}
+
 export interface Ward {
   wardCode: string;
   name: string;
+  shortName: string;
   kind: 'Phường' | 'Xã';
+  region: CityRegionId;
   zone: WardZone;
   centerLat: number;
   centerLng: number;
+  /** 10 phường mới nâng cấp từ xã ngày 30/04/2026 (NQ 237/NQ-UBTVQH16) */
+  upgradedOn2026: boolean;
+  /** Tên đơn vị cũ (trước 01/07/2025 & trước 30/04/2026) để ánh xạ ngược 2 thế hệ */
+  legacyAliases: readonly string[];
   adjacentWardCodes: string[];
   arterialRoads: string[];
 }
@@ -129,7 +150,7 @@ export interface Report {
   afterPhoto: Photo | null;
   clusterCount: number;
   contributors: Contributor[];
-  /** userId đã bấm "Cùng xác nhận" (mỗi SĐT/userId chỉ 1 lần) */
+  /** userId đã bấm "Cùng xác nhận" (mỗi tài khoản chỉ 1 lần) */
   confirmations: string[];
   reporterId: string;
   reporterPhoneMasked: string;
@@ -166,6 +187,43 @@ export type ClientReport = Omit<Report, 'reporterId' | 'contributors' | 'confirm
   mine?: boolean;
 };
 
+/** Bản tóm tắt siêu nhẹ cho Map Markers (không kéo mảng ảnh base64 lớn). */
+export interface ReportSummary {
+  id: string;
+  code: string;
+  category: Category;
+  title: string;
+  severity: 1 | 2 | 3 | 4 | 5;
+  isEmergency: boolean;
+  emergencyLevel: 0 | 1;
+  priority: Priority;
+  status: ReportStatus;
+  wardCode: string;
+  lat: number;
+  lng: number;
+  clusterCount: number;
+  confirmCount: number;
+  createdAt: string;
+}
+
+export interface PaginatedReports {
+  items: ClientReport[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total: number;
+}
+
+export interface ReverseGeocodeResult {
+  inBounds: boolean;
+  address: string;
+  wardCode: string | null;
+  wardName: string | null;
+  source: 'osm_alias' | 'osm_nearest' | 'local_fallback' | 'out_of_bounds';
+  needsConfirmation: boolean;
+  matchedAlias: string | null;
+  arterial: { name: string; distanceM: number } | null;
+}
+
 export interface AuditEntry {
   id: string;
   seq: number;
@@ -198,6 +256,9 @@ export interface UserProfile {
   staffCode: string | null;
   wardCode: string | null;
   unitCode: string | null;
+  defaultWardCode?: string | null;
+  notificationsEnabled?: boolean;
+  revoked?: boolean;
   trustScore: number;
   badges: string[];
   volunteerHours: number;

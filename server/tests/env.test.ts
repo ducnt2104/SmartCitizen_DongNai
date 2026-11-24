@@ -10,7 +10,8 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
         PORT: 'not-a-port',
         MONGODB_URI: 'https://invalid-uri.example.com',
         JWT_SECRET: '',
-        DEMO_OTP: 'maybe',
+        OTP_PROVIDER: 'invalid_provider',
+        COOKIE_SECURE: 'maybe',
       });
     } catch (err) {
       caught = err as Error;
@@ -18,12 +19,13 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
 
     expect(caught).toBeInstanceOf(Error);
     const msg = caught!.message;
-    expect(msg).toContain('phát hiện 4 biến môi trường thiếu hoặc không hợp lệ');
+    expect(msg).toContain('phát hiện 5 biến môi trường thiếu hoặc không hợp lệ');
     expect(msg).toContain('PORT');
     expect(msg).toContain('MONGODB_URI');
     expect(msg).toContain('JWT_SECRET');
     expect(msg).toContain('MISSING');
-    expect(msg).toContain('DEMO_OTP');
+    expect(msg).toContain('OTP_PROVIDER');
+    expect(msg).toContain('COOKIE_SECURE');
   });
 
   it('từ chối JWT_SECRET ngắn hơn 32 ký tự ở production và không làm lộ giá trị secret', () => {
@@ -56,6 +58,9 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
     expect(parsed.isProd).toBe(true);
     expect(parsed.port).toBe(8080);
     expect(parsed.jwtSecretEphemeral).toBe(false);
+    expect(parsed.cookieSecure).toBe(true);
+    expect(parsed.refreshTokenDays).toBe(7);
+    expect(parsed.otpProvider).toBe('auto');
     expect(parsed.mongoUri).toBe('');
     expect(parsed.geminiApiKey).toBe('');
   });
@@ -67,6 +72,7 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
 
     expect(parsed.isProd).toBe(false);
     expect(parsed.jwtSecretEphemeral).toBe(true);
+    expect(parsed.cookieSecure).toBe(false);
     expect(parsed.jwtSecret.length).toBeGreaterThanOrEqual(64);
   });
 });

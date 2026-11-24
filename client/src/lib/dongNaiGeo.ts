@@ -1,6 +1,16 @@
-/** Haversine + Bounding Box + Trục huyết mạch (nguồn duy nhất ở /shared, dùng chung với server). */
 export {
-  haversineMeters, inDongNaiBBox, matchArterial, nearestWard, maskPhone, normalizePhone, ARTERIAL_ROADS,
+  ARTERIAL_ROADS,
+  haversineMeters,
+  inDongNaiBBox,
+  maskEmail,
+  maskPhone,
+  matchArterial,
+  nearestWard,
+  normalizeEmail,
+  normalizePhone,
+  resolveAdminUnit,
+  type ArterialMatch,
+  type ArterialRoad,
 } from '@shared/geo';
-export type { ArterialRoad, ArterialMatch } from '@shared/geo';
-export { DONG_NAI_BBOX, CLUSTER_RADIUS_M, GPS_WARN_M } from '@shared/constants';
+export { DONG_NAI_BBOX, DONG_NAI_CITY_BOUNDS, DONG_NAI_CITY_CENTER, DONG_NAI_MAP_BOUNDS } from '@shared/constants';
+export { hammingDistance, isValidHash } from '@shared/dhash';

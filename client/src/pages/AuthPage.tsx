@@ -1,4 +1,4 @@
-import { Building2, Lock, LogOut, Settings as SettingsIcon, ShieldCheck, Users, UserRound, Landmark } from 'lucide-react';
+import { Lock, LogOut, Settings as SettingsIcon, ShieldCheck, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { AuthSession } from '@shared/types';
@@ -13,7 +13,9 @@ import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
 
 type Tab = 'A' | 'B';
-type DemoKind = 'citizen' | 'volunteer' | 'ward_officer' | 'city_admin';
+
+const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
+const WARDS_XA = DONG_NAI_WARDS.filter((w) => w.kind === 'Xã');
 
 function errText(e: unknown, t: ReturnType<typeof useI18n>['t']): string {
   if (e instanceof NetworkError) return t('auth.offlineErr');
@@ -31,18 +33,19 @@ export default function AuthPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Cổng nội bộ
+  // Cổng nội bộ 2 cấp (Thành phố Đồng Nai -> 95 Phường/Xã)
   const [staffCode, setStaffCode] = useState('');
   const [password, setPassword] = useState('');
-  const [unit, setUnit] = useState('DN-TB');
+  const [unit, setUnit] = useState('city');
   // Đăng ký tình nguyện viên
-  const [volWard, setVolWard] = useState('DN-TB');
-  const [volUnit, setVolUnit] = useState('DN-TB-01');
+  const [volWard, setVolWard] = useState(WARDS_PHUONG[0]?.wardCode ?? 'DN-TB');
+  const [volUnit, setVolUnit] = useState(`${WARDS_PHUONG[0]?.wardCode ?? 'DN-TB'}-01`);
 
   const go = (s: AuthSession): void => {
     const role = s.user.role;
     if (role === 'city_admin') set({ scope: 'city' });
-    if (role === 'ward_officer' && s.user.wardCode) set({ scope: `ward:${s.user.wardCode}` });
+    else if (role === 'ward_officer' && s.user.wardCode) set({ scope: `ward:${s.user.wardCode}` });
+    else if (s.user.defaultWardCode) set({ scope: `ward:${s.user.defaultWardCode}` });
     nav(role === 'volunteer' ? '/volunteer' : role === 'citizen' ? '/' : '/admin', { replace: true });
   };
 
@@ -50,23 +53,10 @@ export default function AuthPage() {
     setBusy(true);
     setErr(null);
     try {
-      const s = await api<AuthSession>('/api/auth/staff/login', { body: { staffCode: staffCode.trim(), password, unit } });
+      const s = await api<AuthSession>('/api/auth/staff/login', {
+        body: { staffCode: staffCode.trim(), password, unit },
+      });
       authStore.set(s);
-      go(s);
-    } catch (e) {
-      setErr(errText(e, t));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const demo = async (kind: DemoKind): Promise<void> => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const s = await api<AuthSession>('/api/auth/demo', { body: { kind } });
-      authStore.set(s);
-      toast('success', t('auth.demoOk', { name: s.user.name }));
       go(s);
     } catch (e) {
       setErr(errText(e, t));
@@ -79,7 +69,9 @@ export default function AuthPage() {
     setBusy(true);
     setErr(null);
     try {
-      const s = await api<AuthSession>('/api/auth/volunteer/register', { body: { wardCode: volWard, unitCode: volUnit.trim().toUpperCase() } });
+      const s = await api<AuthSession>('/api/auth/volunteer/register', {
+        body: { wardCode: volWard, unitCode: volUnit.trim().toUpperCase() },
+      });
       authStore.set(s);
       toast('success', t('auth.volOk'));
       nav('/volunteer');
@@ -88,29 +80,6 @@ export default function AuthPage() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const demoBar = (dark: boolean): JSX.Element => {
-    const base = dark ? 'ioc-btn !min-h-11' : 'btn btn-ghost !min-h-12 !text-sm';
-    const items: Array<[DemoKind, string, JSX.Element]> = [
-      ['citizen', t('demo.citizen'), <UserRound key="a" className="h-4 w-4" aria-hidden />],
-      ['volunteer', t('demo.volunteer'), <Users key="b" className="h-4 w-4" aria-hidden />],
-      ['ward_officer', t('demo.officer'), <Building2 key="c" className="h-4 w-4" aria-hidden />],
-      ['city_admin', t('demo.city'), <Landmark key="d" className="h-4 w-4" aria-hidden />],
-    ];
-    return (
-      <div className={`mt-6 border-t pt-4 ${dark ? 'border-ioc-line' : 'border-line'}`} aria-label={t('demo.title')}>
-        <p className={`mb-2 text-xs font-bold uppercase tracking-wider ${dark ? 'text-ioc-dim' : 'text-muted'}`}>{t('demo.title')}</p>
-        <div className="grid grid-cols-2 gap-2">
-          {items.map(([k, label, icon]) => (
-            <button key={k} type="button" className={`${base} !justify-start`} disabled={busy} onClick={() => void demo(k)}>
-              {icon}<span className="min-w-0 break-words text-left leading-tight">{label}</span>
-            </button>
-          ))}
-        </div>
-        <p className={`mt-2 text-[11px] ${dark ? 'text-ioc-dim' : 'text-muted'}`}>{t('demo.note')}</p>
-      </div>
-    );
   };
 
   const tabs = (dark: boolean): JSX.Element => (
@@ -138,7 +107,9 @@ export default function AuthPage() {
         <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5">
           <div className="flex items-center justify-between">
             <Link to="/" aria-label={t('nav.home')}><Logo dark /></Link>
-            <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}><SettingsIcon className="h-4 w-4" /></button>
+            <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
+              <SettingsIcon className="h-4 w-4" />
+            </button>
           </div>
           <div className="mt-6">{tabs(true)}</div>
           <div className="ioc-panel mt-4 p-5">
@@ -148,7 +119,7 @@ export default function AuthPage() {
             <form className="mt-4 space-y-3" onSubmit={(e) => { e.preventDefault(); void staffLogin(); }}>
               <div>
                 <label htmlFor="sc" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-ioc-dim">{t('auth.staffCode')}</label>
-                <input id="sc" className="ioc-field mono w-full !min-h-11" value={staffCode} onChange={(e) => setStaffCode(e.target.value)} autoComplete="username" placeholder="CB-TB-01" />
+                <input id="sc" className="ioc-field mono w-full !min-h-11" value={staffCode} onChange={(e) => setStaffCode(e.target.value)} autoComplete="username" placeholder="ADMIN-DN-01 / CB-..." />
               </div>
               <div>
                 <label htmlFor="pw" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-ioc-dim">{t('auth.password')}</label>
@@ -157,10 +128,12 @@ export default function AuthPage() {
               <div>
                 <label htmlFor="un" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-ioc-dim">{t('auth.unit')}</label>
                 <select id="un" className="ioc-field w-full !min-h-11" value={unit} onChange={(e) => setUnit(e.target.value)}>
-                  <option value="DN-TB">Phường Trấn Biên</option>
                   <option value="city">{t('auth.unitCity')}</option>
-                  <optgroup label={t('auth.unitOther')}>
-                    {DONG_NAI_WARDS.filter((w) => w.wardCode !== 'DN-TB').map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                  <optgroup label={t('scope.groupPhuong')}>
+                    {WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                  </optgroup>
+                  <optgroup label={t('scope.groupXa')}>
+                    {WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
                   </optgroup>
                 </select>
               </div>
@@ -169,9 +142,8 @@ export default function AuthPage() {
               </button>
             </form>
             {err && <p role="alert" className="mt-3 rounded border border-red-500/50 bg-red-500/10 p-2 text-sm text-ioc-red">{err}</p>}
-            <p className="mt-3 text-[11px] text-ioc-dim">{t('auth.staffNote')}</p>
+            <p className="mt-3 text-[11px] leading-relaxed text-ioc-dim">{t('auth.staffNote')}</p>
           </div>
-          {demoBar(true)}
           <p className="mt-auto pt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </div>
       </div>
@@ -183,17 +155,23 @@ export default function AuthPage() {
       <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5">
         <div className="flex items-center justify-between">
           <Link to="/" aria-label={t('nav.home')}><Logo /></Link>
-          <button type="button" className="btn btn-ghost !min-h-10 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}><SettingsIcon className="h-5 w-5" /></button>
+          <button type="button" className="btn btn-ghost !min-h-10 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
+            <SettingsIcon className="h-5 w-5" />
+          </button>
         </div>
         <div className="mt-6">{tabs(false)}</div>
         <div className="card mt-4 space-y-4 p-5">
           <h1 className="text-xl font-extrabold">{t('auth.communityTitle')}</h1>
           {session ? (
             <div className="space-y-3">
-              <p className="rounded-xl bg-ok-soft p-3 text-sm font-semibold text-ok"><ShieldCheck className="mr-1 inline h-4 w-4" aria-hidden />{t('auth.loggedAs', { name: session.user.name })}</p>
+              <p className="rounded-xl bg-ok-soft p-3 text-sm font-semibold text-ok">
+                <ShieldCheck className="mr-1 inline h-4 w-4" aria-hidden />{t('auth.loggedAs', { name: session.user.name })}
+              </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <button type="button" className="btn btn-primary" onClick={() => go(session)}>{t('auth.continue')}</button>
-                <button type="button" className="btn btn-ghost" onClick={() => authStore.clear()}><LogOut className="h-4 w-4" aria-hidden />{t('nav.logout')}</button>
+                <button type="button" className="btn btn-ghost" onClick={() => void authStore.signOut()}>
+                  <LogOut className="h-4 w-4" aria-hidden />{t('nav.logout')}
+                </button>
               </div>
             </div>
           ) : (
@@ -207,19 +185,25 @@ export default function AuthPage() {
               <div>
                 <label htmlFor="vw" className="label">{t('auth.volWard')}</label>
                 <select id="vw" className="field" value={volWard} onChange={(e) => { setVolWard(e.target.value); setVolUnit(`${e.target.value}-01`); }}>
-                  {DONG_NAI_WARDS.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                  <optgroup label={t('scope.groupPhuong')}>
+                    {WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                  </optgroup>
+                  <optgroup label={t('scope.groupXa')}>
+                    {WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                  </optgroup>
                 </select>
               </div>
               <div>
                 <label htmlFor="vu" className="label">{t('auth.volUnit')}</label>
-                <input id="vu" className="field mono" value={volUnit} onChange={(e) => setVolUnit(e.target.value)} placeholder="DN-TB-01" />
+                <input id="vu" className="field mono" value={volUnit} onChange={(e) => setVolUnit(e.target.value)} placeholder="DN-LTH-01" />
               </div>
-              <button type="button" className="btn btn-primary w-full" disabled={busy} onClick={() => void registerVolunteer()}>{busy ? <Spinner /> : null}{t('auth.volRegister')}</button>
+              <button type="button" className="btn btn-primary w-full" disabled={busy} onClick={() => void registerVolunteer()}>
+                {busy ? <Spinner /> : null}{t('auth.volRegister')}
+              </button>
             </div>
           )}
           {err && <p role="alert" className="rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">{err}</p>}
         </div>
-        {demoBar(false)}
         <p className="mt-auto pt-6 text-center text-xs text-muted">{t('footer.credit')}</p>
       </div>
     </div>

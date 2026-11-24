@@ -62,10 +62,11 @@ describe('MongoDB Schemas & Indexes bắt buộc', () => {
 });
 
 describe('Validation địa lý Đồng Nai & Schema constraints', () => {
-  it('khung bao địa lý tỉnh Đồng Nai (lat 10.55–11.60, lng 106.75–107.60)', () => {
-    expect(DONG_NAI_GEO_BOUNDS).toEqual({ latMin: 10.55, latMax: 11.6, lngMin: 106.75, lngMax: 107.6 });
-    expect(isWithinDongNaiBounds(106.8243, 10.9465)).toBe(true); // P. Trấn Biên, TP. Biên Hòa
-    expect(isWithinDongNaiBounds(107.3618, 11.4215)).toBe(true); // Xã Tà Lài, H. Tân Phú
+  it('khung bao địa lý toàn Thành phố Đồng Nai (lat 10.50–12.28, lng 106.42–107.68)', () => {
+    expect(DONG_NAI_GEO_BOUNDS).toEqual({ latMin: 10.5, latMax: 12.28, lngMin: 106.42, lngMax: 107.68 });
+    expect(isWithinDongNaiBounds(106.8243, 10.9465)).toBe(true); // Phường Trấn Biên
+    expect(isWithinDongNaiBounds(107.3618, 11.4215)).toBe(true); // Xã Tà Lài
+    expect(isWithinDongNaiBounds(107.092, 12.142)).toBe(true);   // Xã Bù Gia Mập (Bắc Đồng Nai)
     expect(isWithinDongNaiBounds(105.8542, 21.0285)).toBe(false); // Hà Nội
     expect(isWithinDongNaiBounds(10.9465, 106.8243)).toBe(false); // Bị đảo ngược [lat, lng]
   });

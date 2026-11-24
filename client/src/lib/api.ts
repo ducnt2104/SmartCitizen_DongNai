@@ -1,3 +1,4 @@
+import type { AuthSession } from '@shared/types';
 import { authStore } from './authStore';
 import { deviceFingerprintSync } from './deviceFp';
 
@@ -24,11 +25,13 @@ export class NetworkError extends Error {
 }
 
 export interface ApiOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   token?: string | null;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Nội bộ: tránh đệ quy khi gọi /api/auth/refresh */
+  _retried?: boolean;
 }
 
 export function apiUrl(path: string): string {
@@ -44,6 +47,31 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
   };
 }
 
+let refreshingPromise: Promise<boolean> | null = null;
+
+/** Thử xoay vòng Refresh Token qua HTTP-only Cookie khi Access Token ngắn hạn (15m) hết hạn. */
+async function tryRefreshSession(): Promise<boolean> {
+  if (refreshingPromise) return refreshingPromise;
+  refreshingPromise = (async () => {
+    try {
+      const res = await fetch(apiUrl('/api/auth/refresh'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-Device-Fp': deviceFingerprintSync() },
+      });
+      if (!res.ok) return false;
+      const session = (await res.json()) as AuthSession;
+      authStore.set(session);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshingPromise = null;
+    }
+  })();
+  return refreshingPromise;
+}
+
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
@@ -52,6 +80,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   try {
     res = await fetch(apiUrl(path), {
       method: opts.method ?? (opts.body === undefined ? 'GET' : 'POST'),
+      credentials: 'include',
       headers: authHeaders(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: ctrl.signal,
@@ -61,6 +90,15 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   } finally {
     window.clearTimeout(timeout);
   }
+
+  // Tự động xoay vòng phiên bằng HTTP-only Refresh Cookie khi Access Token hết hạn
+  if (res.status === 401 && !opts._retried && !path.startsWith('/api/auth/')) {
+    const refreshed = await tryRefreshSession();
+    if (refreshed) {
+      return api<T>(path, { ...opts, _retried: true });
+    }
+  }
+
   const text = await res.text();
   let data: unknown = null;
   if (text) {
@@ -79,7 +117,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 }
 
 export async function downloadFile(path: string, filename: string): Promise<void> {
-  const res = await fetch(apiUrl(path), { headers: authHeaders() }).catch(() => {
+  const res = await fetch(apiUrl(path), { credentials: 'include', headers: authHeaders() }).catch(() => {
     throw new NetworkError();
   });
   if (!res.ok) throw new ApiError(res.status, 'download_failed', 'Không tải được tệp báo cáo');
@@ -111,6 +149,7 @@ export async function streamChat(
   try {
     res = await fetch(apiUrl('/api/ai/chat'), {
       method: 'POST',
+      credentials: 'include',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
       signal,
@@ -125,7 +164,7 @@ export async function streamChat(
     try {
       msg = (JSON.parse(t) as { error?: { message?: string } }).error?.message ?? msg;
     } catch {
-      /* nội dung không phải JSON: giữ thông điệp mặc định */
+      /* giữ thông điệp mặc định */
     }
     throw new ApiError(res.status, 'chat_failed', msg);
   }

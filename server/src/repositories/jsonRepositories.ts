@@ -4,7 +4,7 @@ import type { AuditEntry, Report, Role } from '../../../shared/types';
 import { haversineMeters } from '../../../shared/geo';
 import type {
   AuditRepository, NearbyQuery, OtpRecord, OtpRepository, ReportQuery, ReportRepository, Repositories,
-  UserRecord, UserRepository,
+  SessionRecord, SessionRepository, UserRecord, UserRepository,
 } from './types';
 
 interface StoreShape {
@@ -12,11 +12,12 @@ interface StoreShape {
   users: UserRecord[];
   audit: AuditEntry[];
   otps: OtpRecord[];
+  sessions: SessionRecord[];
 }
 
 /** Local Persistent JSON Store: ghi nguyên tử (tmp + rename), gộp nhiều lần ghi liên tiếp (debounce). */
 class JsonStore {
-  data: StoreShape = { reports: [], users: [], audit: [], otps: [] };
+  data: StoreShape = { reports: [], users: [], audit: [], otps: [], sessions: [] };
   private timer: NodeJS.Timeout | null = null;
   private writing: Promise<void> = Promise.resolve();
 
@@ -34,6 +35,7 @@ class JsonStore {
         users: parsed.users ?? [],
         audit: parsed.audit ?? [],
         otps: parsed.otps ?? [],
+        sessions: parsed.sessions ?? [],
       };
     } catch (err) {
       const backup = `${this.file}.corrupt-${Date.now()}`;
@@ -71,6 +73,13 @@ class JsonReportRepo implements ReportRepository {
     if (q.statuses) rows = rows.filter((r) => q.statuses!.includes(r.status));
     if (q.category) rows = rows.filter((r) => r.category === q.category);
     if (q.reporterId) rows = rows.filter((r) => r.reporterId === q.reporterId || r.contributors.some((c) => c.userId === q.reporterId));
+    if (q.bbox) {
+      const { minLng, minLat, maxLng, maxLat } = q.bbox;
+      rows = rows.filter((r) => r.lat >= minLat && r.lat <= maxLat && r.lng >= minLng && r.lng <= maxLng);
+    }
+    if (q.cursor) {
+      rows = rows.filter((r) => r.createdAt < q.cursor!);
+    }
     rows = [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return structuredClone(q.limit ? rows.slice(0, q.limit) : rows);
   }
@@ -120,6 +129,11 @@ class JsonUserRepo implements UserRepository {
     const u = this.s.data.users.find((x) => x.phone === phone);
     return u ? structuredClone(u) : null;
   }
+  async getByEmail(email: string): Promise<UserRecord | null> {
+    const low = email.toLowerCase();
+    const u = this.s.data.users.find((x) => x.email?.toLowerCase() === low);
+    return u ? structuredClone(u) : null;
+  }
   async getByStaffCode(code: string): Promise<UserRecord | null> {
     const u = this.s.data.users.find((x) => x.staffCode?.toLowerCase() === code.toLowerCase());
     return u ? structuredClone(u) : null;
@@ -158,18 +172,47 @@ class JsonAuditRepo implements AuditRepository {
 
 class JsonOtpRepo implements OtpRepository {
   constructor(private readonly s: JsonStore) {}
-  async get(phone: string): Promise<OtpRecord | null> {
-    const o = this.s.data.otps.find((x) => x.phone === phone);
+  async get(identifier: string): Promise<OtpRecord | null> {
+    const o = this.s.data.otps.find((x) => x.identifier === identifier);
     return o ? { ...o } : null;
   }
   async save(rec: OtpRecord): Promise<void> {
-    const i = this.s.data.otps.findIndex((x) => x.phone === rec.phone);
+    const i = this.s.data.otps.findIndex((x) => x.identifier === rec.identifier);
     if (i >= 0) this.s.data.otps[i] = { ...rec };
     else this.s.data.otps.push({ ...rec });
     this.s.touch();
   }
-  async delete(phone: string): Promise<void> {
-    this.s.data.otps = this.s.data.otps.filter((x) => x.phone !== phone);
+  async delete(identifier: string): Promise<void> {
+    this.s.data.otps = this.s.data.otps.filter((x) => x.identifier !== identifier);
+    this.s.touch();
+  }
+}
+
+class JsonSessionRepo implements SessionRepository {
+  constructor(private readonly s: JsonStore) {}
+  async getByRefreshHash(refreshHash: string): Promise<SessionRecord | null> {
+    const found = this.s.data.sessions.find((x) => x.refreshHash === refreshHash);
+    return found ? { ...found } : null;
+  }
+  async save(rec: SessionRecord): Promise<void> {
+    const i = this.s.data.sessions.findIndex((x) => x.id === rec.id);
+    if (i >= 0) this.s.data.sessions[i] = { ...rec };
+    else this.s.data.sessions.push({ ...rec });
+    this.s.touch();
+  }
+  async revoke(id: string, replacedBySessionId: string | null = null): Promise<void> {
+    const found = this.s.data.sessions.find((x) => x.id === id);
+    if (found) {
+      found.revokedAt = Date.now();
+      if (replacedBySessionId) found.replacedBySessionId = replacedBySessionId;
+      this.s.touch();
+    }
+  }
+  async revokeAllForUser(userId: string): Promise<void> {
+    const now = Date.now();
+    for (const s of this.s.data.sessions) {
+      if (s.userId === userId && !s.revokedAt) s.revokedAt = now;
+    }
     this.s.touch();
   }
 }
@@ -183,6 +226,7 @@ export function createJsonRepositories(dataDir: string): Repositories {
     users: new JsonUserRepo(store),
     audit: new JsonAuditRepo(store),
     otps: new JsonOtpRepo(store),
+    sessions: new JsonSessionRepo(store),
     ping: async () => true,
     close: () => store.flush(),
   };

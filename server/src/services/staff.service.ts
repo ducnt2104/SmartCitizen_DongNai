@@ -6,7 +6,7 @@ import type {
 } from '../../../shared/types';
 import type { Repositories, UserRecord } from '../repositories/types';
 import { badRequest, forbidden, notFound } from '../utils/errors';
-import { newId } from '../utils/crypto';
+import { hashPassword, newId } from '../utils/crypto';
 import { assertScope, inScope, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { AuditService } from './audit.service';
 import type { GeminiService } from './gemini.service';
@@ -224,6 +224,73 @@ export class StaffService {
   async staffList(): Promise<UserProfile[]> {
     const [a, b] = await Promise.all([this.repos.users.list('ward_officer'), this.repos.users.list('city_admin')]);
     return [...b, ...a].map(toProfile);
+  }
+
+  /** Cấp tài khoản Cán bộ Phường/Xã mới (chỉ city_admin — mô hình RBAC 2 cấp). */
+  async createOfficer(
+    admin: UserRecord,
+    input: { staffCode: string; name: string; password: string; wardCode: string; email?: string },
+  ): Promise<UserProfile> {
+    if (admin.role !== 'city_admin') throw forbidden('Chỉ Quản trị viên cấp Thành phố mới được cấp tài khoản cán bộ.');
+    const ward = WARD_BY_CODE[input.wardCode];
+    if (!ward) throw badRequest('Phường/Xã phân công không thuộc 95 ĐVHC Thành phố Đồng Nai.', 'invalid_ward');
+    const code = input.staffCode.trim().toUpperCase();
+    const existing = await this.repos.users.getByStaffCode(code);
+    if (existing) throw badRequest(`Mã cán bộ ${code} đã tồn tại.`, 'staff_exists');
+    const record: UserRecord = {
+      id: newId('u_staff'),
+      role: 'ward_officer',
+      name: input.name.trim(),
+      phone: null,
+      email: input.email ? input.email.trim().toLowerCase() : null,
+      staffCode: code,
+      passwordHash: hashPassword(input.password),
+      wardCode: ward.wardCode,
+      unitCode: null,
+      createdAt: new Date().toISOString(),
+      ...this.trust.newUserDefaults(),
+      trustScore: 100,
+    };
+    await this.repos.users.save(record);
+    await this.audit.log(this.actor(admin), 'staff.create', record.id, null, { staffCode: code, wardCode: ward.wardCode, name: record.name });
+    return toProfile(record);
+  }
+
+  /** Thu hồi / khôi phục quyền tài khoản cán bộ (đồng thời thu hồi mọi phiên đăng nhập đang mở). */
+  async setStaffRevoked(admin: UserRecord, staffId: string, revoked: boolean): Promise<UserProfile> {
+    if (admin.role !== 'city_admin') throw forbidden('Chỉ Quản trị viên cấp Thành phố mới được thu hồi tài khoản cán bộ.');
+    if (staffId === admin.id) throw badRequest('Không thể tự thu hồi tài khoản của chính mình.');
+    const target = await this.repos.users.get(staffId);
+    if (!target || (target.role !== 'ward_officer' && target.role !== 'city_admin')) {
+      throw notFound('Không tìm thấy tài khoản cán bộ.');
+    }
+    const before = { revoked: Boolean(target.revoked) };
+    target.revoked = revoked;
+    await this.repos.users.save(target);
+    if (revoked) await this.repos.sessions.revokeAllForUser(target.id);
+    await this.audit.log(this.actor(admin), revoked ? 'staff.revoke' : 'staff.reinstate', target.id, before, { revoked });
+    return toProfile(target);
+  }
+
+  /** Điều phối chuyển tuyến khi phản ánh bị gửi nhầm Phường/Xã sang đúng ĐVHC trong 95 Phường/Xã. */
+  async transferWard(u: UserRecord, id: string, toWardCode: string, note: string): Promise<ClientReport> {
+    const r = await this.load(u, id);
+    const targetWard = WARD_BY_CODE[toWardCode];
+    if (!targetWard) throw badRequest('Phường/Xã đích không hợp lệ.', 'invalid_ward');
+    if (r.wardCode === targetWard.wardCode) throw badRequest('Hồ sơ đã thuộc Phường/Xã này.', 'same_ward');
+    const prevWard = WARD_BY_CODE[r.wardCode]?.name ?? r.wardCode;
+    const before = { wardCode: r.wardCode };
+    const now = new Date().toISOString();
+    r.wardCode = targetWard.wardCode;
+    r.timeline.push({
+      stage: 'dispatched',
+      at: now,
+      note: `Chuyển tuyến từ ${prevWard} sang ${targetWard.name}. ${note}`.trim(),
+    });
+    r.updatedAt = now;
+    await this.repos.reports.update(r);
+    await this.audit.log(this.actor(u), 'report.transfer_ward', r.id, before, { wardCode: targetWard.wardCode, note });
+    return toClientReport(r);
   }
 
   async export(u: UserRecord, scope: string, month: string, format: 'csv' | 'json'): Promise<{ body: string; contentType: string; filename: string }> {

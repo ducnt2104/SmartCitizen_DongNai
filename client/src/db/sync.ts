@@ -46,9 +46,9 @@ export function refreshFromServer(): Promise<boolean> {
         if (stale.length) await db.reports.bulkDelete(stale);
         await db.reports.bulkPut(list.map((r) => ({ ...r, syncState: 'synced' as const, mine: mineIds.has(r.id) || prevMine.has(r.id) })));
       });
-      const scopes = new Set(['city', 'ward:DN-TB']);
+      const scopes = new Set(['city']);
       try {
-        const cur = JSON.parse(localStorage.getItem('sc.settings.v1') ?? '{}') as { scope?: string };
+        const cur = JSON.parse(localStorage.getItem('sc.settings.v2') ?? '{}') as { scope?: string };
         if (cur.scope) scopes.add(cur.scope);
       } catch (err) {
         console.warn('Không đọc được phạm vi hiện tại:', err);
@@ -132,6 +132,20 @@ export async function processOutbox(): Promise<void> {
           emit({ type: 'item_failed', item, message: err.message });
         } else {
           const message = err instanceof Error ? err.message : String(err);
+          // Rollback Optimistic UI nếu lượt "Cùng xác nhận (+1)" bị máy chủ từ chối (4xx)
+          if (item.kind === 'confirm') {
+            const cur = await db.reports.get(item.targetId);
+            if (cur && cur.confirmCount > 0) {
+              await db.reports.update(item.targetId, { confirmCount: cur.confirmCount - 1 });
+            }
+            try {
+              const raw = localStorage.getItem('sc.confirmed.v1');
+              if (raw) {
+                const next = (JSON.parse(raw) as string[]).filter((x) => x !== item.targetId);
+                localStorage.setItem('sc.confirmed.v1', JSON.stringify(next));
+              }
+            } catch { /* bỏ qua nếu storage không khả dụng */ }
+          }
           await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: message });
           emit({ type: 'item_failed', item, message });
         }

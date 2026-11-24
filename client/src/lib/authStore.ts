@@ -29,6 +29,18 @@ if (store) {
 const listeners = new Set<() => void>();
 const emit = (): void => listeners.forEach((l) => l());
 
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY) return;
+    try {
+      session = e.newValue ? (JSON.parse(e.newValue) as AuthSession) : null;
+    } catch {
+      session = null;
+    }
+    emit();
+  });
+}
+
 export const authStore = {
   get: (): AuthSession | null => session,
   token: (): string | null => session?.token ?? null,
@@ -47,6 +59,15 @@ export const authStore = {
     session = null;
     try { storage()?.removeItem(KEY); } catch (err) { console.warn('Không xóa được phiên:', err); }
     emit();
+  },
+  /** Đăng xuất khỏi máy chủ (xóa HTTP-only cookies + thu hồi Refresh Token) rồi xóa phiên cục bộ. */
+  async signOut(): Promise<void> {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* vẫn tiếp tục xóa phiên cục bộ khi ngoại tuyến */
+    }
+    this.clear();
   },
   subscribe(l: () => void): () => void {
     listeners.add(l);

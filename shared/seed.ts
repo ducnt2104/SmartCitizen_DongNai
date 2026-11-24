@@ -1,4 +1,4 @@
-import { DEPARTMENT_BY_CATEGORY, PILOT_WARD_CODE } from './constants';
+import { DEPARTMENT_BY_CATEGORY } from './constants';
 import { hammingDistance } from './dhash';
 import { WARD_BY_CODE } from './dongNaiWards';
 import { matchArterial, maskPhone } from './geo';
@@ -8,18 +8,18 @@ import type {
 } from './types';
 
 /**
- * Bộ dữ liệu mẫu CHUẨN (deterministic) dùng chung cho MongoDB/JSON Seed và IndexedDB Local Seed.
- *  - 64 hồ sơ Phường Trấn Biên (T11/2026): 21 rác thải / 18 đèn đường / 15 ngập nước / 10 mặt đường
- *    47 đã hoàn thành (73.4%), 17 chưa hoàn thành, thời gian xử lý trung bình đúng 3.2 ngày.
- *  - 16 hồ sơ ở các xã/phường lân cận.
- * Toàn bộ ảnh là ảnh minh họa SVG, hash dHash là giá trị mẫu có kiểm soát khoảng cách Hamming.
+ * Bộ dữ liệu mẫu CHUẨN (deterministic) phủ đều toàn bộ Thành phố Đồng Nai (cả 5 vùng — 95 Phường/Xã):
+ *  - Đô thị Trung tâm (Trấn Biên, Biên Hòa, Tam Hiệp, Trảng Dài, Long Bình, Hố Nai, Long Hưng, Phước Tân, Tam Phước, Tân Triều)
+ *  - Nam — Sân bay & Cảng (Long Thành, Nhơn Trạch, Đại Phước, Phước An, Phước Thái, Long Phước, Bình An, An Phước)
+ *  - Đông — Long Khánh, Trảng Bom, Xuân Lộc (Trảng Bom, Dầu Giây, Long Khánh, Xuân Lộc, Cẩm Mỹ, Bình Lộc, Gia Kiệm)
+ *  - Đông Bắc — Cát Tiên, Trị An, Tân Phú (Trị An, Tân Phú, Tà Lài, Đak Lua, Định Quán, Phú Lý, Nam Cát Tiên)
+ *  - Bắc Đồng Nai — Đồng Xoài, Bình Phước, Lộc Ninh, Bù Gia Mập (Bình Phước, Đồng Xoài, Đồng Phú, Chơn Thành, Tân Khai, Bình Long, Lộc Ninh, Phước Long, Bù Đăng, Bù Gia Mập, Đăk Ơ)
+ * Tổng 80 hồ sơ đa dạng trạng thái, giữ đủ các kịch bản thực tế (Khẩn cấp cấp 1, Hồ sơ Mẹ đa góc,
+ * Cách ly Spam/Ảnh giả/GPS lệch, Before/After nghiệm thu AI, Nhiệm vụ xác minh thực địa).
  */
 
 const DAY = 86400000;
 const BASE_MS = Date.UTC(2026, 10, 1, 1, 0, 0); // 01/11/2026 08:00 (UTC+7)
-const TB = PILOT_WARD_CODE;
-const TB_LAT = 10.9465;
-const TB_LNG = 106.8243;
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -46,7 +46,6 @@ function randHash(c: Ctx): string {
   return s;
 }
 
-/** Lật chính xác n bit để tạo hash có khoảng cách Hamming = n. */
 function flipBits(hash: string, n: number, c: Ctx): string {
   const bits = Array.from({ length: 64 }, (_, i) => i);
   for (let i = bits.length - 1; i > 0; i--) {
@@ -58,7 +57,6 @@ function flipBits(hash: string, n: number, c: Ctx): string {
   return nibbles.map((v) => v.toString(16)).join('');
 }
 
-/** Sinh `count` hash mà mọi cặp đều có khoảng cách > minDist. */
 function farHashes(count: number, minDist: number, c: Ctx): string[] {
   for (;;) {
     const hs = Array.from({ length: count }, () => randHash(c));
@@ -99,362 +97,455 @@ function timeline(created: number, status: ReportStatus, resolvedAt: number | nu
   return ev;
 }
 
-const STREETS = [
-  'Nguyễn Ái Quốc', 'Cách Mạng Tháng Tám', 'Đồng Khởi', 'Võ Thị Sáu', 'Phạm Văn Thuận',
-  'Hà Huy Giáp', 'Nguyễn Văn Trị', 'Phan Đình Phùng', 'Lê Quý Đôn', 'Trần Quốc Toản',
-];
-
 const TITLES: Record<Category, string[]> = {
   rac_thai: [
-    'Rác thải tự phát chất đống đầu hẻm', 'Túi rác bị vứt dọc vỉa hè', 'Đống rác xây dựng bỏ lại cạnh lề đường',
-    'Thùng rác công cộng đầy tràn', 'Rác sinh hoạt vứt bên bờ kênh', 'Rác chặn miệng cống thoát nước',
+    'Rác thải tự phát chất đống ven đường',
+    'Túi rác sinh hoạt ứ đọng trước cổng chợ',
+    'Xà bần xây dựng đổ trái phép cạnh lề đường',
+    'Thùng rác công cộng quá tải gây mùi hôi',
+    'Rác nhựa chặn miệng cống thoát nước',
   ],
   den_duong: [
-    'Đèn đường tắt nhiều đêm liền', 'Cột đèn nhấp nháy, chập chờn', 'Cả đoạn đường tối vì đèn hỏng',
-    'Đèn chiếu sáng công viên không sáng', 'Cần đèn cao áp bị gãy nghiêng',
+    'Đèn chiếu sáng công cộng tắt nhiều đêm liền',
+    'Cột đèn đường nhấp nháy, chập chờn giờ cao điểm',
+    'Đoạn đường dân sinh tối hoàn toàn vì hỏng đèn',
+    'Cần đèn cao áp bị gãy nghiêng sau gió lớn',
+    'Tủ điện chiếu sáng mở nắp mất an toàn',
   ],
   ngap_nuoc: [
-    'Ngập nước sau mưa lớn trước cổng chợ', 'Cống nghẹt gây ngập đường', 'Nước dâng cao tại điểm trũng',
-    'Nước tràn vào nhà dân sau cơn mưa',
+    'Ngập nước sâu sau mưa lớn cản trở lưu thông',
+    'Cống thoát nước bị nghẹt gây ứ đọng mặt đường',
+    'Nước tràn vào khu dân cư khi mưa kéo dài',
+    'Mặt đường trũng đọng nước dài ngày sau mưa',
   ],
   mat_duong: [
-    'Ổ gà sâu giữa làn xe máy', 'Mặt đường nứt, bong tróc', 'Nắp cống lún gây nguy hiểm', 'Đường lún sụt sau mưa',
+    'Ổ gà lớn trên làn xe máy dễ gây té ngã',
+    'Mặt đường bong tróc, sụt lún sau xe tải nặng',
+    'Nắp hố ga bị sập nứt sát vỉa hè',
+    'Sạt lở lề đường sau mưa cần gia cố khẩn',
   ],
 };
 
 const DESCS: Record<Category, string> = {
-  rac_thai: 'Rác thải tập trung lâu ngày, bốc mùi, ảnh hưởng vệ sinh và mỹ quan khu dân cư.',
-  den_duong: 'Hệ thống chiếu sáng không hoạt động, khu vực thiếu sáng vào buổi tối gây mất an toàn.',
-  ngap_nuoc: 'Nước đọng không thoát kịp sau mưa, gây khó khăn đi lại và nguy cơ ngập sâu.',
-  mat_duong: 'Mặt đường hư hỏng, xe cộ dễ té ngã nhất là vào ban đêm và khi trời mưa.',
+  rac_thai: 'Rác thải tập trung nhiều ngày gây mất vệ sinh môi trường và cản trở lối đi của người dân.',
+  den_duong: 'Hệ thống chiếu sáng không hoạt động ổn định vào ban đêm, tiềm ẩn nguy cơ mất an toàn giao thông.',
+  ngap_nuoc: 'Nước thoát chậm gây ngập kéo dài sau mỗi trận mưa, ảnh hưởng sinh hoạt và việc đi lại.',
+  mat_duong: 'Kết cấu mặt đường hư hỏng nghiêm trọng, xe hai bánh đi qua buổi tối rất nguy hiểm.',
 };
 
-const COMMENTS = [
-  'Xử lý nhanh, cảm ơn đội ngũ.', 'Đường sạch sẽ trở lại, rất hài lòng.', 'Đã sáng đèn, bà con yên tâm đi lại.',
-  'Khắc phục gọn gàng, đúng hẹn.', 'Cảm ơn Trấn Biên đã phản hồi kịp thời.',
-];
+function makeReport(
+  c: Ctx,
+  p: {
+    id: string;
+    wardCode: string;
+    category: Category;
+    title: string;
+    description: string;
+    lat: number;
+    lng: number;
+    address: string;
+    status: ReportStatus;
+    createdMs: number;
+    resolvedMs?: number | null;
+    severity?: 1 | 2 | 3 | 4 | 5;
+    priority?: Report['priority'];
+    isEmergency?: boolean;
+    emergencyLevel?: 0 | 1;
+    photos?: Photo[];
+    afterPhoto?: Photo | null;
+    clusterCount?: number;
+    contributors?: Report['contributors'];
+    confirmations?: string[];
+    seniorSubmitted?: boolean;
+    needsFieldVerification?: boolean;
+    ai?: Partial<AiAnalysis>;
+    gpsMismatchWarning?: boolean;
+    gpsDistanceKm?: number | null;
+    quarantine?: Report['quarantine'];
+    dispatches?: DispatchOrder[];
+    resolution?: Report['resolution'];
+    rating?: Rating | null;
+    extraTimeline?: TimelineEvent[];
+  },
+): Report {
+  const art = matchArterial(p.lat, p.lng);
+  const dept = DEPARTMENT_BY_CATEGORY[p.category];
+  const hash = randHash(c);
+  const reporterId = p.contributors?.[0]?.userId ?? `u_seed_${p.id}`;
+  const phoneMasked = p.contributors?.[0]?.phoneMasked ?? maskPhone(`090${String(1000000 + Math.floor(c.rnd() * 8999999)).slice(0, 7)}`);
+  const photos = p.photos ?? [photo(c, p.category, Math.floor(c.rnd() * 10), 'before', hash, reporterId, p.createdMs)];
+  const priority = p.priority ?? (p.emergencyLevel === 1 ? 'emergency' : 'normal');
+  const slaHours = priority === 'emergency' ? 2 : priority === 'high' ? 24 : 72;
+  const tl = [...timeline(p.createdMs, p.status, p.resolvedMs ?? null), ...(p.extraTimeline ?? [])];
+  const updatedMs = p.resolvedMs ?? p.createdMs + 3600000;
 
-interface Base {
-  id: string;
-  category: Category;
-  title?: string;
-  description?: string;
-  lat: number;
-  lng: number;
-  wardCode: string;
-  createdMs: number;
-  status: ReportStatus;
-  severity?: 1 | 2 | 3 | 4 | 5;
-  photos: Photo[];
-}
-
-function build(c: Ctx, b: Base, over: Partial<Report> = {}): Report {
-  const ward = WARD_BY_CODE[b.wardCode];
-  const arterial = matchArterial(b.lat, b.lng);
-  const street = arterial?.name ?? STREETS[Math.floor(c.rnd() * STREETS.length)];
-  const num = 1 + Math.floor(c.rnd() * 180);
-  const userIdx = Math.floor(c.rnd() * 9000) + 1000;
-  const phone = `09${String(Math.floor(c.rnd() * 100000000)).padStart(8, '0')}`;
-  const reporterId = `u_seed_${userIdx}`;
-  const title = b.title ?? TITLES[b.category][Math.floor(c.rnd() * TITLES[b.category].length)];
-  const ai: AiAnalysis = {
-    authenticityScore: 72 + Math.floor(c.rnd() * 25),
-    fraudFlags: [],
-    confidence: Math.round((0.8 + c.rnd() * 0.17) * 100) / 100,
-    safetyHazards: [],
-    suggestedDepartment: DEPARTMENT_BY_CATEGORY[b.category],
-    mode: 'seed',
-  };
-  const createdAt = iso(b.createdMs);
-  const resolvedAtMs = b.status === 'resolved' ? (over.resolvedAt ? Date.parse(over.resolvedAt) : b.createdMs + 3 * DAY) : null;
-  const confirmN = Math.floor(c.rnd() * 5);
-  const sla = b.createdMs + 72 * 3600000;
-  const base: Report = {
-    id: b.id,
-    code: nextCode(c, b.wardCode),
-    category: b.category,
-    title,
-    description: b.description ?? DESCS[b.category],
-    severity: b.severity ?? ((1 + Math.floor(c.rnd() * 3)) as 1 | 2 | 3),
-    isEmergency: false,
-    emergencyLevel: 0,
-    priority: 'normal',
-    status: b.status,
-    wardCode: b.wardCode,
-    address: `${num} ${street}, ${ward.name}, TP. Đồng Nai`,
-    roadName: street,
-    onArterial: arterial !== null,
-    lat: b.lat,
-    lng: b.lng,
-    photos: b.photos,
-    afterPhoto: null,
-    clusterCount: 1,
-    contributors: [{ userId: reporterId, phoneMasked: maskPhone(phone), at: createdAt }],
-    confirmations: Array.from({ length: confirmN }, (_, i) => `u_seed_cf_${b.id}_${i}`),
+  return {
+    id: p.id,
+    code: nextCode(c, p.wardCode),
+    category: p.category,
+    title: p.title,
+    description: p.description,
+    severity: p.severity ?? (priority === 'emergency' ? 5 : priority === 'high' ? 4 : 3),
+    isEmergency: p.isEmergency ?? priority === 'emergency',
+    emergencyLevel: p.emergencyLevel ?? 0,
+    priority,
+    status: p.status,
+    wardCode: p.wardCode,
+    address: p.address,
+    roadName: art?.name ?? null,
+    onArterial: art !== null,
+    lat: p.lat,
+    lng: p.lng,
+    photos,
+    afterPhoto: p.afterPhoto ?? null,
+    clusterCount: p.clusterCount ?? 1,
+    contributors: p.contributors ?? [{ userId: reporterId, phoneMasked, at: iso(p.createdMs) }],
+    confirmations: p.confirmations ?? [],
     reporterId,
-    reporterPhoneMasked: maskPhone(phone),
+    reporterPhoneMasked: phoneMasked,
     isProxyReport: false,
     proxyVolunteerId: null,
-    seniorSubmitted: false,
-    needsFieldVerification: false,
+    seniorSubmitted: p.seniorSubmitted ?? false,
+    needsFieldVerification: p.needsFieldVerification ?? false,
     assignedVolunteerId: null,
     verification: null,
-    ai,
-    gpsMismatchWarning: false,
-    gpsDistanceKm: null,
-    quarantine: null,
+    ai: {
+      authenticityScore: p.ai?.authenticityScore ?? 90,
+      fraudFlags: p.ai?.fraudFlags ?? [],
+      confidence: p.ai?.confidence ?? 0.91,
+      safetyHazards: p.ai?.safetyHazards ?? [],
+      suggestedDepartment: p.ai?.suggestedDepartment ?? dept,
+      mode: 'seed',
+    },
+    gpsMismatchWarning: p.gpsMismatchWarning ?? false,
+    gpsDistanceKm: p.gpsDistanceKm ?? null,
+    quarantine: p.quarantine ?? null,
     possibleDuplicateOf: null,
-    department: b.status === 'received' || b.status === 'quarantined' ? null : DEPARTMENT_BY_CATEGORY[b.category],
-    slaDueAt: iso(sla),
-    dispatches: [],
-    resolvedAt: resolvedAtMs ? iso(resolvedAtMs) : null,
-    resolution: null,
-    rating: null,
-    timeline: [],
+    department: p.status === 'received' || p.status === 'quarantined' ? null : dept,
+    slaDueAt: p.status === 'resolved' || p.status === 'quarantined' ? null : iso(p.createdMs + slaHours * 3600000),
+    dispatches: p.dispatches ?? [],
+    resolvedAt: p.resolvedMs ? iso(p.resolvedMs) : null,
+    resolution: p.resolution ?? null,
+    rating: p.rating ?? null,
+    timeline: tl,
     source: 'seed',
-    createdAt,
-    updatedAt: iso(resolvedAtMs ?? b.createdMs + 3600000),
+    createdAt: iso(p.createdMs),
+    updatedAt: iso(updatedMs),
   };
-  const merged = { ...base, ...over };
-  merged.timeline = over.timeline ?? timeline(b.createdMs, b.status, resolvedAtMs);
-  return merged;
 }
 
-function tbPoint(c: Ctx): [number, number] {
-  return [TB_LAT + (c.rnd() - 0.5) * 0.016, TB_LNG + (c.rnd() - 0.5) * 0.016];
-}
+/** Danh sách 64 hồ sơ phân bổ đều khắp 5 vùng của Thành phố Đồng Nai (33 Phường, 62 Xã). */
+const CITYWIDE_DISTRIBUTION: ReadonlyArray<readonly [wardCode: string, category: Category, status: ReportStatus]> = [
+  // Đô thị Trung tâm
+  ['DN-TB', 'rac_thai', 'resolved'], ['DN-TB', 'den_duong', 'processing'], ['DN-TB', 'ngap_nuoc', 'resolved'],
+  ['DN-BH', 'mat_duong', 'processing'], ['DN-BH', 'rac_thai', 'resolved'], ['DN-BH', 'den_duong', 'resolved'],
+  ['DN-TDA', 'ngap_nuoc', 'processing'], ['DN-TDA', 'rac_thai', 'resolved'],
+  ['DN-THP', 'den_duong', 'resolved'], ['DN-THP', 'mat_duong', 'received'],
+  ['DN-LBI', 'rac_thai', 'processing'], ['DN-LBI', 'ngap_nuoc', 'resolved'],
+  ['DN-HNI', 'den_duong', 'resolved'], ['DN-LHU', 'ngap_nuoc', 'received'],
+  ['DN-PTA', 'mat_duong', 'resolved'], ['DN-TPC', 'rac_thai', 'resolved'],
+  ['DN-TTR', 'den_duong', 'processing'],
 
-/** n thời lượng (phút) có trung bình đúng avgMin phút. */
-function durationsMinutes(c: Ctx, n: number, avgMin: number): number[] {
-  const raw = Array.from({ length: n }, () => 1500 + c.rnd() * 7500);
-  const target = n * avgMin;
-  const sum = raw.reduce((s, x) => s + x, 0);
-  const scaled = raw.map((x) => Math.round((x * target) / sum));
-  const diff = target - scaled.reduce((s, x) => s + x, 0);
-  scaled[scaled.length - 1] += diff;
-  return scaled;
-}
+  // Nam — Sân bay & Cảng (Long Thành, Nhơn Trạch lên phường 30/04/2026)
+  ['DN-LTH', 'mat_duong', 'processing'], ['DN-LTH', 'den_duong', 'resolved'], ['DN-LTH', 'rac_thai', 'resolved'],
+  ['DN-NTR', 'ngap_nuoc', 'processing'], ['DN-NTR', 'mat_duong', 'resolved'], ['DN-NTR', 'den_duong', 'received'],
+  ['DN-DPH', 'rac_thai', 'resolved'], ['DN-PAN', 'mat_duong', 'processing'],
+  ['DN-PTH', 'ngap_nuoc', 'resolved'], ['DN-LPH', 'den_duong', 'resolved'],
+  ['DN-BAN', 'rac_thai', 'received'], ['DN-APH', 'mat_duong', 'resolved'],
+
+  // Đông — Trảng Bom, Dầu Giây, Long Khánh, Xuân Lộc, Cẩm Mỹ
+  ['DN-TBO', 'ngap_nuoc', 'resolved'], ['DN-TBO', 'rac_thai', 'processing'],
+  ['DN-DGI', 'mat_duong', 'resolved'], ['DN-DGI', 'den_duong', 'processing'],
+  ['DN-LKH', 'rac_thai', 'resolved'], ['DN-LKH', 'den_duong', 'resolved'],
+  ['DN-BLC', 'mat_duong', 'received'], ['DN-BVI', 'rac_thai', 'resolved'],
+  ['DN-XLO', 'den_duong', 'processing'], ['DN-XLO', 'ngap_nuoc', 'resolved'],
+  ['DN-CMY', 'mat_duong', 'resolved'], ['DN-GKI', 'rac_thai', 'resolved'],
+  ['DN-TNH', 'ngap_nuoc', 'received'],
+
+  // Đông Bắc — Cát Tiên, Trị An, Định Quán, Tân Phú, Tà Lài, Đak Lua
+  ['DN-TRA', 'den_duong', 'resolved'], ['DN-TRA', 'rac_thai', 'processing'],
+  ['DN-TPU', 'mat_duong', 'resolved'], ['DN-TPU', 'ngap_nuoc', 'processing'],
+  ['DN-TLA', 'mat_duong', 'processing'], ['DN-TLA', 'rac_thai', 'resolved'],
+  ['DN-DQU', 'den_duong', 'resolved'], ['DN-DLU', 'mat_duong', 'received'],
+  ['DN-PLY', 'den_duong', 'resolved'], ['DN-NCT', 'rac_thai', 'resolved'],
+
+  // Bắc Đồng Nai — Bình Phước, Đồng Xoài, Đồng Phú, Chơn Thành, Tân Khai, Bình Long, Lộc Ninh, Phước Long, Bù Đăng, Bù Gia Mập, Đăk Ơ
+  ['DN-BP', 'ngap_nuoc', 'processing'], ['DN-BP', 'rac_thai', 'resolved'],
+  ['DN-DX', 'den_duong', 'resolved'], ['DN-DX', 'mat_duong', 'processing'],
+  ['DN-DPU', 'rac_thai', 'resolved'], ['DN-CTH', 'mat_duong', 'processing'],
+  ['DN-TKH', 'den_duong', 'resolved'], ['DN-BLO', 'ngap_nuoc', 'resolved'],
+  ['DN-LNI', 'mat_duong', 'processing'], ['DN-PLO', 'den_duong', 'resolved'],
+  ['DN-BDA', 'ngap_nuoc', 'received'], ['DN-BGM', 'mat_duong', 'resolved'],
+];
 
 export function buildSeedReports(): Report[] {
-  const c: Ctx = { rnd: mulberry32(20261124), counters: {}, photoSeq: 0 };
-  const out: Report[] = [];
-  const rnd = c.rnd;
+  const c: Ctx = { rnd: mulberry32(20261130), counters: {}, photoSeq: 0 };
+  const list: Report[] = [];
 
-  const ba: Array<{ cat: Category; title: string; stars: Rating['stars']; score: number }> = [
-    { cat: 'rac_thai', title: 'Rác thải tự phát chất đống đầu hẻm 24', stars: 5, score: 94 },
-    { cat: 'den_duong', title: 'Cả đoạn đường Võ Thị Sáu tối vì đèn hỏng', stars: 5, score: 91 },
-    { cat: 'ngap_nuoc', title: 'Cống nghẹt gây ngập trước cổng chợ Biên Hòa', stars: 5, score: 89 },
-    { cat: 'mat_duong', title: 'Ổ gà sâu giữa làn xe máy đường Đồng Khởi', stars: 5, score: 96 },
-  ];
+  // 1. 02 Vụ Khẩn cấp Cấp độ 1 trên trục huyết mạch (Trung tâm + Bắc Đồng Nai)
+  const em1Ms = BASE_MS + 20 * DAY;
+  const wTB = WARD_BY_CODE['DN-TB'];
+  list.push(
+    makeReport(c, {
+      id: 'rp_tb_em',
+      wardCode: 'DN-TB',
+      category: 'den_duong',
+      title: 'Cây xanh đổ kéo võng dây điện trên trục Nguyễn Ái Quốc – QL1A',
+      description: 'Cây xanh bật gốc sau mưa giông đè lên dây điện chiếu sáng võng sát mặt đường, có tia lửa điện.',
+      lat: 10.9461,
+      lng: 106.8252,
+      address: 'Đường Nguyễn Ái Quốc, Phường Trấn Biên, Thành phố Đồng Nai',
+      status: 'processing',
+      createdMs: em1Ms,
+      severity: 5,
+      priority: 'emergency',
+      isEmergency: true,
+      emergencyLevel: 1,
+      ai: { authenticityScore: 96, safetyHazards: ['Dây điện võng thấp', 'Cây đổ chắn trục huyết mạch'], suggestedDepartment: 'dien_luc' },
+      dispatches: [{
+        id: 'dp_seed_em1',
+        fromWardCode: 'DN-TB',
+        toWardCodes: wTB.adjacentWardCodes.slice(0, 2),
+        units: ['dien_luc', 'csgt'],
+        issuedAt: iso(em1Ms + 60000),
+        issuedBy: 'system',
+        auto: true,
+        note: 'Tự động: khẩn cấp cấp 1 trên trục huyết mạch Nguyễn Ái Quốc — chi viện liên phường.',
+      }],
+      extraTimeline: [{ stage: 'dispatched', at: iso(em1Ms + 60000), note: `Phát lệnh chi viện sang ${wTB.adjacentWardCodes.slice(0, 2).join(', ')} + Điện lực + CSGT` }],
+    }),
+  );
 
-  // 47 hồ sơ hoàn thành, trung bình đúng 4608 phút = 3.2 ngày
-  const durations = durationsMinutes(c, 47, 4608);
-  let dIdx = 0;
+  const em2Ms = BASE_MS + 21 * DAY;
+  const wBP = WARD_BY_CODE['DN-BP'];
+  list.push(
+    makeReport(c, {
+      id: 'rp_bp_em',
+      wardCode: 'DN-BP',
+      category: 'mat_duong',
+      title: 'Sụt lún hố sâu giữa làn xe Quốc lộ 14 qua Phường Bình Phước',
+      description: 'Đoạn mặt đường gần ngã tư Đồng Xoài xuất hiện hố sụt rộng hơn 1.5m sau mưa lớn, ùn ứ nghiêm trọng.',
+      lat: 11.5352,
+      lng: 106.8962,
+      address: 'Quốc lộ 14, Phường Bình Phước, Thành phố Đồng Nai',
+      status: 'processing',
+      createdMs: em2Ms,
+      severity: 5,
+      priority: 'emergency',
+      isEmergency: true,
+      emergencyLevel: 1,
+      ai: { authenticityScore: 95, safetyHazards: ['Hố sụt sâu trên Quốc lộ 14', 'Nguy cơ lật xe tải'], suggestedDepartment: 'giao_thong' },
+      dispatches: [{
+        id: 'dp_seed_em2',
+        fromWardCode: 'DN-BP',
+        toWardCodes: wBP.adjacentWardCodes.slice(0, 2),
+        units: ['giao_thong', 'csgt'],
+        issuedAt: iso(em2Ms + 60000),
+        issuedBy: 'system',
+        auto: true,
+        note: 'Tự động: khẩn cấp cấp 1 trên Quốc lộ 14 — chi viện liên phường Bắc Đồng Nai.',
+      }],
+    }),
+  );
 
-  // ── 4 hồ sơ hoàn thành có ảnh Trước – Sau ──────────────────────────────────
-  ba.forEach((b, i) => {
-    const [lat, lng] = tbPoint(c);
-    const created = BASE_MS + (2 + i * 2) * DAY + Math.floor(rnd() * 3600000);
-    const resolvedMs = created + durations[dIdx++] * 60000;
-    const before = photo(c, b.cat, i + 3, 'before', randHash(c), 'seed', created);
-    const after = photo(c, b.cat, i + 3, 'after', randHash(c), 'seed', resolvedMs);
-    out.push(build(c, {
-      id: `rp_tb_ba_${i + 1}`, category: b.cat, title: b.title, lat, lng, wardCode: TB, createdMs: created,
-      status: 'resolved', photos: [before], severity: 3,
-    }, {
-      afterPhoto: after,
-      resolvedAt: iso(resolvedMs),
-      resolution: {
-        resolutionVerified: true,
-        matchConfidence: b.score,
-        summary: 'Ảnh sau xử lý cùng bối cảnh với ảnh trước, sự cố đã được khắc phục hoàn toàn (dữ liệu mẫu).',
-        mode: 'seed',
-        at: iso(resolvedMs + 600000),
-      },
-      rating: { stars: b.stars, comment: COMMENTS[i % COMMENTS.length], at: iso(resolvedMs + 7200000) },
-    }));
-  });
-
-  // ── 01 Vụ KHẨN CẤP Cấp độ 1 trên trục huyết mạch Nguyễn Ái Quốc / QL1A ─────────
-  {
-    const created = Date.UTC(2026, 10, 24, 0, 40, 0);
-    const adj = WARD_BY_CODE[TB].adjacentWardCodes.slice(0, 2);
-    const dispatch: DispatchOrder = {
-      id: 'dp_seed_1',
-      fromWardCode: TB,
-      toWardCodes: adj,
-      units: ['dien_luc', 'csgt'],
-      issuedAt: iso(created + 90000),
-      issuedBy: 'system',
-      auto: true,
-      note: 'Tự động: sự cố khẩn cấp trên trục huyết mạch — chi viện liên phường, Điện lực và CSGT.',
-    };
-    out.push(build(c, {
-      id: 'rp_tb_em', category: 'den_duong', title: 'Cây đổ đè dây điện võng thấp trên đường Nguyễn Ái Quốc',
-      description: 'Cây lớn bật gốc đổ ngang lòng đường, dây điện trung thế võng sát mặt đường, có tia lửa. Xe cộ đang phải né lên vỉa hè.',
-      lat: 10.9461, lng: 106.8252, wardCode: TB, createdMs: created, status: 'processing', severity: 5,
-      photos: [photo(c, 'den_duong', 1, 'before', randHash(c), 'seed', created)],
-    }, {
-      isEmergency: true, emergencyLevel: 1, priority: 'emergency', department: 'dien_luc',
-      slaDueAt: iso(created + 2 * 3600000), roadName: 'Nguyễn Ái Quốc', onArterial: true,
-      address: 'Ngã tư Nguyễn Ái Quốc – Quốc lộ 1A, Phường Trấn Biên, TP. Đồng Nai',
-      dispatches: [dispatch],
-      confirmations: Array.from({ length: 9 }, (_, i) => `u_seed_cf_em_${i}`),
-      ai: {
-        authenticityScore: 96, fraudFlags: [], confidence: 0.97,
-        safetyHazards: ['Dây điện trần võng thấp', 'Cây đổ chắn lòng đường', 'Nguy cơ giật điện / chập cháy'],
-        suggestedDepartment: 'dien_luc', mode: 'seed',
-      },
-      timeline: [
-        { stage: 'received', at: iso(created), note: 'Hệ thống tiếp nhận phản ánh' },
-        { stage: 'escalated', at: iso(created + 60000), note: 'AI gắn KHẨN CẤP CẤP ĐỘ 1 — trục huyết mạch Nguyễn Ái Quốc / QL1A' },
-        { stage: 'dispatched', at: iso(created + 90000), note: `Phát lệnh chi viện sang ${adj.join(', ')} + Điện lực + CSGT` },
-        { stage: 'processing', at: iso(created + 20 * 60000), note: 'Điện lực đã cắt điện cục bộ, đội xử lý đang đến' },
-      ],
-    }));
-  }
-
-  // ── 01 Hồ sơ Mẹ gom từ 4 phản ánh thật (4 SĐT, 4 góc, ≤50m) ────────────────────
-  {
-    const created = Date.UTC(2026, 10, 23, 1, 15, 0);
-    const hs = farHashes(4, 12, c);
-    const mLat = 10.9498;
-    const mLng = 106.8209;
-    const users = [1, 2, 3, 4].map((i) => {
-      const ph = `09${String(10000000 + i * 1357911).slice(0, 8)}`;
-      return { userId: `u_seed_m${i}`, phoneMasked: maskPhone(ph), at: iso(created + i * 11 * 60000) };
-    });
-    out.push(build(c, {
-      id: 'rp_tb_mother', category: 'ngap_nuoc', title: 'Ngập nước kéo dài tại điểm trũng đường Cách Mạng Tháng Tám',
-      description: 'Bốn người dân ở bốn góc chụp khác nhau cùng báo một điểm ngập sâu sau mưa, nước chưa rút sau nhiều giờ.',
-      lat: mLat, lng: mLng, wardCode: TB, createdMs: created, status: 'processing', severity: 4,
-      photos: hs.map((h, i) => photo(c, 'ngap_nuoc', i + 1, i === 0 ? 'before' : 'angle', h, users[i].userId, created + i * 11 * 60000)),
-    }, {
-      clusterCount: 4, contributors: users, priority: 'high', reporterId: users[0].userId,
-      reporterPhoneMasked: users[0].phoneMasked, confirmations: ['u_seed_cf_mother_1', 'u_seed_cf_mother_2', 'u_seed_cf_mother_3'],
-      roadName: 'Cách Mạng Tháng Tám', address: '56 Cách Mạng Tháng Tám, Phường Trấn Biên, TP. Đồng Nai',
-      ai: { authenticityScore: 93, fraudFlags: [], confidence: 0.95, safetyHazards: ['Nước ngập sâu, khó quan sát hố ga'], suggestedDepartment: 'ubnd_khu_pho', mode: 'seed' },
-      timeline: [
-        { stage: 'received', at: iso(created), note: 'Phản ánh đầu tiên được tiếp nhận' },
-        { stage: 'escalated', at: iso(created + 33 * 60000), note: 'AI gom 4 phản ánh (4 SĐT, 4 góc ảnh, ≤50m) thành Hồ sơ Mẹ — nâng Ưu tiên Cao' },
-        { stage: 'processing', at: iso(created + 3 * 3600000), note: 'Giao UBND Khu phố xử lý' },
-      ],
-    }));
-  }
-
-  // ── 03 đơn Cách ly ───────────────────────────────────────────────────────────
-  // (a) trùng y chang ảnh: dHash distance ≤ 5 so với 1 hồ sơ rác thải khác
-  const dupSourceHash = out.find((r) => r.id === 'rp_tb_ba_1')!.photos[0].dHash;
-  {
-    const created = Date.UTC(2026, 10, 22, 3, 20, 0);
-    const [lat, lng] = tbPoint(c);
-    out.push(build(c, {
-      id: 'rp_tb_q_dup', category: 'rac_thai', title: 'Rác thải tự phát chất đống đầu hẻm 24 (gửi lặp)', lat, lng, wardCode: TB,
-      createdMs: created, status: 'quarantined', photos: [photo(c, 'rac_thai', 3, 'before', flipBits(dupSourceHash, 3, c), 'seed', created)],
-    }, {
-      quarantine: { reason: 'duplicate_image', detail: 'Ảnh trùng khớp (dHash distance = 3 ≤ 5) với hồ sơ đã gửi trong 24 giờ.', at: iso(created + 30000), relatedReportId: 'rp_tb_ba_1' },
-      possibleDuplicateOf: 'rp_tb_ba_1',
-    }));
-  }
-  // (b) ảnh chụp lại màn hình
-  {
-    const created = Date.UTC(2026, 10, 22, 11, 5, 0);
-    const [lat, lng] = tbPoint(c);
-    out.push(build(c, {
-      id: 'rp_tb_q_screen', category: 'den_duong', title: 'Đèn đường hỏng (ảnh chụp từ màn hình)', lat, lng, wardCode: TB,
-      createdMs: created, status: 'quarantined', photos: [photo(c, 'den_duong', 2, 'before', randHash(c), 'seed', created)],
-    }, {
-      ai: { authenticityScore: 18, fraudFlags: ['screen_recapture', 'moire_pattern', 'unrelated_scene'], confidence: 0.91, safetyHazards: [], suggestedDepartment: 'dien_chieu_sang', mode: 'seed' },
-      quarantine: { reason: 'low_authenticity', detail: 'AI nhận diện ảnh chụp lại màn hình máy tính (authenticityScore = 18 < 45).', at: iso(created + 30000), relatedReportId: null },
-    }));
-  }
-  // (c) lệch GPS bất thường > 5km
-  {
-    const created = Date.UTC(2026, 10, 23, 8, 40, 0);
-    const [lat, lng] = tbPoint(c);
-    out.push(build(c, {
-      id: 'rp_tb_q_gps', category: 'mat_duong', title: 'Ổ gà lớn (vị trí ghim lệch xa vị trí thiết bị)', lat, lng, wardCode: TB,
-      createdMs: created, status: 'quarantined', photos: [photo(c, 'mat_duong', 4, 'before', randHash(c), 'seed', created)],
-    }, {
-      gpsMismatchWarning: true, gpsDistanceKm: 7.4,
-      quarantine: { reason: 'gps_anomaly', detail: 'GPS thiết bị lệch 7.4 km so với vị trí ghim (> 5 km) mà không chọn chế độ "đã rời hiện trường".', at: iso(created + 30000), relatedReportId: null },
-    }));
-  }
-
-  // ── 03 nhiệm vụ Xác minh Thực địa (Người cao tuổi gửi) ─────────────────────────
-  const vt: Array<[Category, string, boolean]> = [
-    ['rac_thai', 'Cô Lan (72 tuổi) báo: rác đổ ngay cổng hẻm 112 mấy ngày chưa ai dọn', false],
-    ['mat_duong', 'Chú Sáu (68 tuổi) báo: ổ gà trước trạm y tế phường, xe lăn khó đi', true],
-    ['den_duong', 'Bác Hai (75 tuổi) báo: đèn đường hẻm 38 tắt, tối không dám ra đường', false],
-  ];
-  vt.forEach(([cat, title, proxy], i) => {
-    const created = Date.UTC(2026, 10, 23, 2 + i, 10, 0);
-    const [lat, lng] = tbPoint(c);
-    out.push(build(c, {
-      id: `rp_tb_vt_${i + 1}`, category: cat, title, lat, lng, wardCode: TB, createdMs: created, status: 'verifying', severity: 3,
-      photos: [photo(c, cat, i + 5, 'before', randHash(c), 'seed', created)],
-    }, {
-      seniorSubmitted: true, needsFieldVerification: true, isProxyReport: proxy, proxyVolunteerId: proxy ? 'u_seed_vol1' : null,
+  // 2. 02 Hồ sơ Mẹ gom đa góc chụp thật (dHash > 12, khác SĐT, <= 50m)
+  const motherMs = BASE_MS + 18 * DAY;
+  const mHashes = farHashes(4, 18, c);
+  const mPhones = ['0901000101', '0901000102', '0901000103', '0901000104'];
+  list.push(
+    makeReport(c, {
+      id: 'rp_tb_mother',
+      wardCode: 'DN-TB',
+      category: 'ngap_nuoc',
+      title: 'Ngập sâu kéo dài trước chợ Biên Hòa — 4 người dân chụp 4 góc',
+      description: 'Miệng cống nghẹt hoàn toàn gây ngập quá nửa bánh xe, 4 người dân đã gửi ảnh nhiều góc độ khác nhau.',
+      lat: 10.9522,
+      lng: 106.8186,
+      address: 'Khu vực chợ Biên Hòa, Phường Trấn Biên, Thành phố Đồng Nai',
+      status: 'processing',
+      createdMs: motherMs,
+      severity: 4,
       priority: 'high',
-    }));
-  });
+      clusterCount: 4,
+      photos: mHashes.map((h, i) => photo(c, 'ngap_nuoc', i, i === 0 ? 'before' : 'angle', h, `u_seed_m_${i}`, motherMs + i * 300000)),
+      contributors: mPhones.map((ph, i) => ({ userId: `u_seed_m_${i}`, phoneMasked: maskPhone(ph), at: iso(motherMs + i * 300000) })),
+      confirmations: ['u_seed_c1', 'u_seed_c2', 'u_seed_c3'],
+      extraTimeline: [{ stage: 'escalated', at: iso(motherMs + 900000), note: 'AI gom 4 phản ánh đa góc chụp (dHash > 12) trong bán kính 50m — nâng Ưu tiên Cao' }],
+    }),
+  );
 
-  // ── Fillers: 52 hồ sơ còn lại (18 rác, 14 đèn, 13 ngập, 7 mặt đường) ──────────
-  const fillCats: Category[] = [
-    ...Array<Category>(18).fill('rac_thai'), ...Array<Category>(14).fill('den_duong'),
-    ...Array<Category>(13).fill('ngap_nuoc'), ...Array<Category>(7).fill('mat_duong'),
+  const lthMotherMs = BASE_MS + 19 * DAY;
+  const lthHashes = farHashes(3, 18, c);
+  list.push(
+    makeReport(c, {
+      id: 'rp_lth_mother',
+      wardCode: 'DN-LTH',
+      category: 'rac_thai',
+      title: 'Bãi rác tự phát gần cửa ngõ Sân bay Long Thành — 3 góc ảnh',
+      description: 'Rác thải công trình và sinh hoạt tập kết trái phép cạnh tuyến đường vào Phường Long Thành.',
+      lat: 10.7906,
+      lng: 106.9512,
+      address: 'Quốc lộ 51, Phường Long Thành, Thành phố Đồng Nai',
+      status: 'processing',
+      createdMs: lthMotherMs,
+      severity: 4,
+      priority: 'high',
+      clusterCount: 3,
+      photos: lthHashes.map((h, i) => photo(c, 'rac_thai', i + 2, i === 0 ? 'before' : 'angle', h, `u_seed_lm_${i}`, lthMotherMs + i * 300000)),
+      contributors: ['0902000201', '0902000202', '0902000203'].map((ph, i) => ({ userId: `u_seed_lm_${i}`, phoneMasked: maskPhone(ph), at: iso(lthMotherMs + i * 300000) })),
+      confirmations: ['u_seed_c4', 'u_seed_c5'],
+    }),
+  );
+
+  // 3. 03 Đơn trong Hàng đợi Cách ly (trùng dHash <= 5, ảnh màn hình, GPS lệch > 5km)
+  const dupHash = flipBits(mHashes[0], 2, c);
+  list.push(
+    makeReport(c, {
+      id: 'rp_tb_q_dup',
+      wardCode: 'DN-TB',
+      category: 'ngap_nuoc',
+      title: 'Gửi lặp ảnh ngập chợ Biên Hòa (Cách ly trùng ảnh)',
+      description: 'Đơn chứa ảnh trùng lặp dHash với Hồ sơ Mẹ trong vòng 24 giờ.',
+      lat: 10.9524,
+      lng: 106.8188,
+      address: 'Phường Trấn Biên, Thành phố Đồng Nai',
+      status: 'quarantined',
+      createdMs: motherMs + 1200000,
+      photos: [photo(c, 'ngap_nuoc', 0, 'before', dupHash, 'u_seed_dup', motherMs + 1200000)],
+      quarantine: { reason: 'duplicate_image', detail: 'Ảnh trùng khớp (dHash distance = 2 ≤ 5) với hồ sơ đã gửi trong 24 giờ.', at: iso(motherMs + 1200000), relatedReportId: 'rp_tb_mother' },
+    }),
+  );
+
+  list.push(
+    makeReport(c, {
+      id: 'rp_tb_q_screen',
+      wardCode: 'DN-NTR',
+      category: 'rac_thai',
+      title: 'Nghi ảnh chụp lại màn hình máy tính (Phường Nhơn Trạch)',
+      description: 'AI phát hiện viền màn hình và vân moiré — cần tình nguyện viên kiểm chứng thực địa.',
+      lat: 10.7335,
+      lng: 106.9075,
+      address: 'Đường Lý Thái Tổ, Phường Nhơn Trạch, Thành phố Đồng Nai',
+      status: 'quarantined',
+      createdMs: BASE_MS + 19 * DAY,
+      needsFieldVerification: true,
+      ai: { authenticityScore: 28, fraudFlags: ['screen_recapture', 'moire_pattern'] },
+      quarantine: { reason: 'low_authenticity', detail: 'AI nghi ảnh không phải hiện trường thật (authenticityScore = 28 < 45).', at: iso(BASE_MS + 19 * DAY), relatedReportId: null },
+    }),
+  );
+
+  list.push(
+    makeReport(c, {
+      id: 'rp_tb_q_gps',
+      wardCode: 'DN-DX',
+      category: 'mat_duong',
+      title: 'Cảnh báo lệch GPS hơn 8km tại Phường Đồng Xoài',
+      description: 'Tọa độ ghim cách xa vị trí GPS thực tế của thiết bị người gửi.',
+      lat: 11.556,
+      lng: 106.866,
+      address: 'Đường Phú Riềng Đỏ, Phường Đồng Xoài, Thành phố Đồng Nai',
+      status: 'quarantined',
+      createdMs: BASE_MS + 20 * DAY,
+      needsFieldVerification: true,
+      gpsMismatchWarning: true,
+      gpsDistanceKm: 8.4,
+      quarantine: { reason: 'gps_anomaly', detail: 'GPS thiết bị lệch 8.4 km so với vị trí ghim (> 5 km).', at: iso(BASE_MS + 20 * DAY), relatedReportId: null },
+    }),
+  );
+
+  // 4. 06 Hồ sơ Đã hoàn thành có ảnh Trước – Sau (Before/After) rải khắp 5 vùng
+  const baDefs: Array<{ id: string; wardCode: string; cat: Category; title: string; days: number }> = [
+    { id: 'rp_ba_1', wardCode: 'DN-TB', cat: 'rac_thai', title: 'Đã dọn sạch bãi rác tự phát hẻm 45 Nguyễn Ái Quốc', days: 1.8 },
+    { id: 'rp_ba_2', wardCode: 'DN-LTH', cat: 'den_duong', title: 'Đã thay mới 6 bóng đèn LED cao áp trục vào Sân bay Long Thành', days: 1.4 },
+    { id: 'rp_ba_3', wardCode: 'DN-LKH', cat: 'mat_duong', title: 'Đã vá nhựa nóng cụm ổ gà đường Hùng Vương, Phường Long Khánh', days: 2.1 },
+    { id: 'rp_ba_4', wardCode: 'DN-TLA', cat: 'rac_thai', title: 'Đã thu gom điểm rác ven đường vào VQG Cát Tiên, Xã Tà Lài', days: 2.3 },
+    { id: 'rp_ba_5', wardCode: 'DN-BP', cat: 'ngap_nuoc', title: 'Đã nạo vét cống tiêu thoát nước điểm ngập Phường Bình Phước', days: 1.6 },
+    { id: 'rp_ba_6', wardCode: 'DN-LNI', cat: 'den_duong', title: 'Đã khôi phục chiếu sáng trung tâm Phường Lộc Ninh (QL13)', days: 2.0 },
   ];
-  // Chọn ngẫu nhiên có kiểm soát 9 đơn chưa hoàn thành (4 received + 5 processing)
-  const order = fillCats.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(rnd() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
-  const openIdx = new Map<number, ReportStatus>();
-  order.slice(0, 9).forEach((idx, k) => openIdx.set(idx, k < 4 ? 'received' : 'processing'));
-
-  fillCats.forEach((cat, i) => {
-    const [lat, lng] = tbPoint(c);
-    const status = openIdx.get(i) ?? 'resolved';
-    let created: number;
-    let over: Partial<Report> = {};
-    if (status === 'resolved') {
-      created = BASE_MS + Math.floor(rnd() * 15 * DAY);
-      const resolvedMs = created + durations[dIdx++] * 60000;
-      const stars = (rnd() < 0.6 ? 5 : 4) as Rating['stars'];
-      over = {
-        resolvedAt: iso(resolvedMs),
-        rating: rnd() < 0.5 ? { stars, comment: COMMENTS[Math.floor(rnd() * COMMENTS.length)], at: iso(resolvedMs + 3 * 3600000) } : null,
-      };
-    } else {
-      created = Date.UTC(2026, 10, 18 + Math.floor(rnd() * 6), 1 + Math.floor(rnd() * 8), Math.floor(rnd() * 60), 0);
-    }
-    out.push(build(c, {
-      id: `rp_tb_${String(i + 1).padStart(3, '0')}`, category: cat, lat, lng, wardCode: TB, createdMs: created, status,
-      photos: [photo(c, cat, i + 1, 'before', randHash(c), 'seed', created)],
-    }, over));
+  baDefs.forEach((b, idx) => {
+    const w = WARD_BY_CODE[b.wardCode];
+    const cr = BASE_MS + (4 + idx * 2) * DAY;
+    const res = cr + Math.round(b.days * DAY);
+    const [hBefore, hAfter] = farHashes(2, 20, c);
+    list.push(
+      makeReport(c, {
+        id: b.id,
+        wardCode: b.wardCode,
+        category: b.cat,
+        title: b.title,
+        description: DESCS[b.cat],
+        lat: w.centerLat + (idx - 2) * 0.0012,
+        lng: w.centerLng + (idx % 3 - 1) * 0.0012,
+        address: `Khu vực trung tâm, ${w.name}, Thành phố Đồng Nai`,
+        status: 'resolved',
+        createdMs: cr,
+        resolvedMs: res,
+        photos: [photo(c, b.cat, idx, 'before', hBefore, `u_seed_ba_${idx}`, cr)],
+        afterPhoto: photo(c, b.cat, idx, 'after', hAfter, 'u_staff_city1', res),
+        resolution: {
+          resolutionVerified: true,
+          matchConfidence: 94,
+          summary: 'Ảnh sau khớp bối cảnh hiện trường và sự cố đã được khắc phục hoàn toàn.',
+          mode: 'seed',
+          at: iso(res),
+        },
+        rating: { stars: 5, comment: 'Xử lý nhanh, minh bạch, có ảnh nghiệm thu rõ ràng!', at: iso(res + 7200000) },
+      }),
+    );
   });
 
-  // ── 16 hồ sơ mở rộng tại các xã, phường lân cận ───────────────────────────────
-  const ext: Array<[string, Category, ReportStatus]> = [
-    ['DN-BH', 'rac_thai', 'resolved'], ['DN-TTR', 'den_duong', 'processing'], ['DN-LKH', 'mat_duong', 'received'],
-    ['DN-TBO', 'ngap_nuoc', 'resolved'], ['DN-LTH', 'mat_duong', 'processing'], ['DN-TLA', 'rac_thai', 'received'],
-    ['DN-NTR', 'ngap_nuoc', 'verifying'], ['DN-HNI', 'den_duong', 'resolved'], ['DN-TDA', 'rac_thai', 'processing'],
-    ['DN-DQU', 'mat_duong', 'resolved'], ['DN-CMY', 'ngap_nuoc', 'received'], ['DN-TPC', 'rac_thai', 'resolved'],
-    ['DN-DGI', 'mat_duong', 'processing'], ['DN-AHO', 'den_duong', 'resolved'], ['DN-XLA', 'rac_thai', 'received'],
-    ['DN-LBI', 'ngap_nuoc', 'resolved'],
+  // 5. 03 Nhiệm vụ Xác minh Thực địa do Người cao tuổi gửi (rải cả trung tâm và vùng xa)
+  const seniorDefs: Array<{ id: string; wardCode: string; cat: Category; title: string }> = [
+    { id: 'rp_sen_1', wardCode: 'DN-TB', cat: 'den_duong', title: 'Đèn hẻm tối om trước nhà văn hóa khu phố (Người cao tuổi báo)' },
+    { id: 'rp_sen_2', wardCode: 'DN-TLA', cat: 'mat_duong', title: 'Đoạn đường vào Ấp 3 bị xói lở sau mưa (Người cao tuổi báo)' },
+    { id: 'rp_sen_3', wardCode: 'DN-BGM', cat: 'ngap_nuoc', title: 'Cống băng đường bị tắc nước tràn vườn (Người cao tuổi báo)' },
   ];
-  ext.forEach(([wc, cat, status], i) => {
-    const w = WARD_BY_CODE[wc];
-    const lat = w.centerLat + (rnd() - 0.5) * 0.008;
-    const lng = w.centerLng + (rnd() - 0.5) * 0.008;
-    const created = BASE_MS + (6 + Math.floor(rnd() * 14)) * DAY;
-    const resolvedMs = status === 'resolved' ? created + (2 + Math.floor(rnd() * 5)) * DAY : null;
-    out.push(build(c, {
-      id: `rp_ext_${String(i + 1).padStart(2, '0')}`, category: cat, lat, lng, wardCode: wc, createdMs: created, status,
-      photos: [photo(c, cat, i + 20, 'before', randHash(c), 'seed', created)],
-    }, resolvedMs ? { resolvedAt: iso(resolvedMs) } : {}));
+  seniorDefs.forEach((s, idx) => {
+    const w = WARD_BY_CODE[s.wardCode];
+    list.push(
+      makeReport(c, {
+        id: s.id,
+        wardCode: s.wardCode,
+        category: s.cat,
+        title: s.title,
+        description: 'Phản ánh gửi từ Chế độ Người cao tuổi — đề nghị Đội Thanh niên Tình nguyện hỗ trợ xác minh hiện trường.',
+        lat: w.centerLat + 0.0015 * (idx + 1),
+        lng: w.centerLng - 0.0012 * (idx + 1),
+        address: `${w.name}, Thành phố Đồng Nai`,
+        status: 'verifying',
+        createdMs: BASE_MS + (20 + idx) * DAY,
+        seniorSubmitted: true,
+        needsFieldVerification: true,
+      }),
+    );
   });
 
-  return out;
+  // 6. 64 Hồ sơ phủ đều 5 vùng toàn Thành phố Đồng Nai
+  CITYWIDE_DISTRIBUTION.forEach(([wardCode, cat, status], idx) => {
+    const w = WARD_BY_CODE[wardCode];
+    const titles = TITLES[cat];
+    const cr = BASE_MS + Math.floor((idx / CITYWIDE_DISTRIBUTION.length) * 21) * DAY + (idx % 7) * 3600000;
+    const durDays = 1.2 + ((idx * 7) % 24) / 10; // 1.2 -> 3.5 ngày
+    const res = status === 'resolved' ? cr + Math.round(durDays * DAY) : null;
+    const jLat = (c.rnd() - 0.5) * 0.014;
+    const jLng = (c.rnd() - 0.5) * 0.014;
+    list.push(
+      makeReport(c, {
+        id: `rp_dn_${String(idx + 1).padStart(2, '0')}`,
+        wardCode,
+        category: cat,
+        title: `${titles[idx % titles.length]} (${w.shortName})`,
+        description: DESCS[cat],
+        lat: Math.round((w.centerLat + jLat) * 100000) / 100000,
+        lng: Math.round((w.centerLng + jLng) * 100000) / 100000,
+        address: `${w.arterialRoads[0] ?? 'Đường liên khu'}, ${w.name}, Thành phố Đồng Nai`,
+        status,
+        createdMs: cr,
+        resolvedMs: res,
+        priority: status === 'processing' && idx % 5 === 0 ? 'high' : 'normal',
+      }),
+    );
+  });
+
+  return list;
 }

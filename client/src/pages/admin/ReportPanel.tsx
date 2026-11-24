@@ -1,16 +1,19 @@
-import { Ban, CheckCircle2, Radio, RotateCcw, ShieldAlert, Upload, X } from 'lucide-react';
+import { ArrowRightLeft, Ban, CheckCircle2, Radio, RotateCcw, ShieldAlert, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { DEPARTMENTS } from '@shared/constants';
 import type { ClientReport, Department } from '@shared/types';
 import { BeforeAfterSlider, SlaClock, Timeline } from '../../components/Timeline';
 import { Spinner } from '../../components/ui';
-import { WARD_BY_CODE } from '../../data/dongNaiWards';
+import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { db } from '../../db/localDb';
 import { useI18n } from '../../i18n';
 import { api, ApiError, NetworkError } from '../../lib/api';
 import { edge } from '../../lib/edgeClient';
 import { CATEGORY_META, DEPT_KEY } from '../../lib/meta';
 import { useToast } from '../../state/toast';
+
+const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
+const WARDS_XA = DONG_NAI_WARDS.filter((w) => w.kind === 'Xã');
 
 interface Props {
   report: ClientReport;
@@ -25,6 +28,8 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [dept, setDept] = useState<Department>(r.department ?? r.ai.suggestedDepartment ?? 'ubnd_khu_pho');
   const [sla, setSla] = useState(r.priority === 'emergency' ? 2 : r.priority === 'high' ? 24 : 72);
+  const [transferWard, setTransferWard] = useState(r.wardCode);
+  const [transferNote, setTransferNote] = useState('');
   const [after, setAfter] = useState<{ dataUrl: string; dHash: string } | null>(null);
   const [override, setOverride] = useState(false);
   const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -157,6 +162,34 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
               </div>
               <button type="button" className="ioc-btn ioc-btn-cyan w-full" onClick={() => void run('assign', () => post<ClientReport>(`/api/admin/reports/${r.id}/assign`, { department: dept, slaHours: sla }), t('ioc.assigned'))}>
                 {busy === 'assign' ? <Spinner /> : null}{t('ioc.assignBtn')}
+              </button>
+            </fieldset>
+
+            {/* Chuyển tuyến Phường/Xã trong 95 ĐVHC nếu phản ánh bị định tuyến nhầm */}
+            <fieldset className="space-y-2 rounded border border-ioc-line p-2" disabled={busy !== null}>
+              <legend className="px-1 text-[11px] font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.transferTitle')}</legend>
+              <select className="ioc-field w-full" value={transferWard} onChange={(e) => setTransferWard(e.target.value)} aria-label={t('ioc.transferTitle')}>
+                <optgroup label={t('scope.groupPhuong')}>
+                  {WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                </optgroup>
+                <optgroup label={t('scope.groupXa')}>
+                  {WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}
+                </optgroup>
+              </select>
+              <input
+                className="ioc-field w-full"
+                placeholder={t('ioc.transferNote')}
+                value={transferNote}
+                onChange={(e) => setTransferNote(e.target.value)}
+                maxLength={300}
+              />
+              <button
+                type="button"
+                className="ioc-btn w-full"
+                disabled={transferWard === r.wardCode}
+                onClick={() => void run('transfer', () => post<ClientReport>(`/api/admin/reports/${r.id}/transfer`, { wardCode: transferWard, note: transferNote }), t('ioc.transferred'))}
+              >
+                {busy === 'transfer' ? <Spinner /> : <ArrowRightLeft className="h-4 w-4" aria-hidden />} {t('ioc.transferBtn')}
               </button>
             </fieldset>
 

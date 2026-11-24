@@ -1,23 +1,38 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom';
+import type { UserProfile } from '@shared/types';
 import { CommunityLayout } from './components/CommunityLayout';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { SpotlightTour } from './components/SpotlightTour';
 import { Spinner } from './components/ui';
 import { syncBus, type SyncEventDetail } from './db/sync';
 import { useI18n, type I18nKey } from './i18n';
+import { api } from './lib/api';
+import { authStore } from './lib/authStore';
 import { useToast } from './state/toast';
 import HomePage from './pages/Home';
 
 const ReportPage = lazy(() => import('./pages/Report'));
 const MapPage = lazy(() => import('./pages/MapPage'));
 const MinePage = lazy(() => import('./pages/MinePage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const VolunteerPage = lazy(() => import('./pages/VolunteerPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const AdminPage = lazy(() => import('./pages/admin/AdminPage'));
 
 function Fallback() {
   return <div className="grid min-h-[40dvh] place-items-center"><Spinner className="h-8 w-8 text-brand" /></div>;
+}
+
+/** Đồng bộ hồ sơ & xoay vòng cookie phiên khi khởi động nếu trình duyệt đang lưu phiên. */
+function SessionSync() {
+  useEffect(() => {
+    if (!authStore.get()) return;
+    void api<{ user: UserProfile }>('/api/me')
+      .then((res) => authStore.updateUser(res.user))
+      .catch(() => { /* api.ts tự thử refresh hoặc xóa phiên nếu hết hạn */ });
+  }, []);
+  return null;
 }
 
 /** Thông báo kết quả đồng bộ Outbox (kể cả đơn gửi lúc ngoại tuyến được xử lý sau). */
@@ -50,6 +65,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ScrollTop />
+      <SessionSync />
       <SyncToasts />
       <Suspense fallback={<Fallback />}>
         <Routes>
@@ -58,6 +74,7 @@ export default function App() {
             <Route path="report" element={<ReportPage />} />
             <Route path="map" element={<MapPage />} />
             <Route path="mine" element={<MinePage />} />
+            <Route path="profile" element={<ProfilePage />} />
             <Route path="volunteer" element={<VolunteerPage />} />
             <Route path="*" element={<HomePage />} />
           </Route>

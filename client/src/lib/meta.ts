@@ -35,8 +35,8 @@ export const DEPT_KEY: Record<Department, I18nKey> = {
 };
 
 export const PIN_COLOR = {
-  resolved: '#15803D',
-  emergency: '#DC2626',
-  high: '#EA580C',
+  resolved: '#10B981',
+  emergency: '#E11D48',
+  high: '#F59E0B',
   open: '#0B57D0',
 };

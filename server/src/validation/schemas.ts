@@ -5,7 +5,7 @@ import { CATEGORIES } from '../../../shared/types';
 
 const hash = z.string().refine(isValidHash, 'dHash phải là 16 ký tự hex');
 const photo = z.object({ dataUrl: z.string().max(1_900_000), dHash: hash });
-const phone = z.string().min(9).max(16);
+const identifier = z.string().min(5).max(120);
 const category = z.enum([...CATEGORIES] as [string, ...string[]]);
 const department = z.enum([...DEPARTMENTS] as [string, ...string[]]);
 const wardCode = z.string().regex(/^DN-[A-Z]{2,4}$/);
@@ -18,16 +18,55 @@ export const edgeStatsSchema = z.object({
 });
 
 export const schemas = {
-  otpRequest: z.object({ phone }),
-  otpVerify: z.object({ phone, code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm 6 chữ số') }),
+  // Hỗ trợ cả `identifier` (email/SĐT) lẫn alias cũ `phone`
+  otpRequest: z
+    .object({
+      identifier: identifier.optional(),
+      phone: identifier.optional(),
+      purpose: z.enum(['login', 'reset_password']).default('login'),
+    })
+    .refine((d) => Boolean(d.identifier || d.phone), 'Cần cung cấp email hoặc số điện thoại.'),
+  otpVerify: z
+    .object({
+      identifier: identifier.optional(),
+      phone: identifier.optional(),
+      code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
+      name: z.string().min(2).max(80).optional(),
+      password: z.string().min(8).max(128).optional(),
+      defaultWardCode: wardCode.optional(),
+    })
+    .refine((d) => Boolean(d.identifier || d.phone), 'Cần cung cấp email hoặc số điện thoại.'),
+  passwordLogin: z.object({
+    identifier,
+    password: z.string().min(1).max(128),
+  }),
+  passwordReset: z.object({
+    identifier,
+    code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
+    newPassword: z.string().min(8).max(128),
+  }),
   staffLogin: z.object({
     staffCode: z.string().min(2).max(32).regex(/^[A-Za-z0-9-]+$/),
     password: z.string().min(1).max(128),
     unit: z.union([z.literal('city'), wardCode]),
   }),
-  googleMock: z.object({ name: z.string().min(1).max(80), email: z.string().email().max(120) }),
-  demoLogin: z.object({ kind: z.enum(['citizen', 'volunteer', 'ward_officer', 'city_admin']) }),
+  updateProfile: z.object({
+    name: z.string().min(2).max(80).optional(),
+    defaultWardCode: wardCode.nullable().optional(),
+    notificationsEnabled: z.boolean().optional(),
+    newPassword: z.string().min(8).max(128).optional(),
+  }),
   volunteerRegister: z.object({ wardCode, unitCode: z.string().max(16) }),
+
+  createStaff: z.object({
+    staffCode: z.string().min(3).max(32).regex(/^[A-Za-z0-9-]+$/),
+    name: z.string().min(2).max(80),
+    password: z.string().min(8).max(128),
+    wardCode,
+    email: z.string().email().max(120).optional(),
+  }),
+  revokeStaff: z.object({ revoked: z.boolean() }),
+  transferWard: z.object({ wardCode, note: z.string().max(300).default('') }),
 
   analyzeImage: z.object({
     image: photo,
@@ -56,7 +95,7 @@ export const schemas = {
     lat: z.number().min(-90).max(90),
     lng: z.number().min(-180).max(180),
     wardCode: wardCode.optional(),
-    address: z.string().max(200).optional(),
+    address: z.string().max(240).optional(),
     photo,
     deviceLat: z.number().min(-90).max(90).optional(),
     deviceLng: z.number().min(-180).max(180).optional(),

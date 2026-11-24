@@ -1,10 +1,31 @@
-import type { Category, ClientReport, Report, ScopeStats } from './types';
+import type { Category, ClientReport, Report, ReportSummary, ScopeStats } from './types';
 import { CATEGORIES } from './types';
 
 export function toClientReport(r: Report): ClientReport {
   const { reporterId: _rid, contributors, confirmations, ...rest } = r;
   void _rid;
   return { ...rest, confirmCount: confirmations.length, contributorCount: contributors.length };
+}
+
+/** Bản tóm tắt nhẹ cho endpoint bản đồ bbox (loại bỏ payload ảnh base64 lớn). */
+export function toReportSummary(r: Report): ReportSummary {
+  return {
+    id: r.id,
+    code: r.code,
+    category: r.category,
+    title: r.title,
+    severity: r.severity,
+    isEmergency: r.isEmergency,
+    emergencyLevel: r.emergencyLevel,
+    priority: r.priority,
+    status: r.status,
+    wardCode: r.wardCode,
+    lat: r.lat,
+    lng: r.lng,
+    clusterCount: r.clusterCount,
+    confirmCount: r.confirmations.length,
+    createdAt: r.createdAt,
+  };
 }
 
 type StatsInput = Pick<ClientReport, 'category' | 'status' | 'createdAt' | 'resolvedAt' | 'isEmergency' | 'slaDueAt' | 'wardCode'>;

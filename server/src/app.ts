@@ -20,8 +20,22 @@ export function createApp(s: Services, bootInfo: { fallbackReason: string | null
       contentSecurityPolicy: {
         useDefaults: true,
         directives: {
-          'img-src': ["'self'", 'data:', 'blob:', 'https://*.tile.openstreetmap.org', 'https://unpkg.com'],
-          'connect-src': ["'self'", 'https://nominatim.openstreetmap.org', 'https://*.tile.openstreetmap.org'],
+          'img-src': [
+            "'self'",
+            'data:',
+            'blob:',
+            'https://*.tile.openstreetmap.org',
+            'https://*.basemaps.cartocdn.com',
+            'https://server.arcgisonline.com',
+            'https://unpkg.com',
+          ],
+          'connect-src': [
+            "'self'",
+            'https://nominatim.openstreetmap.org',
+            'https://*.tile.openstreetmap.org',
+            'https://*.basemaps.cartocdn.com',
+            'https://server.arcgisonline.com',
+          ],
           'worker-src': ["'self'", 'blob:'],
           'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
@@ -36,7 +50,7 @@ export function createApp(s: Services, bootInfo: { fallbackReason: string | null
         if (!origin || env.isOriginAllowed(origin)) return cb(null, true);
         cb(new Error(`Origin không được phép: ${origin}`));
       },
-      credentials: false,
+      credentials: true,
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Fp'],
     }),
   );
@@ -62,7 +76,14 @@ export function createApp(s: Services, bootInfo: { fallbackReason: string | null
   ];
   const dist = candidates.find((p) => fs.existsSync(path.join(p, 'index.html')));
   if (dist) {
-    app.use(express.static(dist, { maxAge: '1h', setHeaders: (res, file) => { if (file.endsWith('sw.js') || file.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache'); } }));
+    app.use(
+      express.static(dist, {
+        maxAge: '1h',
+        setHeaders: (res, file) => {
+          if (file.endsWith('sw.js') || file.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      }),
+    );
     app.get(/^(?!\/api|\/healthz).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
   }
 

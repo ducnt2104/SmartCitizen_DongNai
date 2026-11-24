@@ -1,43 +1,56 @@
-import { CircleHelp, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, UserRound, Users } from 'lucide-react';
+import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, UserCog, UserRound, Users } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { DONG_NAI_WARDS } from '../data/dongNaiWards';
+import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
 import { useStats } from '../db/hooks';
 import { useI18n } from '../i18n';
 import { authStore, useSession } from '../lib/authStore';
 import { useSettings } from '../state/settings';
 import { Logo } from './Logo';
 
+const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
+const WARDS_XA = DONG_NAI_WARDS.filter((w) => w.kind === 'Xã');
+
 export function ScopePicker({ dark = false }: { dark?: boolean }) {
   const { t } = useI18n();
   const { settings, set } = useSettings();
-  const tb = useStats('ward:DN-TB');
-  const isPilot = settings.scope === 'ward:DN-TB';
+  const cityStats = useStats('city');
   const isCity = settings.scope === 'city';
-  const other = !isPilot && !isCity ? settings.scope : '';
-  const base = dark
-    ? 'ioc-btn'
-    : 'btn btn-ghost !min-h-10 !px-3 !text-sm';
+  const selectedWardCode = settings.scope.startsWith('ward:') ? settings.scope.slice(5) : '';
+  const selectedWard = selectedWardCode ? getWard(selectedWardCode) : undefined;
+  const base = dark ? 'ioc-btn' : 'btn btn-ghost !min-h-10 !px-3 !text-sm';
   const active = dark ? 'ioc-btn-cyan' : '!border-brand !bg-brand !text-brand-ink';
+
   return (
     <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('scope.label')}>
-      <button type="button" aria-pressed={isPilot} className={`${base} ${isPilot ? active : ''}`} onClick={() => set({ scope: 'ward:DN-TB' })}>
-        <MapPin className="h-4 w-4" aria-hidden /> {t('scope.pilot', { n: tb?.total ?? 64 })}
-      </button>
       <button type="button" aria-pressed={isCity} className={`${base} ${isCity ? active : ''}`} onClick={() => set({ scope: 'city' })}>
-        {t('scope.city')}
+        <Globe2 className="h-4 w-4" aria-hidden />
+        {t('scope.cityAll', { n: cityStats?.total ?? 80 })}
       </button>
-      <label className="sr-only" htmlFor="scope-other">{t('scope.other')}</label>
+      {selectedWard && (
+        <span className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold ${dark ? 'border border-ioc-cyan/40 bg-ioc-raised text-ioc-cyan' : 'bg-brand-soft text-brand'}`}>
+          <MapPin className="h-3.5 w-3.5" aria-hidden />
+          {selectedWard.name}
+        </span>
+      )}
+      <label className="sr-only" htmlFor="scope-ward">{t('scope.other')}</label>
       <select
-        id="scope-other"
-        value={other}
-        onChange={(e) => e.target.value && set({ scope: e.target.value })}
-        className={dark ? 'ioc-field' : 'field !min-h-10 !w-auto !px-2 !py-1 !text-sm'}
+        id="scope-ward"
+        value={settings.scope.startsWith('ward:') ? settings.scope : ''}
+        onChange={(e) => set({ scope: e.target.value || 'city' })}
+        className={dark ? 'ioc-field' : 'field !min-h-10 !w-auto !px-2.5 !py-1 !text-sm'}
       >
         <option value="">{t('scope.other')}</option>
-        {DONG_NAI_WARDS.map((w) => (
-          <option key={w.wardCode} value={`ward:${w.wardCode}`}>{w.name}</option>
-        ))}
+        <optgroup label={t('scope.groupPhuong')}>
+          {WARDS_PHUONG.map((w) => (
+            <option key={w.wardCode} value={`ward:${w.wardCode}`}>{w.name}</option>
+          ))}
+        </optgroup>
+        <optgroup label={t('scope.groupXa')}>
+          {WARDS_XA.map((w) => (
+            <option key={w.wardCode} value={`ward:${w.wardCode}`}>{w.name}</option>
+          ))}
+        </optgroup>
       </select>
     </div>
   );
@@ -79,6 +92,9 @@ function UserMenu() {
             <p className="text-xs text-muted">{t(`role.${u.role}`)} · {t('auth.trust')}: <span className="mono">{u.trustScore}</span></p>
             {u.supervised && <p className="mt-1 text-xs font-semibold text-danger">{t('auth.supervised')}</p>}
           </div>
+          <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/profile'); }}>
+            <UserCog className="h-4 w-4" aria-hidden /> {t('nav.profile')}
+          </button>
           {u.role === 'volunteer' && (
             <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/volunteer'); }}>
               <Users className="h-4 w-4" aria-hidden /> {t('nav.volunteer')}
@@ -89,7 +105,15 @@ function UserMenu() {
               <ShieldCheck className="h-4 w-4" aria-hidden /> {t('nav.admin')}
             </button>
           )}
-          <button role="menuitem" type="button" className="btn btn-ghost w-full !justify-start" onClick={() => { authStore.clear(); setOpen(false); nav('/'); }}>
+          <button
+            role="menuitem"
+            type="button"
+            className="btn btn-ghost w-full !justify-start"
+            onClick={() => {
+              setOpen(false);
+              void authStore.signOut().then(() => nav('/'));
+            }}
+          >
             <LogOut className="h-4 w-4" aria-hidden /> {t('nav.logout')}
           </button>
         </div>

@@ -189,10 +189,19 @@ h1, h2, h3, h4 { line-height: 1.35; }
   }
 }
 
-/* Leaflet: pin tùy biến & bản đồ tối IOC (chỉ làm tối nền tile, giữ nguyên màu thật của ghim & heatmap) */
+/* Leaflet: pin tùy biến & cụm ưu tiên (CartoDB Dark Matter thật, không dùng filter invert) */
 .sc-pin { background: transparent; border: 0; }
-.ioc-map .leaflet-tile-pane { filter: invert(0.92) hue-rotate(185deg) saturate(0.6) brightness(0.88); }
-.ioc-map.leaflet-container { background: #0B1120; }
+.sc-cluster {
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  color: #fff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+}
 .leaflet-container { font-family: inherit; background: rgb(var(--surface-2)); }
 .leaflet-popup-content-wrapper { border-radius: 14px; }
 .leaflet-container a.leaflet-popup-close-button { width: 32px; height: 32px; font-size: 22px; line-height: 32px; }

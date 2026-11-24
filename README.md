@@ -1,97 +1,43 @@
-# SmartCitizen_DongNai — Team Victer
+# SmartCitizen Đồng Nai — Team Victer
 
-Nền tảng Web App **Phản ánh Hiện trường & Điều phối Đô thị Thông minh cấp Thành phố (95 xã, phường thuộc Thành phố Đồng Nai)** theo kiến trúc **Local-First (IndexedDB + Outbox Queue + Edge Web Worker)** kết hợp **Pipeline AI 4 lớp (`gemini-3.5-flash`)** và **Bảo mật / Chống Gian lận 7 lớp**.
-
----
-
-## 1. Kiến trúc Hệ thống
-
-```text
-SmartCitizen_DongNai/
-├── shared/                     # Data Contract & thuật toán thuần dùng chung
-│   ├── types.ts                # Interface-First types (Report, Ward, AuditEntry, VisionResult...)
-│   ├── constants.ts            # Ngưỡng bảo mật (dHash 5/12, 50m, GPS 2km/5km, trustScore...)
-│   ├── dongNaiWards.ts         # Danh mục 95 xã, phường TP. Đồng Nai + adjacentWardCodes + trục huyết mạch
-│   ├── geo.ts                  # Haversine, Bounding Box Đồng Nai, matchArterial, mask/normalizePhone
-│   ├── dhash.ts                # 64-bit Hamming Distance
-│   ├── report.ts               # Sanitizer ClientReport & computeStats
-│   ├── sceneArt.ts             # Minh họa SVG thực cảnh cho dữ liệu seed
-│   └── seed.ts                 # Bộ dữ liệu seed chuẩn (64 P. Trấn Biên + 16 liên phường)
-├── server/                     # Backend Express + TypeScript + Zod + Mongoose + @google/genai
-│   └── src/
-│       ├── config/env.ts       # Zod fail-loud env config (GEMINI_MODEL=gemini-3.5-flash)
-│       ├── middleware/         # JWT + RBAC 4 cấp, Rate Limiting đa tầng, NoSQL Sanitizer
-│       ├── models/             # Mongoose Schema (location: 2dsphere, AuditLog bất biến)
-│       ├── repositories/       # Dual-Mode: MongoDB Atlas ⇔ Local Persistent JSON Store
-│       ├── services/           # gemini.service.ts, report.service.ts, triage.service.ts, staff.service.ts, auth.service.ts, audit.service.ts, trust.service.ts, chat.service.ts
-│       ├── controllers/        # REST + SSE Streaming controllers
-│       └── routes/             # /healthz, /api/auth/*, /api/reports/*, /api/volunteer/*, /api/admin/*, /api/ai/*
-├── client/                     # Frontend React 18 + TypeScript + Vite + Tailwind + Dexie + Leaflet
-│   └── src/
-│       ├── workers/edgeProcessor.worker.ts   # OffscreenCanvas nén ảnh + 64-bit dHash + Edge stats + Haversine 50m
-│       ├── db/                 # Dexie IndexedDB (reports, wards, outboxQueue, aiVisionCache, settings) + Exponential Backoff Sync
-│       ├── i18n/               # Song ngữ 100% Tiếng Việt (vi.ts) & English (en.ts)
-│       ├── components/         # Logo SVG, Header, ScopePicker, CameraCapture, MapView (Cluster/Heatmap), Timeline & BeforeAfterSlider, ChatWidget (SSE + Voice), SpotlightTour, SettingsDrawer, OfflineBanner
-│       └── pages/              # Home (Senior Mode 150%), AuthPage (Tab A/B + Demo 1-Click), Report (3 bước), MapPage, MinePage, VolunteerPage, admin/* (Cổng IOC)
-├── render.yaml                 # Blueprint triển khai 1-click lên Render (kèm /healthz)
-└── package.json                # Monorepo scripts
-```
+Nền tảng Web App **Phản ánh Hiện trường & Điều phối Đô thị Thông minh** quy mô toàn **Thành phố Đồng Nai** theo mô hình chính quyền địa phương **2 cấp** (**Thành phố Đồng Nai → 95 Phường/Xã**, gồm **33 Phường** và **62 Xã**, có hiệu lực từ **30/04/2026** theo NQ 1662/NQ-UBTVQH15 và NQ 237/NQ-UBTVQH16).
 
 ---
 
-## 2. Các Tính năng & Tiêu chuẩn Kỹ thuật Chính
+## 1. Kiến trúc 6 Trụ cột Production-Ready
 
-1. **UX/UI 2 Ngôn ngữ Thiết kế Độc lập & Trợ năng (Accessibility First):**
-   - **Cổng Cộng đồng (Tab A):** Nền sáng `#F8FAFC`, bo góc mềm, vùng chạm tối thiểu `48×48px`, Bottom Navigation 4 mục, font `Be Vietnam Pro` + `JetBrains Mono`.
-   - **Cổng Điều hành IOC (Tab B):** Nền Xanh Than Command Center `#0B1120`, viền mảnh `1px solid #1E293B`, KPI sparklines, biểu đồ Recharts, Bản đồ nhiệt điểm nóng (chỉ tối nền tile, giữ nguyên màu thật của ghim & heatmap), Sidebar thu gọn, phím tắt lọc nhanh (`1-4`, `j/k`, `Enter`, `r`, `/`, `Esc`).
-   - **Chế độ Người cao tuổi (`Aa+ Chữ lớn`):** 1 chạm nâng chữ `150%`, nâng tương phản chuẩn WCAG AAA, thu gọn trang chủ thành 2 nút khổng lồ: **📸 CHỤP ẢNH BÁO CÁO NGAY** và **🎤 NÓI VỚI TRỢ LÝ AI**.
-   - **Trung tâm Cài đặt:** Sáng / Tối / Tương phản cao ngoài trời · Xanh Chính quyền số / Xanh Thanh niên Tình nguyện · Cỡ chữ `100% / 125% / 150%` · Song ngữ `VI / EN` · Spotlight Tour 4 bước.
-   - **Zero Blank Screen:** Đầy đủ `Skeleton Shimmer`, `Empty State` có SVG + nút hành động, `GPS-Denied Fallback` (chọn địa danh nhanh + kéo ghim), `Offline Banner` + Outbox Queue, và tự tắt `MediaStream` camera khi unmount / ẩn tab.
+1. **Phạm vi Toàn Thành phố Đồng Nai — 95 ĐVHC Chính thức (33 Phường, 62 Xã):**
+   - Khẳng định cứng `total === 95`, `phuong === 33`, `xa === 62` trong `shared/dongNaiWards.ts`, bao gồm đủ **10 phường mới thành lập ngày 30/04/2026** (*Trảng Bom, Long Thành, Trị An, Nhơn Trạch, Tân Khai, Xuân Lộc, Tân Phú, Lộc Ninh, Dầu Giây, Đồng Phú*).
+   - Bao phủ đều 5 vùng địa bàn: **Đô thị Trung tâm**, **Nam — Sân bay Long Thành & Cảng**, **Đông — Long Khánh & Xuân Lộc**, **Đông Bắc — Trị An & Cát Tiên** và **Bắc Đồng Nai** (Bình Phước, Đồng Xoài, Chơn Thành, Phước Long, Bù Gia Mập…).
+   - Mặc định hiển thị phạm vi toàn Thành phố (`scope = 'city'`), hỗ trợ chuyển nhanh 5 vùng và tìm kiếm 95 Phường/Xã không phân biệt dấu tiếng Việt.
 
-2. **Local-First & 60FPS Edge Web Worker:**
-   - **Instant Hydration:** Mở ứng dụng đọc ngay dữ liệu 95 xã/phường và 80 hồ sơ từ IndexedDB (`Dexie.js`) trong `<30ms`, đồng bộ ngầm với server và gửi đơn ngoại tuyến qua **Outbox Queue** (`idempotencyKey` + Exponential Backoff).
-   - **Web Worker (`edgeProcessor.worker.ts`):** Chạy hoàn toàn ngoài Main Thread — dùng `OffscreenCanvas` nén ảnh về `≤ 1024px` (JPEG 0.78), tính `64-bit dHash`, đo độ nét/độ phẳng, tính Haversine `50m` và đối chiếu trục đường huyết mạch Đồng Nai.
+2. **Hiệu năng & Tốc độ xử lý 60FPS:**
+   - **Backend & Database:** Composite indexes `(wardCode, status, createdAt DESC)`, `(category, status)`, `(lat, lng)` và `2dsphere`; endpoint siêu nhẹ `GET /api/reports/summary?bbox=minLng,minLat,maxLng,maxLat` cho bản đồ; **Cursor/Keyset Pagination** cho `GET /api/reports`; HTTP `ETag` + `304 Not Modified` cho danh mục `GET /api/wards`; **LRU Cache** cho Reverse Geocoding (~11m, 24h).
+   - **Frontend & Edge Web Worker (`edgeProcessor.worker.ts`):** Trích xuất tọa độ **EXIF GPS** từ ảnh JPEG gốc, nén ảnh về `≤ 1600px` WebP/JPEG (`0.80`) và tính `64-bit dHash` hoàn toàn ngoài Main Thread; Local-First IndexedDB (`Dexie.js`) + Outbox Queue ngoại tuyến + Optimistic UI có rollback tự động khi lỗi 4xx.
 
-3. **Pipeline AI 4 Lớp (`@google/genai` — `gemini-3.5-flash`):**
-   - **Zero-Typing Vision (`POST /api/ai/analyze-image`):** Strict JSON Schema (`temperature: 0.1`), tự điền loại sự cố, tiêu đề, mô tả, mức nguy hiểm, mối nguy, bộ phận phụ trách và chấm `authenticityScore (0-100)` + `fraudFlags[]`. Có **LRU Cache theo `dHash`** ở cả client lẫn server.
-   - **Triage & Spatial Dispatch:** Tự phân loại trùng ảnh (`dHash ≤ 5` → Cách ly), gom nhóm đa góc chụp (`dHash > 12`, khác SĐT, bán kính `≤ 50m` → Hồ sơ Mẹ + nâng Ưu tiên Cao), và kích hoạt **Khẩn cấp Cấp độ 1** + chi viện liên xã/phường trên trục huyết mạch.
-   - **Đối chiếu Nghiệm thu Trước–Sau (`POST /api/ai/verify-resolution`):** Chống báo cáo khống khi cán bộ tải ảnh sau xử lý.
-   - **Trợ lý AI Cộng đồng (`POST /api/ai/chat`):** SSE Streaming + Web Speech API (`vi-VN`), inject ngữ cảnh thật từ DB, có bộ lọc chống Prompt Injection và **Graceful Heuristic Fallback** khi thiếu API key hoặc ngoại tuyến.
+3. **Định vị GPS chính xác cao & Reverse Geocoding 3 tầng:**
+   - Hook `usePreciseLocation()` dùng `watchPosition` thu mẫu thông minh tối đa `4.5s` (dừng sớm ngay khi đạt `accuracy ≤ 20m`), hiển thị vòng tròn sai số **Accuracy Circle (`±Xm`)** và cảnh báo khi tín hiệu yếu (`> 50m`).
+   - **Center Crosshair Pin Picker** kiểu Grab/Be với debounce `350ms` + `AbortController`.
+   - **Reverse Geocoding 3 tầng (`GET /api/geo/reverse`):** (1) Kiểm tra Bounding Box Thành phố Đồng Nai → (2) Nominatim timeout `4s` + chuẩn hóa địa chỉ 2 thế hệ (`legacyAliases`, vd. địa danh cũ 3 cấp về đúng 95 Phường/Xã mới) → (3) Fallback centroid gần nhất (Haversine) kèm nhãn *"Đề xuất tự động — Vui lòng xác nhận Phường/Xã"*.
 
-4. **Bảo mật, Chống Spam & Chống Gian lận 7 Lớp:**
-   - Lớp 1: OTP 6 số hash `SHA-256`, hiệu lực `5 phút`, chờ gửi lại `60 giây`, khóa sau `5` lần sai.
-   - Lớp 2: JWT `HS256` + RBAC 4 cấp (`citizen`, `volunteer`, `ward_officer`, `city_admin`) + ép phạm vi phường cho `ward_officer`.
-   - Lớp 3: Rate Limiting đa tầng theo IP + SĐT + `X-Device-Fp` (`3 phản ánh/giờ/SĐT`, `10 lượt AI Vision/giờ/thiết bị`, mỗi SĐT xác nhận 1 lần/hồ sơ).
-   - Lớp 4: Chặn spam trùng `dHash ≤ 5` & chấm `authenticityScore < 45` vào tab Cách ly.
-   - Lớp 5: Kiểm tra Bounding Box TP. Đồng Nai (`10.60–11.55, 106.70–107.60`) & cảnh báo / cách ly lệch GPS (`> 2km` / `> 5km`).
-   - Lớp 6: Hệ thống điểm tín nhiệm công dân `trustScore` (`70` khởi điểm, `+5` xác minh đúng, `-20` spam/tin giả, `< 30` vào chế độ Giám sát).
-   - Lớp 7: Audit Log bất biến có **chuỗi băm SHA-256** (`prevHash -> hash`), chống NoSQL Injection (`$` / `.`), `helmet`, `cors` whitelist, validate 100% payload bằng `Zod`.
+4. **Bản đồ GIS trực quan & Mobile-First:**
+   - **Layer Switcher:** CartoDB Voyager (Sáng), CartoDB Dark Matter (Tối), Esri World Imagery (Vệ tinh).
+   - **Marker Clustering** đổi màu theo mức độ ưu tiên (Khẩn cấp / Cao / Đang xử lý / Đã xử lý), Custom SVG category pins có nhịp pulse cho sự cố khẩn cấp, Heatmap, thanh công cụ nổi và nút **Xem toàn TP. Đồng Nai**.
 
----
+5. **Xác thực Thật, Gửi Mã OTP Thật & RBAC 2 Cấp (Zero Mock Auth / Zero Fake OTP):**
+   - Gỡ bỏ hoàn toàn nút đăng nhập demo 1-click, Google Mock và mọi cơ chế trả mã OTP ra HTTP response/UI.
+   - `OtpDeliveryService` hỗ trợ gửi OTP thật qua **Resend Email API**, **Nodemailer SMTP** (Gmail App Password / Brevo), **Twilio SMS** và **eSMS Việt Nam**. Nếu chưa cấu hình khóa nhà cung cấp, server trả lỗi `503 otp_provider_not_configured` tường minh.
+   - Sinh mã `crypto.randomInt(100000, 1000000)`, lưu băm **HMAC-SHA256** (`OTP_PEPPER`), hiệu lực `5 phút`, tối đa `5` lần sai (khóa `15 phút`), chống replay bằng `consumedAt`, cooldown `60 giây`/định danh, rate limit `5 yêu cầu/giờ/IP`.
+   - Phiên bảo vệ bằng **HTTP-only, SameSite=Lax, Secure (prod) Cookies** (`sc_access` 15 phút + `sc_refresh` 7 ngày) với **Refresh Token Rotation** & phát hiện dùng lại token (tự thu hồi toàn bộ phiên của người dùng).
+   - Trang **Hồ sơ Công dân (`/profile`)** cho phép đổi tên, chọn Phường/Xã mặc định, đặt/đổi mật khẩu, đăng xuất thiết bị này hoặc **Đăng xuất tất cả thiết bị** (`POST /api/auth/logout-all`).
+   - **RBAC 2 cấp:** `city_admin` có thể cấp/thu hồi tài khoản `ward_officer` cho từng đơn vị trong 95 Phường/Xã (`POST /api/admin/staff`, `PATCH /api/admin/staff/:id/revoke`) và chuyển tuyến phản ánh nhầm địa giới (`POST /api/admin/reports/:id/transfer`).
 
-## 3. Dữ liệu Mẫu & 5 Kịch bản Demo Ban Giám Khảo
-
-- **Phường Trấn Biên (`DN-TB` — Tháng 11/2026):** Chính xác **64** hồ sơ (`21` rác thải, `18` đèn đường, `15` ngập nước, `10` mặt đường); **47** đã hoàn thành (`73.4%`), **17** đang mở; thời gian xử lý trung bình **`3.2 ngày`**.
-- **Toàn TP. Đồng Nai (95 xã, phường):** Tổng **80** hồ sơ (gồm 16 hồ sơ mở rộng tại Biên Hòa, Tân Triều, Long Khánh, Trảng Bom, Long Thành, Tà Lài, Nhơn Trạch...) sẵn sàng trình diễn Bản đồ nhiệt toàn thành phố & Điều phối liên khu vực.
-- **5 Kịch bản mẫu cài sẵn:**
-  1. `rp_tb_em`: **Khẩn cấp Cấp độ 1** — Cây đổ + dây điện võng trên trục Nguyễn Ái Quốc / Quốc lộ 1A, tự phát lệnh chi viện 2 phường lân cận + Điện lực + CSGT.
-  2. `rp_tb_mother`: **Hồ sơ Mẹ** gom từ 4 phản ánh thật (4 SĐT, 4 ảnh góc độ khác nhau với mọi cặp `dHash distance > 12`, bán kính `50m`), nâng Ưu tiên Cao.
-  3. `rp_tb_q_dup`, `rp_tb_q_screen`, `rp_tb_q_gps`: **03 đơn trong tab Cách ly** (trùng ảnh `dHash ≤ 5`, ảnh chụp màn hình `authenticityScore < 45`, lệch GPS `> 5km`).
-  4. **04 hồ sơ Đã hoàn thành có ảnh Trước – Sau (Before/After Slider)** kèm điểm xác thực AI và đánh giá 5 sao.
-  5. **03 Nhiệm vụ Xác minh Thực địa** gắn thẻ *"Người cao tuổi gửi — Cần hỗ trợ"* chờ Đội Thanh niên Tình nguyện tiếp nhận.
-
-### Tài khoản Demo (1-Click trên trang `/auth`)
-
-| Vai trò | Nút 1-Click | Tài khoản thủ công | Mật khẩu / OTP |
-|---|---|---|---|
-| Người dân | `👤 Dân` | SĐT bất kỳ `09xxxxxxxx` | Xem `[DEMO OTP]` trên thông báo |
-| Tình nguyện viên | `🦺 Tình nguyện viên` | SĐT `0900000002` | Xem `[DEMO OTP]` |
-| Cán bộ P. Trấn Biên | `🏛️ Cán bộ P. Trấn Biên` | Mã `CB-TB-01`, Đơn vị `Phường Trấn Biên` | `Demo@2026` |
-| Điều hành TP. Đồng Nai | `🌆 Điều hành TP. Đồng Nai` | Mã `TP-01`, Đơn vị `Ban Điều hành TP. Đồng Nai` | `Demo@2026` |
+6. **Civic Tech UI/UX & AI Pipeline 4 Lớp (`gemini-3.5-flash`):**
+   - Luồng báo cáo 3 chạm (Chụp ảnh + AI Zero-Typing + EXIF GPS → Xác nhận vị trí tâm ngắm + phát hiện trùng 100m → Gửi), hỗ trợ **Chế độ Người cao tuổi (`Aa+`)**, Song ngữ `VI/EN` 100%, SLA đếm ngược, Before/After Slider và Audit Log chuỗi băm SHA-256 bất biến.
 
 ---
 
-## 4. Chạy Local
+## 2. Chạy Local
 
 **Yêu cầu:** Node.js `>= 20` và npm `>= 10`.
 
@@ -101,16 +47,18 @@ npm run install:all
 
 # 2. Tạo file biến môi trường từ mẫu
 cp server/.env.example server/.env
-cp client/.env.example client/.env
-# (Tùy chọn: điền GEMINI_API_KEY và MONGODB_URI trong server/.env;
-#  nếu để trống, hệ thống tự chạy Local JSON Store + AI Heuristic Fallback an toàn)
+# Mở server/.env và điền:
+#  - RESEND_API_KEY (hoặc SMTP_HOST/SMTP_USER/SMTP_PASS) để gửi Email OTP thật
+#  - GEMINI_API_KEY (tùy chọn — để trống dùng AI Dự phòng Cục bộ)
+#  - MONGODB_URI (tùy chọn — để trống dùng Local Persistent JSON Store)
+#  - INITIAL_STAFF_PASSWORD (mật khẩu khởi tạo cán bộ IOC)
 
-# 3. Chạy đồng thời Backend (cổng 8080) và Frontend (cổng 5173) ở 2 cửa sổ terminal
+# 3. Chạy đồng thời Backend (8080) và Frontend (5173)
 npm run dev:server
 npm run dev:client
 ```
 
-Hoặc build & chạy ở chế độ Production (1 tiến trình duy nhất phục vụ cả API lẫn SPA):
+Hoặc build & chạy ở chế độ Production (1 tiến trình phục vụ cả API lẫn SPA):
 
 ```bash
 npm run build
@@ -126,36 +74,41 @@ npm test
 
 ---
 
-## 5. Hướng dẫn Triển khai GitHub → Render + MongoDB Atlas + Google AI Studio
+## 3. Hướng dẫn cấu hình Gửi OTP Thật (Render / Local)
 
-### Bước 1: Tạo khóa API Google AI Studio
-1. Truy cập [Google AI Studio](https://aistudio.google.com/apikey) và tạo API Key mới.
-2. **Tuyệt đối không** đưa key vào `client/.env` hay commit lên GitHub. Chỉ cấu hình `GEMINI_API_KEY` ở phía Server/Render.
+Chọn **1 trong 2** cách miễn phí phổ biến nhất cho Email OTP:
 
-### Bước 2: Tạo cụm MongoDB Atlas (Miễn phí M0)
-1. Truy cập [MongoDB Atlas](https://www.mongodb.com/atlas), tạo Cluster M0 (chọn khu vực Singapore để giảm độ trễ với Render Singapore).
-2. Tạo Database User và mở Network Access (`0.0.0.0/0` hoặc IP Render).
-3. Lấy chuỗi kết nối `MONGODB_URI` (dạng `mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/smartcitizen_dongnai?retryWrites=true&w=majority`).
-   *(Nếu chưa nối MongoDB Atlas, backend tự fallback sang Local Persistent JSON Store để chạy demo ngay lập tức.)*
+### Cách A: Resend API (Khuyến nghị — nhanh, không bị chặn cổng SMTP)
+1. Đăng ký tài khoản miễn phí tại [resend.com](https://resend.com) và tạo API Key (`re_...`).
+2. Thêm vào Render Dashboard → **Environment Variables** (hoặc `server/.env`):
+   - `OTP_PROVIDER=auto` (hoặc `resend`)
+   - `RESEND_API_KEY=re_xxxxxxxxxxxx`
+   - `OTP_FROM_EMAIL=SmartCitizen Dong Nai <onboarding@resend.dev>` *(hoặc email tên miền đã verify trên Resend)*.
 
-### Bước 3: Triển khai lên Render bằng `render.yaml`
-1. Push toàn bộ mã nguồn lên kho lưu trữ GitHub.
-2. Vào [Render Dashboard](https://dashboard.render.com/) → **New +** → **Blueprint** → chọn repo GitHub chứa file `render.yaml`.
-3. Điền các biến bí mật (`sync: false`) khi Render hỏi:
-   - `GEMINI_API_KEY`: khóa từ Google AI Studio.
-   - `MONGODB_URI`: chuỗi kết nối MongoDB Atlas (hoặc để trống để dùng JSON Store).
-   - `GEMINI_MODEL`: giữ `gemini-3.5-flash`.
-   - `ALLOWED_ORIGINS`: thêm domain thực tế của bạn (ví dụ `https://smartcitizen-dongnai.onrender.com`).
-   - *(Lưu ý khi lên production thực tế cho dân dùng: đổi `DEMO_OTP=false` và `ENABLE_DEMO_AUTH=false`.)*
-4. Sau khi deploy xong, mở `https://<your-app>.onrender.com/healthz` để xác nhận trạng thái DB (`mongo` hoặc `json`) và AI Service (`gemini` hoặc `fallback`).
+### Cách B: Gmail SMTP (App Password)
+1. Bật **Xác minh 2 bước** trên tài khoản Google, vào [App Passwords](https://myaccount.google.com/apppasswords) tạo mật khẩu ứng dụng 16 ký tự.
+2. Thêm vào Environment Variables:
+   - `OTP_PROVIDER=smtp`
+   - `SMTP_HOST=smtp.gmail.com`
+   - `SMTP_PORT=465`
+   - `SMTP_SECURE=true`
+   - `SMTP_USER=your-email@gmail.com`
+   - `SMTP_PASS=xxxx xxxx xxxx xxxx`
 
 ---
 
-## 6. Ghi chú Trung thực Kỹ thuật
+## 4. Triển khai GitHub → Render + MongoDB Atlas
 
-- **Dữ liệu hành chính:** Danh mục 95 xã, phường trong `shared/dongNaiWards.ts` gồm mã đơn vị, vùng, tọa độ tâm xấp xỉ và danh sách trục huyết mạch phục vụ minh họa & kiểm thử; cần đối chiếu bảng địa giới chính thức của tỉnh/thành phố trước khi vận hành thực tế.
-- **Hạng mục cần kiểm thử thực địa từ phía người dùng:** Camera phần cứng thực tế (`getUserMedia` trên HTTPS/localhost), GPS ngoài trời, `GEMINI_API_KEY` thật (trên quota Google AI Studio) và `MONGODB_URI` thật (MongoDB Atlas).
+1. Tạo cụm MongoDB Atlas M0 (Singapore), mở Network Access (`0.0.0.0/0` hoặc IP Render), lấy `MONGODB_URI`.
+2. Trên [Render Dashboard](https://dashboard.render.com/), tạo Blueprint từ repo GitHub chứa `render.yaml` (hoặc cập nhật Web Service hiện có).
+3. Khai báo các biến bí mật (`sync: false`): `MONGODB_URI`, `GEMINI_API_KEY`, `RESEND_API_KEY` (hoặc `SMTP_*`), `INITIAL_STAFF_PASSWORD`.
+4. Kiểm tra `/healthz` để xác nhận `wardsCount: 95`, `db.mode`, `ai.mode` và `otp.emailConfigured: true`.
 
 ---
+
+## 5. Ghi chú Trung thực Kỹ thuật
+
+- **Dữ liệu 95 ĐVHC:** Danh mục 95 Phường/Xã (33 Phường, 62 Xã) bám sát Nghị quyết 1662/NQ-UBTVQH15 và Nghị quyết 237/NQ-UBTVQH16 (hiệu lực 30/04/2026); tọa độ tâm xấp xỉ dùng cho bản đồ & fallback, nên kết hợp bản đồ ranh giới GeoJSON polygon chính thức của Sở Tài nguyên & Môi trường khi vận hành cấp sở ngành.
+- **Hạng mục cần xác minh thực tế từ người dùng:** GPS ngoài trời trên điện thoại thật, hộp thư/SMS nhận mã OTP thật sau khi cấu hình `RESEND_API_KEY`/`SMTP_*`, camera thực tế trên HTTPS, và biến môi trường live trên Render + MongoDB Atlas.
 
 *Phát triển bởi **Team Victer** — Thành phố Đồng Nai.*

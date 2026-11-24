@@ -19,9 +19,9 @@ export interface Settings {
   prevFontScale: FontScale;
 }
 
-const KEY = 'sc.settings.v1';
+const KEY = 'sc.settings.v2';
 const DEFAULTS: Settings = {
-  mode: 'light', theme: 'gov', fontScale: 100, lang: 'vi', senior: false, scope: 'ward:DN-TB', tourSeen: false, prevFontScale: 100,
+  mode: 'light', theme: 'gov', fontScale: 100, lang: 'vi', senior: false, scope: 'city', tourSeen: false, prevFontScale: 100,
 };
 
 function load(): Settings {

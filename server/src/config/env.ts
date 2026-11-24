@@ -1,35 +1,9 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import dotenv from 'dotenv';
+import path from 'node:path';
 import { z } from 'zod';
 
-/**
- * Chỉ nạp file .env khi file tồn tại trên máy local (bỏ qua khi test hoặc chạy cloud).
- * Trên Render/Docker, biến môi trường được truyền trực tiếp qua process.env nên không gọi dotenv
- * khi không có file .env để tránh cảnh báo gây hiểu nhầm ("injected env (0) from .env").
- */
-function loadLocalEnv(): void {
-  if (process.env.NODE_ENV === 'test') return;
-
-  const cwd = process.cwd();
-  const candidates = [path.resolve(cwd, '.env')];
-  if (path.basename(cwd) === 'server' && fs.existsSync(path.resolve(cwd, '..', 'package.json'))) {
-    candidates.push(path.resolve(cwd, '..', '.env'));
-  } else if (fs.existsSync(path.resolve(cwd, 'server', 'package.json'))) {
-    candidates.push(path.resolve(cwd, 'server', '.env'));
-  }
-
-  for (const filePath of new Set(candidates)) {
-    if (fs.existsSync(filePath)) {
-      dotenv.config({ path: filePath, quiet: true });
-    }
-  }
-}
-
-loadLocalEnv();
-
-export type NodeEnv = 'development' | 'production' | 'test';
+dotenv.config();
 
 export interface EnvValidationIssue {
   key: string;
@@ -39,11 +13,14 @@ export interface EnvValidationIssue {
 }
 
 const nodeEnvSchema = z.enum(['development', 'production', 'test']);
-const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,https://*.onrender.com';
+const otpProviderSchema = z.enum(['auto', 'resend', 'smtp', 'twilio', 'esms']);
+
+type NodeEnv = z.infer<typeof nodeEnvSchema>;
+export type OtpProviderConfig = z.infer<typeof otpProviderSchema>;
 
 function readTrimmed(source: NodeJS.ProcessEnv, key: string): string | undefined {
-  const value = source[key];
-  return typeof value === 'string' ? value.trim() : undefined;
+  const v = source[key];
+  return v === undefined ? undefined : v.trim();
 }
 
 function parseBoolEnv(
@@ -54,14 +31,14 @@ function parseBoolEnv(
 ): boolean {
   const raw = readTrimmed(source, key);
   if (raw === undefined || raw === '') return defaultValue;
-  const normalized = raw.toLowerCase();
-  if (['1', 'true', 'yes'].includes(normalized)) return true;
-  if (['0', 'false', 'no'].includes(normalized)) return false;
+  const low = raw.toLowerCase();
+  if (['1', 'true', 'yes'].includes(low)) return true;
+  if (['0', 'false', 'no'].includes(low)) return false;
   issues.push({
     key,
     status: 'INVALID',
-    detail: `Giá trị "${raw}" không phải kiểu boolean hợp lệ.`,
-    hint: 'Chỉ dùng một trong các giá trị: true, false, 1, 0, yes, no.',
+    detail: `Giá trị "${raw}" không hợp lệ (chỉ chấp nhận true/false).`,
+    hint: `Đặt ${key}=true hoặc ${key}=false.`,
   });
   return defaultValue;
 }
@@ -75,11 +52,11 @@ function parseIntEnv(
 ): number {
   const raw = readTrimmed(source, key);
   if (raw === undefined || raw === '') return defaultValue;
-  if (!/^\d+$/.test(raw)) {
+  if (!/^-?\d+$/.test(raw)) {
     issues.push({
       key,
       status: 'INVALID',
-      detail: `Giá trị "${raw}" phải là số nguyên dương trong khoảng ${bounds.min}–${bounds.max}.`,
+      detail: `Giá trị "${raw}" không phải số nguyên hợp lệ.`,
       hint: bounds.hint,
     });
     return defaultValue;
@@ -166,31 +143,31 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
       key: 'MONGODB_URI',
       status: 'INVALID',
       detail: 'Chuỗi kết nối MongoDB không đúng định dạng URI.',
-      hint: 'Dùng dạng mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/<db> hoặc để trống để dùng Local JSON Store.',
+      hint: 'Dùng dạng mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/smartcitizen_dongnai hoặc để trống để dùng Local JSON Store.',
     });
   }
 
   const rawJwtSecret = readTrimmed(source, 'JWT_SECRET') ?? '';
   if (isProd) {
-    if (rawJwtSecret.length === 0) {
+    if (rawJwtSecret === '') {
       issues.push({
         key: 'JWT_SECRET',
         status: 'MISSING',
         detail: 'Bắt buộc khai báo khi chạy production (yêu cầu tối thiểu 32 ký tự).',
-        hint: 'Thêm JWT_SECRET >= 32 ký tự (vd: openssl rand -hex 32) vào Render Environment Variables hoặc bật generateValue: true trong render.yaml.',
+        hint: 'Thêm JWT_SECRET >= 32 ký tự (vd: openssl rand -hex 32) vào Render Environment Variables.',
       });
     } else if (rawJwtSecret.length < 32) {
       issues.push({
         key: 'JWT_SECRET',
         status: 'INVALID',
-        detail: `Độ dài hiện tại ${rawJwtSecret.length} ký tự — yêu cầu tối thiểu 32 ký tự khi chạy production.`,
-        hint: 'Thay bằng chuỗi ngẫu nhiên >= 32 ký tự (vd: openssl rand -hex 32).',
+        detail: `Quá ngắn (${rawJwtSecret.length} ký tự; yêu cầu tối thiểu 32 ký tự ở production).`,
+        hint: 'Sinh chuỗi bí mật mạnh: openssl rand -hex 32.',
       });
     }
   }
 
-  const rawOrigins = readTrimmed(source, 'ALLOWED_ORIGINS') || DEFAULT_ALLOWED_ORIGINS;
-  const origins = rawOrigins
+  const rawAllowedOrigins = readTrimmed(source, 'ALLOWED_ORIGINS') ?? 'http://localhost:5173,https://*.onrender.com';
+  const origins = rawAllowedOrigins
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -198,13 +175,42 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     issues.push({
       key: 'ALLOWED_ORIGINS',
       status: 'INVALID',
-      detail: 'Danh sách origin được phép đang rỗng.',
-      hint: `Khai báo các origin cách nhau bằng dấu phẩy (vd: ${DEFAULT_ALLOWED_ORIGINS}).`,
+      detail: 'Danh sách ALLOWED_ORIGINS không được rỗng.',
+      hint: 'Ví dụ: http://localhost:5173,https://*.onrender.com',
     });
   }
 
-  const demoOtp = parseBoolEnv(source, 'DEMO_OTP', true, issues);
-  const enableDemoAuth = parseBoolEnv(source, 'ENABLE_DEMO_AUTH', true, issues);
+  // ── Nhà cung cấp OTP thật (Resend / SMTP / Twilio / eSMS) ──
+  const rawOtpProvider = readTrimmed(source, 'OTP_PROVIDER') || 'auto';
+  let otpProvider: OtpProviderConfig = 'auto';
+  const parsedOtpProv = otpProviderSchema.safeParse(rawOtpProvider.toLowerCase());
+  if (parsedOtpProv.success) {
+    otpProvider = parsedOtpProv.data;
+  } else {
+    issues.push({
+      key: 'OTP_PROVIDER',
+      status: 'INVALID',
+      detail: `Giá trị "${rawOtpProvider}" không hợp lệ.`,
+      hint: 'Chỉ chấp nhận: auto | resend | smtp | twilio | esms.',
+    });
+  }
+
+  const resendApiKey = readTrimmed(source, 'RESEND_API_KEY') ?? '';
+  const otpFromEmail = readTrimmed(source, 'OTP_FROM_EMAIL') || 'SmartCitizen Đồng Nai <onboarding@resend.dev>';
+  const smtpHost = readTrimmed(source, 'SMTP_HOST') ?? '';
+  const smtpPort = parseIntEnv(source, 'SMTP_PORT', 587, { min: 1, max: 65535, hint: 'Cổng SMTP hợp lệ (vd: 587 hoặc 465).' }, issues);
+  const smtpSecure = parseBoolEnv(source, 'SMTP_SECURE', smtpPort === 465, issues);
+  const smtpUser = readTrimmed(source, 'SMTP_USER') ?? '';
+  const smtpPass = readTrimmed(source, 'SMTP_PASS') ?? '';
+
+  const twilioAccountSid = readTrimmed(source, 'TWILIO_ACCOUNT_SID') ?? '';
+  const twilioAuthToken = readTrimmed(source, 'TWILIO_AUTH_TOKEN') ?? '';
+  const twilioFromNumber = readTrimmed(source, 'TWILIO_FROM_NUMBER') ?? '';
+
+  const esmsApiKey = readTrimmed(source, 'ESMS_API_KEY') ?? '';
+  const esmsSecretKey = readTrimmed(source, 'ESMS_SECRET_KEY') ?? '';
+  const esmsBrandname = readTrimmed(source, 'ESMS_BRANDNAME') ?? '';
+
   const reportsPerHour = parseIntEnv(
     source,
     'REPORTS_PER_HOUR',
@@ -219,16 +225,24 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     { min: 1, max: 1000, hint: 'Số nguyên dương 1–1000 (mặc định: 10).' },
     issues,
   );
+  const refreshTokenDays = parseIntEnv(
+    source,
+    'REFRESH_TOKEN_DAYS',
+    7,
+    { min: 1, max: 90, hint: 'Số ngày sống của Refresh Token (1–90, mặc định 7).' },
+    issues,
+  );
+  const cookieSecure = parseBoolEnv(source, 'COOKIE_SECURE', isProd, issues);
   const dataDirRaw = readTrimmed(source, 'DATA_DIR') || './data';
 
   if (issues.length > 0) {
-    // Fail-loud: gom toàn bộ lỗi cấu hình và in thành bảng rõ ràng trên Render Logs
     throw new Error(`\n${formatEnvErrorReport(issues, rawNodeEnv || nodeEnv)}`);
   }
 
-  /** Dev/test không có JWT_SECRET: sinh ngẫu nhiên mỗi lần chạy (phiên cũ sẽ hết hiệu lực khi restart). */
+  /** Dev/test không có JWT_SECRET: sinh ngẫu nhiên mỗi lần chạy. */
   const jwtSecret = rawJwtSecret.length >= 16 ? rawJwtSecret : crypto.randomBytes(32).toString('hex');
   const jwtSecretEphemeral = rawJwtSecret.length < 16;
+  const otpPepper = readTrimmed(source, 'OTP_PEPPER') || jwtSecret;
 
   return {
     isProd,
@@ -239,12 +253,27 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     mongoUri,
     jwtSecret,
     jwtSecretEphemeral,
+    otpPepper,
     allowedOrigins: origins,
     isOriginAllowed: originMatcher(origins),
-    demoOtp,
-    enableDemoAuth,
+    otpProvider,
+    resendApiKey,
+    otpFromEmail,
+    smtpHost,
+    smtpPort,
+    smtpSecure,
+    smtpUser,
+    smtpPass,
+    twilioAccountSid,
+    twilioAuthToken,
+    twilioFromNumber,
+    esmsApiKey,
+    esmsSecretKey,
+    esmsBrandname,
     reportsPerHour,
     aiVisionPerHour,
+    refreshTokenDays,
+    cookieSecure,
     dataDir: path.resolve(dataDirRaw),
   } as const;
 }

@@ -4,10 +4,11 @@ import {
 import { hammingDistance } from '../../../shared/dhash';
 import { WARD_BY_CODE } from '../../../shared/dongNaiWards';
 import { haversineMeters, inDongNaiBBox, matchArterial, maskPhone, nearestWard } from '../../../shared/geo';
-import { computeStats, toClientReport } from '../../../shared/report';
+import { computeStats, toClientReport, toReportSummary } from '../../../shared/report';
 import type {
-  Category, ClientReport, Department, DispatchOrder, Photo, Report, ScopeStats, TimelineEvent,
+  Category, ClientReport, Department, DispatchOrder, PaginatedReports, Photo, Report, ReportStatus, ReportSummary, ScopeStats, TimelineEvent,
 } from '../../../shared/types';
+import type { BoundingBoxQuery } from '../repositories/types';
 import { env } from '../config/env';
 import type { Repositories, UserRecord } from '../repositories/types';
 import type { CreateReportInput } from '../validation/schemas';
@@ -71,6 +72,45 @@ export class ReportService {
     const wardCodes = scope.startsWith('ward:') ? [scope.slice(5)] : undefined;
     const rows = await this.repos.reports.list({ wardCodes, category });
     return rows.filter((r) => canSee(user, r)).map(toClientReport);
+  }
+
+  /** Phân trang keyset/cursor theo createdAt DESC cho danh sách phản ánh quy mô lớn. */
+  async listPaginated(
+    user: UserRecord | null,
+    opts: { scope: string; category?: string; status?: ReportStatus; cursor?: string; limit: number },
+  ): Promise<PaginatedReports> {
+    const wardCodes = opts.scope.startsWith('ward:') ? [opts.scope.slice(5)] : undefined;
+    const statuses = opts.status ? [opts.status] : undefined;
+    const allVisible = (await this.repos.reports.list({ wardCodes, category: opts.category, statuses })).filter((r) =>
+      canSee(user, r),
+    );
+    const total = allVisible.length;
+    const pagePool = opts.cursor ? allVisible.filter((r) => r.createdAt < opts.cursor!) : allVisible;
+    const slice = pagePool.slice(0, opts.limit);
+    const hasMore = pagePool.length > opts.limit;
+    return {
+      items: slice.map(toClientReport),
+      nextCursor: hasMore && slice.length > 0 ? slice[slice.length - 1].createdAt : null,
+      hasMore,
+      total,
+    };
+  }
+
+  /** Endpoint bản đồ hiệu năng cao: chỉ trả điểm nằm trong khung nhìn bbox với payload gọn (không ảnh base64). */
+  async listSummary(
+    user: UserRecord | null,
+    opts: { scope: string; bbox?: BoundingBoxQuery; category?: string; status?: ReportStatus; limit?: number },
+  ): Promise<ReportSummary[]> {
+    const wardCodes = opts.scope.startsWith('ward:') ? [opts.scope.slice(5)] : undefined;
+    const statuses = opts.status ? [opts.status] : undefined;
+    const rows = await this.repos.reports.list({
+      wardCodes,
+      category: opts.category,
+      statuses,
+      bbox: opts.bbox,
+      limit: opts.limit ?? 1500,
+    });
+    return rows.filter((r) => canSee(user, r)).map(toReportSummary);
   }
 
   async getVisible(user: UserRecord | null, id: string): Promise<Report> {

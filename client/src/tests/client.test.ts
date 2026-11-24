@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { DONG_NAI_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
-import { backoffMs } from '../db/sync';
-import { en } from '../i18n/en';
-import { vi } from '../i18n/vi';
-import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '../lib/dongNaiGeo';
-import { localVision } from '../lib/localVision';
 import { hammingDistance } from '@shared/dhash';
 import { computeStats, toClientReport } from '@shared/report';
 import { buildSeedReports } from '@shared/seed';
+import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, searchWards, UPGRADED_2026_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
+import { backoffMs } from '../db/sync';
+import { en } from '../i18n/en';
+import { vi } from '../i18n/vi';
+import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard, resolveAdminUnit } from '../lib/dongNaiGeo';
+import { localVision } from '../lib/localVision';
 
 const extractPlaceholders = (s: string): string[] =>
   [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -25,36 +25,40 @@ describe('i18n VI ↔ EN parity', () => {
   });
 });
 
-describe('Dữ liệu Đồng Nai & Local Seed cho IndexedDB', () => {
-  it('có đúng 95 xã/phường và Phường Trấn Biên khớp tọa độ tâm', () => {
+describe('Dữ liệu 95 ĐVHC Thành phố Đồng Nai & Local Seed cho IndexedDB', () => {
+  it('khẳng định cứng 95 ĐVHC (33 Phường, 62 Xã), 10 phường mới 30/04/2026 và 5 vùng nhảy nhanh', () => {
     expect(DONG_NAI_WARDS).toHaveLength(95);
+    expect(DONG_NAI_WARDS.filter((w) => w.kind === 'Phường')).toHaveLength(33);
+    expect(DONG_NAI_WARDS.filter((w) => w.kind === 'Xã')).toHaveLength(62);
+    expect(UPGRADED_2026_WARDS).toHaveLength(10);
+    expect(QUICK_JUMP_REGIONS).toHaveLength(5);
     expect(WARD_BY_CODE['DN-TB']?.name).toBe('Phường Trấn Biên');
-    expect(WARD_BY_CODE['DN-TB']?.centerLat).toBe(10.9465);
-    expect(WARD_BY_CODE['DN-TB']?.centerLng).toBe(106.8243);
+    expect(WARD_BY_CODE['DN-LTH']?.name).toBe('Phường Long Thành');
+    expect(WARD_BY_CODE['DN-BGM']?.name).toBe('Xã Bù Gia Mập');
   });
 
-  it('seed local khớp tuyệt đối số liệu Trấn Biên (64: 21/18/15/10, 47 xong = 73.4%, TB 3.2 ngày)', () => {
+  it('seed local phủ đều toàn Thành phố Đồng Nai (80 hồ sơ rải khắp 5 vùng)', () => {
     const all = buildSeedReports().map(toClientReport);
-    const tb = all.filter((r) => r.wardCode === 'DN-TB');
-    const stats = computeStats(tb, 'ward:DN-TB');
+    const cityStats = computeStats(all, 'city');
     expect(all).toHaveLength(80);
-    expect(stats.total).toBe(64);
-    expect(stats.byCategory).toEqual({ rac_thai: 21, den_duong: 18, ngap_nuoc: 15, mat_duong: 10 });
-    expect(stats.resolved).toBe(47);
-    expect(stats.open).toBe(17);
-    expect(stats.resolvedPct).toBe(73.4);
-    expect(stats.avgDays).toBe(3.2);
+    expect(cityStats.total).toBe(80);
+    expect(cityStats.resolved).toBeGreaterThan(30);
+    expect(new Set(all.map((r) => WARD_BY_CODE[r.wardCode]?.region)).size).toBe(5);
+    expect(new Set(all.map((r) => r.wardCode)).size).toBeGreaterThanOrEqual(35);
   });
 });
 
-describe('Thuật toán Edge (Geo, dHash, Local Vision Fallback, Backoff)', () => {
-  it('kiểm tra Bounding Box Đồng Nai, Haversine và trục đường huyết mạch', () => {
-    expect(inDongNaiBBox(10.9465, 106.8243)).toBe(true);
+describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backoff)', () => {
+  it('kiểm tra Bounding Box toàn TP. Đồng Nai, tìm kiếm 95 ĐVHC, Haversine và trục huyết mạch', () => {
+    expect(inDongNaiBBox(10.9465, 106.8243)).toBe(true); // P. Trấn Biên
+    expect(inDongNaiBBox(12.142, 107.092)).toBe(true);   // Xã Bù Gia Mập (Bắc Đồng Nai)
     expect(inDongNaiBBox(21.0285, 105.8542)).toBe(false); // Hà Nội
     expect(haversineMeters(10.9465, 106.8243, 10.9465, 106.8243)).toBe(0);
     expect(haversineMeters(10.9465, 106.8243, 10.9468, 106.8243)).toBeLessThan(50);
     expect(nearestWard(10.9465, 106.8243).wardCode).toBe('DN-TB');
     expect(matchArterial(10.9465, 106.8243)?.name).toBe('Nguyễn Ái Quốc');
+    expect(searchWards('loc ninh').some((w) => w.wardCode === 'DN-LNI')).toBe(true);
+    expect(resolveAdminUnit({ lat: 10.7906, lng: 106.9512, rawAddressText: 'Thị trấn Long Thành, Huyện Long Thành' }).wardCode).toBe('DN-LTH');
   });
 
   it('tính khoảng cách Hamming 64-bit dHash chính xác', () => {

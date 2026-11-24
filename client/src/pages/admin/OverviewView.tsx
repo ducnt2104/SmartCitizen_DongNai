@@ -1,6 +1,7 @@
 import { Activity, AlertOctagon, CheckCircle2, Timer } from 'lucide-react';
 import { useMemo } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import type { Category, ClientReport } from '@shared/types';
 import { MapView } from '../../components/MapView';
 import { SkeletonBlock } from '../../components/ui';
@@ -113,7 +114,7 @@ export function OverviewView({ scope, reports, isCity }: { scope: string; report
 
       <section className="ioc-panel p-3" aria-label={t('ioc.heatmap')}>
         <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.heatmap')}</h2>
-        {!rows ? <SkeletonBlock className="h-72" /> : <MapView key={scope} reports={rows} mode="heat" tone="ioc" className="h-[22rem]" center={isCity ? [10.95, 107.1] : undefined} zoom={isCity ? 10 : 14} fitToReports={isCity} showArterials />}
+        {!rows ? <SkeletonBlock className="h-72" /> : <MapView key={scope} reports={rows} mode="heat" tone="ioc" className="h-[22rem]" center={isCity ? DONG_NAI_CITY_CENTER : undefined} zoom={isCity ? 9 : 14} fitToReports={isCity} showArterials />}
       </section>
 
       {isCity && ov.data.ranking.length > 0 && (

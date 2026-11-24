@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import type { AuditEntry, Report, Role } from '../../../shared/types';
-import { AuditLogModel, OtpModel, ReportModel, UserModel } from '../models';
+import { buildMongoConnectOptions } from '../config/db';
+import { AuditLogModel, OtpModel, ReportModel, SessionModel, UserModel } from '../models';
 import type {
   AuditRepository, NearbyQuery, OtpRecord, OtpRepository, ReportQuery, ReportRepository, Repositories,
-  UserRecord, UserRepository,
+  SessionRecord, SessionRepository, UserRecord, UserRepository,
 } from './types';
 
 type Doc = Record<string, unknown>;
@@ -38,6 +39,13 @@ class MongoReportRepo implements ReportRepository {
     if (q.statuses) filter.status = { $in: q.statuses };
     if (q.category) filter.category = String(q.category);
     if (q.reporterId) filter.$or = [{ reporterId: String(q.reporterId) }, { 'contributors.userId': String(q.reporterId) }];
+    if (q.bbox) {
+      filter.lat = { $gte: q.bbox.minLat, $lte: q.bbox.maxLat };
+      filter.lng = { $gte: q.bbox.minLng, $lte: q.bbox.maxLng };
+    }
+    if (q.cursor) {
+      filter.createdAt = { $lt: String(q.cursor) };
+    }
     let cursor = ReportModel.find(filter).sort({ createdAt: -1 });
     if (q.limit) cursor = cursor.limit(q.limit);
     const docs = (await cursor.lean()) as Doc[];
@@ -84,6 +92,10 @@ class MongoUserRepo implements UserRepository {
   async getByPhone(phone: string): Promise<UserRecord | null> {
     return strip<UserRecord>((await UserModel.findOne({ phone: String(phone) }).lean()) as Doc | null);
   }
+  async getByEmail(email: string): Promise<UserRecord | null> {
+    const escaped = String(email).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return strip<UserRecord>((await UserModel.findOne({ email: new RegExp(`^${escaped}$`, 'i') }).lean()) as Doc | null);
+  }
   async getByStaffCode(code: string): Promise<UserRecord | null> {
     const escaped = String(code).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return strip<UserRecord>((await UserModel.findOne({ staffCode: new RegExp(`^${escaped}$`, 'i') }).lean()) as Doc | null);
@@ -118,26 +130,51 @@ class MongoAuditRepo implements AuditRepository {
 }
 
 class MongoOtpRepo implements OtpRepository {
-  async get(phone: string): Promise<OtpRecord | null> {
-    return strip<OtpRecord>((await OtpModel.findOne({ phone: String(phone) }).lean()) as Doc | null);
+  async get(identifier: string): Promise<OtpRecord | null> {
+    return strip<OtpRecord>((await OtpModel.findOne({ identifier: String(identifier) }).lean()) as Doc | null);
   }
   async save(rec: OtpRecord): Promise<void> {
-    await OtpModel.replaceOne({ phone: rec.phone }, rec, { upsert: true });
+    await OtpModel.replaceOne({ identifier: rec.identifier }, rec, { upsert: true });
   }
-  async delete(phone: string): Promise<void> {
-    await OtpModel.deleteOne({ phone: String(phone) });
+  async delete(identifier: string): Promise<void> {
+    await OtpModel.deleteOne({ identifier: String(identifier) });
+  }
+}
+
+class MongoSessionRepo implements SessionRepository {
+  async getByRefreshHash(refreshHash: string): Promise<SessionRecord | null> {
+    return strip<SessionRecord>((await SessionModel.findOne({ refreshHash: String(refreshHash) }).lean()) as Doc | null);
+  }
+  async save(rec: SessionRecord): Promise<void> {
+    await SessionModel.replaceOne({ id: rec.id }, rec, { upsert: true });
+  }
+  async revoke(id: string, replacedBySessionId: string | null = null): Promise<void> {
+    await SessionModel.updateOne(
+      { id: String(id) },
+      { $set: { revokedAt: Date.now(), ...(replacedBySessionId ? { replacedBySessionId } : {}) } },
+    );
+  }
+  async revokeAllForUser(userId: string): Promise<void> {
+    await SessionModel.updateMany({ userId: String(userId), revokedAt: null }, { $set: { revokedAt: Date.now() } });
   }
 }
 
 export async function createMongoRepositories(uri: string): Promise<Repositories> {
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 8000 });
-  await Promise.all([ReportModel.syncIndexes(), UserModel.syncIndexes(), AuditLogModel.syncIndexes(), OtpModel.syncIndexes()]);
+  await mongoose.connect(uri, buildMongoConnectOptions());
+  await Promise.all([
+    ReportModel.syncIndexes(),
+    UserModel.syncIndexes(),
+    AuditLogModel.syncIndexes(),
+    OtpModel.syncIndexes(),
+    SessionModel.syncIndexes(),
+  ]);
   return {
     mode: 'mongodb',
     reports: new MongoReportRepo(),
     users: new MongoUserRepo(),
     audit: new MongoAuditRepo(),
     otps: new MongoOtpRepo(),
+    sessions: new MongoSessionRepo(),
     ping: async () => mongoose.connection.readyState === 1,
     close: async () => {
       await mongoose.disconnect();

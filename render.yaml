@@ -14,6 +14,12 @@ services:
       # Render tự động sinh chuỗi ngẫu nhiên an toàn (>= 32 ký tự)
       - key: JWT_SECRET
         generateValue: true
+      - key: OTP_PEPPER
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: REFRESH_TOKEN_DAYS
+        value: "7"
       # Các khóa bí mật bắt buộc nhập trực tiếp trên Render Dashboard (không lưu trong Git)
       - key: MONGODB_URI
         sync: false
@@ -21,12 +27,28 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.5-flash
+      # Dịch vụ gửi OTP thật (nhập RESEND_API_KEY hoặc bộ SMTP_HOST/SMTP_USER/SMTP_PASS)
+      - key: OTP_PROVIDER
+        value: auto
+      - key: RESEND_API_KEY
+        sync: false
+      - key: OTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      # Mật khẩu khởi tạo Cán bộ IOC 2 cấp (đổi trên Render Dashboard)
+      - key: INITIAL_STAFF_PASSWORD
+        sync: false
       - key: ALLOWED_ORIGINS
         value: http://localhost:5173,https://*.onrender.com
-      - key: DEMO_OTP
-        value: "true"
-      - key: ENABLE_DEMO_AUTH
-        value: "true"
       - key: REPORTS_PER_HOUR
         value: "3"
       - key: AI_VISION_PER_HOUR
