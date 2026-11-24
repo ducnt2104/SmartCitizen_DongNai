@@ -46,14 +46,26 @@ export function buildSeedUsers(): UserRecord[] {
   ];
 }
 
-/** Seed lần đầu: 80 hồ sơ phủ đều toàn TP. Đồng Nai + tài khoản khởi tạo. Idempotent. */
+/** Seed lần đầu: 80 hồ sơ phủ đều toàn TP. Đồng Nai + tài khoản khởi tạo. Idempotent & đồng bộ mật khẩu cán bộ theo INITIAL_STAFF_PASSWORD. */
 export async function seedIfEmpty(repos: Repositories, audit: AuditService): Promise<{ reports: number; users: number }> {
   let reports = 0;
   let users = 0;
+  const seedUsers = buildSeedUsers();
   if ((await repos.users.count()) === 0) {
-    for (const u of buildSeedUsers()) {
+    for (const u of seedUsers) {
       await repos.users.save(u);
       users += 1;
+    }
+  } else {
+    // Đảm bảo 6 tài khoản cán bộ IOC 2 cấp luôn tồn tại trong MongoDB và đồng bộ đúng INITIAL_STAFF_PASSWORD hiện hành
+    for (const staff of seedUsers.filter((u) => u.staffCode !== null)) {
+      const existing = await repos.users.getByStaffCode(staff.staffCode!);
+      if (!existing) {
+        await repos.users.save(staff);
+        users += 1;
+      } else if (staff.passwordHash) {
+        await repos.users.save({ ...existing, passwordHash: staff.passwordHash, revoked: false });
+      }
     }
   }
   if ((await repos.reports.count()) === 0) {
