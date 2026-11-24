@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: smartcitizen-dongnai
+    runtime: node
+    plan: free
+    region: singapore
+    autoDeploy: true
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: http://localhost:5173,https://*.onrender.com
+      - key: DEMO_OTP
+        value: "true"
+      - key: ENABLE_DEMO_AUTH
+        value: "true"
+      - key: REPORTS_PER_HOUR
+        value: "3"
+      - key: AI_VISION_PER_HOUR
+        value: "10"
+      - key: DATA_DIR
+        value: ./data

@@ -1,0 +1,16 @@
+{
+  "name": "smartcitizen-dongnai",
+  "private": true,
+  "version": "1.0.0",
+  "description": "SmartCitizen_DongNai - Team Victer: Phản ánh hiện trường & Điều phối đô thị thông minh TP. Đồng Nai",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "build:server": "npm run build --prefix server",
+    "build:client": "npm run build --prefix client",
+    "test": "npm test --prefix server && npm test --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "start": "npm start --prefix server"
+  }
+}

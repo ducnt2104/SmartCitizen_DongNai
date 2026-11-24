@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>SmartCitizen_DongNai</title>
+  <path d="M32 3 8 12v18c0 15 10 26 24 31 14-5 24-16 24-31V12L32 3Z" fill="#0B57D0"/>
+  <path d="M32 3 8 12v18c0 15 10 26 24 31V3Z" fill="#0A4BB5"/>
+  <path d="M32 15c-7 0-12.5 5.2-12.5 11.8 0 8.4 12.5 19.2 12.5 19.2S44.5 35.200 44.500 26.800C44.500 20.200 39 15 32 15Z" fill="#fff"/>
+  <circle cx="32" cy="26.500" r="5" fill="#F59E0B"/>
+  <path d="M13 50c4.500-3.500 8.500-3.500 13 0s8.500 3.500 13 0 8.500-3.500 12 0" fill="none" stroke="#F59E0B" stroke-width="3" stroke-linecap="round"/>
+</svg>
