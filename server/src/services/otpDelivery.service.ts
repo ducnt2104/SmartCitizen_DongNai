@@ -49,7 +49,22 @@ function buildEmailHtml(code: string, ttlMinutes: number, purpose: OtpSendPayloa
 </html>`;
 }
 
-/** Adapter 1: Gửi Email OTP thật qua Resend REST API (không cần thêm thư viện ngoài). */
+function parseSenderAddress(raw: string, fallbackEmail: string): { name: string; email: string } {
+  const m = raw.match(/^(.+?)\s*<([^>]+)>$/);
+  if (m) {
+    const email = m[2].trim();
+    if (email && !email.endsWith('@resend.dev')) {
+      return { name: m[1].trim().replace(/^"|"$/g, ''), email };
+    }
+  }
+  const trimmed = raw.trim();
+  if (trimmed.includes('@') && !trimmed.includes('<') && !trimmed.endsWith('@resend.dev')) {
+    return { name: 'SmartCitizen Đồng Nai', email: trimmed };
+  }
+  return { name: 'SmartCitizen Đồng Nai', email: fallbackEmail };
+}
+
+/** Adapter 1: Gửi Email OTP thật qua Resend REST API (HTTPS Port 443 — không bị chặn trên Render Free Tier). */
 class ResendEmailTransport implements OtpTransport {
   readonly provider = 'resend';
   readonly channel: OtpChannel = 'email';
@@ -76,7 +91,78 @@ class ResendEmailTransport implements OtpTransport {
   }
 }
 
-/** Adapter 2: Gửi Email OTP thật qua Nodemailer SMTP (Gmail App Password / Brevo / SMTP doanh nghiệp). */
+/** Adapter 1B: Gửi Email OTP thật qua Brevo REST API v3 (HTTPS Port 443 — gửi được tới mọi Gmail người nhận trên Render Free Tier). */
+class BrevoEmailTransport implements OtpTransport {
+  readonly provider = 'brevo';
+  readonly channel: OtpChannel = 'email';
+
+  async send(p: OtpSendPayload): Promise<void> {
+    const sender = parseSenderAddress(env.otpFromEmail, env.smtpUser || 'no-reply@smartcitizen.vn');
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'api-key': env.brevoApiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender,
+        to: [{ email: p.to }],
+        subject: `[SmartCitizen Đồng Nai] Mã xác thực OTP: ${p.code}`,
+        htmlContent: buildEmailHtml(p.code, p.ttlMinutes, p.purpose),
+        textContent: `Ma OTP SmartCitizen Thanh pho Dong Nai cua ban la: ${p.code}. Hieu luc ${p.ttlMinutes} phut. Khong chia se ma nay.`,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new HttpError(502, `Gửi email OTP qua Brevo API thất bại (${res.status}). ${detail.slice(0, 160)}`, 'otp_delivery_failed');
+    }
+  }
+}
+
+/** Adapter 1C: Gửi Email OTP qua HTTPS Webhook / Google Apps Script Gmail Relay (HTTPS Port 443 — 100% Gmail chính chủ, 0% chặn cổng). */
+class WebhookEmailTransport implements OtpTransport {
+  readonly provider = 'webhook';
+  readonly channel: OtpChannel = 'email';
+
+  async send(p: OtpSendPayload): Promise<void> {
+    const res = await fetch(env.otpWebhookUrl, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(env.otpWebhookSecret ? { 'X-Otp-Secret': env.otpWebhookSecret } : {}),
+      },
+      body: JSON.stringify({
+        secret: env.otpWebhookSecret || undefined,
+        to: p.to,
+        subject: `[SmartCitizen Đồng Nai] Mã xác thực OTP: ${p.code}`,
+        code: p.code,
+        ttlMinutes: p.ttlMinutes,
+        purpose: p.purpose,
+        text: `Ma OTP SmartCitizen Thanh pho Dong Nai cua ban la: ${p.code}. Hieu luc ${p.ttlMinutes} phut. Khong chia se ma nay.`,
+        html: buildEmailHtml(p.code, p.ttlMinutes, p.purpose),
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new HttpError(502, `Gửi email OTP qua HTTPS Webhook thất bại (${res.status}). ${detail.slice(0, 160)}`, 'otp_delivery_failed');
+    }
+    const rawText = await res.text().catch(() => '');
+    if (rawText) {
+      try {
+        const parsed = JSON.parse(rawText) as { ok?: boolean; error?: string };
+        if (parsed.ok === false) {
+          throw new HttpError(502, `HTTPS Webhook báo lỗi gửi mail: ${parsed.error ?? 'unknown'}`, 'otp_delivery_failed');
+        }
+      } catch (e) {
+        if (e instanceof HttpError) throw e;
+      }
+    }
+  }
+}
+
+/** Adapter 2: Gửi Email OTP thật qua Nodemailer SMTP (Lưu ý: Render Free Tier chặn outbound cổng 25/465/587). */
 class SmtpEmailTransport implements OtpTransport {
   readonly provider = 'smtp';
   readonly channel: OtpChannel = 'email';
@@ -99,19 +185,21 @@ class SmtpEmailTransport implements OtpTransport {
 
   async send(p: OtpSendPayload): Promise<void> {
     try {
+      const customFrom = env.otpFromEmail && !env.otpFromEmail.includes('@resend.dev') ? env.otpFromEmail : env.smtpUser;
       await this.getTransporter().sendMail({
-        from: env.otpFromEmail || env.smtpUser,
+        from: customFrom,
         to: p.to,
         subject: `[SmartCitizen Đồng Nai] Mã xác thực OTP: ${p.code}`,
         text: `Ma OTP SmartCitizen Thanh pho Dong Nai cua ban la: ${p.code}. Hieu luc ${p.ttlMinutes} phut. Khong chia se ma nay.`,
         html: buildEmailHtml(p.code, p.ttlMinutes, p.purpose),
       });
     } catch (err) {
-      throw new HttpError(
-        502,
-        `Không gửi được email OTP qua SMTP (${err instanceof Error ? err.message : String(err)}).`,
-        'otp_delivery_failed',
-      );
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const isTimeout = /timeout|ETIMEDOUT|ECONNREFUSED/i.test(rawMsg);
+      const hint = isTimeout
+        ? `${rawMsg} — Lưu ý: Render Free Tier chặn cổng SMTP 25/465/587; hãy dùng OTP_WEBHOOK_URL, BREVO_API_KEY hoặc RESEND_API_KEY qua cổng HTTPS 443`
+        : rawMsg;
+      throw new HttpError(502, `Không gửi được email OTP qua SMTP (${hint}).`, 'otp_delivery_failed');
     }
   }
 }
@@ -177,6 +265,8 @@ class EsmsVnTransport implements OtpTransport {
 export class OtpDeliveryService {
   private testTransport: OtpTransport | null = null;
   private readonly resend = new ResendEmailTransport();
+  private readonly brevo = new BrevoEmailTransport();
+  private readonly webhook = new WebhookEmailTransport();
   private readonly smtp = new SmtpEmailTransport();
   private readonly twilio = new TwilioSmsTransport();
   private readonly esms = new EsmsVnTransport();
@@ -207,14 +297,30 @@ export class OtpDeliveryService {
     };
   }
 
+  private resolveHttpsEmailFallback(): OtpTransport | null {
+    if (env.otpWebhookUrl) return this.webhook;
+    if (env.brevoApiKey) return this.brevo;
+    if (env.resendApiKey) return this.resend;
+    return null;
+  }
+
   private resolveTransport(channel: OtpChannel): OtpTransport | null {
     if (this.testTransport && process.env.NODE_ENV === 'test') {
       return this.testTransport;
     }
     if (channel === 'email') {
+      if (env.otpProvider === 'webhook') return env.otpWebhookUrl ? this.webhook : null;
+      if (env.otpProvider === 'brevo') return env.brevoApiKey ? this.brevo : null;
       if (env.otpProvider === 'resend') return env.resendApiKey ? this.resend : null;
-      if (env.otpProvider === 'smtp') return env.smtpHost && env.smtpUser && env.smtpPass ? this.smtp : null;
-      if (env.resendApiKey) return this.resend;
+      if (env.otpProvider === 'smtp') {
+        // Nếu người dùng đặt OTP_PROVIDER=smtp trên Render nhưng đồng thời đã thêm HTTPS provider (Webhook/Brevo/Resend),
+        // ưu tiên HTTPS hoặc giữ SMTP làm chính và tự fallback khi SMTP bị chặn cổng.
+        if (env.smtpHost && env.smtpUser && env.smtpPass) return this.smtp;
+        return this.resolveHttpsEmailFallback();
+      }
+      // Chế độ auto: luôn ưu tiên giao thức HTTPS (Port 443) trước SMTP để chạy mượt trên Render Free Tier
+      const httpsTransport = this.resolveHttpsEmailFallback();
+      if (httpsTransport) return httpsTransport;
       if (env.smtpHost && env.smtpUser && env.smtpPass) return this.smtp;
       return null;
     }
@@ -234,11 +340,24 @@ export class OtpDeliveryService {
     if (!transport) {
       const hint =
         payload.channel === 'email'
-          ? 'Chưa cấu hình dịch vụ gửi Email OTP thật. Hãy thiết lập RESEND_API_KEY hoặc SMTP_HOST/SMTP_USER/SMTP_PASS trong .env (xem .env.example).'
-          : 'Chưa cấu hình dịch vụ gửi SMS OTP thật (TWILIO_* hoặc ESMS_*). Khuyến nghị chọn đăng nhập bằng Email OTP (cấu hình RESEND_API_KEY hoặc Gmail SMTP).';
+          ? 'Chưa cấu hình dịch vụ gửi Email OTP thật. Trên Render Free Tier (chặn cổng SMTP 587/465), hãy đặt OTP_WEBHOOK_URL, BREVO_API_KEY hoặc RESEND_API_KEY.'
+          : 'Chưa cấu hình dịch vụ gửi SMS OTP thật (TWILIO_* hoặc ESMS_*). Khuyến nghị chọn đăng nhập bằng Email OTP.';
       throw new HttpError(503, hint, 'otp_provider_not_configured');
     }
-    await transport.send(payload);
-    return { provider: transport.provider };
+    try {
+      await transport.send(payload);
+      return { provider: transport.provider };
+    } catch (err) {
+      // Tự động cứu hộ nếu đang để OTP_PROVIDER=smtp bị chặn cổng trên Render nhưng đã điền thêm khóa HTTPS (Webhook/Brevo/Resend)
+      if (payload.channel === 'email' && transport.provider === 'smtp') {
+        const httpsFallback = this.resolveHttpsEmailFallback();
+        if (httpsFallback) {
+          console.warn(`[otp] SMTP thất bại, tự động chuyển sang kênh HTTPS (${httpsFallback.provider}):`, err);
+          await httpsFallback.send(payload);
+          return { provider: httpsFallback.provider };
+        }
+      }
+      throw err;
+    }
   }
 }

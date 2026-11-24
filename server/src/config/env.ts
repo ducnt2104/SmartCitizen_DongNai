@@ -13,7 +13,7 @@ export interface EnvValidationIssue {
 }
 
 const nodeEnvSchema = z.enum(['development', 'production', 'test']);
-const otpProviderSchema = z.enum(['auto', 'resend', 'smtp', 'twilio', 'esms']);
+const otpProviderSchema = z.enum(['auto', 'resend', 'brevo', 'webhook', 'smtp', 'twilio', 'esms']);
 
 type NodeEnv = z.infer<typeof nodeEnvSchema>;
 export type OtpProviderConfig = z.infer<typeof otpProviderSchema>;
@@ -191,11 +191,14 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
       key: 'OTP_PROVIDER',
       status: 'INVALID',
       detail: `Giá trị "${rawOtpProvider}" không hợp lệ.`,
-      hint: 'Chỉ chấp nhận: auto | resend | smtp | twilio | esms.',
+      hint: 'Chỉ chấp nhận: auto | resend | brevo | webhook | smtp | twilio | esms.',
     });
   }
 
   const resendApiKey = readTrimmed(source, 'RESEND_API_KEY') ?? '';
+  const brevoApiKey = readTrimmed(source, 'BREVO_API_KEY') ?? '';
+  const otpWebhookUrl = readTrimmed(source, 'OTP_WEBHOOK_URL') ?? '';
+  const otpWebhookSecret = readTrimmed(source, 'OTP_WEBHOOK_SECRET') ?? '';
   const otpFromEmail = readTrimmed(source, 'OTP_FROM_EMAIL') || 'SmartCitizen Đồng Nai <onboarding@resend.dev>';
   const smtpHost = readTrimmed(source, 'SMTP_HOST') ?? '';
   const smtpPort = parseIntEnv(source, 'SMTP_PORT', 587, { min: 1, max: 65535, hint: 'Cổng SMTP hợp lệ (vd: 587 hoặc 465).' }, issues);
@@ -258,6 +261,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     isOriginAllowed: originMatcher(origins),
     otpProvider,
     resendApiKey,
+    brevoApiKey,
+    otpWebhookUrl,
+    otpWebhookSecret,
     otpFromEmail,
     smtpHost,
     smtpPort,

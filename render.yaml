@@ -27,9 +27,15 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.5-flash
-      # Dịch vụ gửi OTP thật (nhập RESEND_API_KEY hoặc bộ SMTP_HOST/SMTP_USER/SMTP_PASS)
+      # Dịch vụ gửi OTP thật qua HTTPS Port 443 (Render Free Tier chặn cổng SMTP 25/465/587)
       - key: OTP_PROVIDER
         value: auto
+      - key: OTP_WEBHOOK_URL
+        sync: false
+      - key: OTP_WEBHOOK_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
       - key: RESEND_API_KEY
         sync: false
       - key: OTP_FROM_EMAIL
