@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AuditEntry, ClientReport } from '@shared/types';
 import { CameraCapture } from '../components/CameraCapture';
-import { MapView } from '../components/MapView';
+import { CityIncidentMap } from '../components/map';
 import { ReportCard } from '../components/ReportCard';
 import { EmptyState, ErrorState, SkeletonList, Sheet, Spinner } from '../components/ui';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
@@ -105,7 +105,14 @@ export default function VolunteerPage() {
             <div className="card"><EmptyState kind="shield" title={t('vol.emptyTitle')} text={t('vol.emptyText')} /></div>
           ) : (
             <>
-              <MapView reports={tasks} className="h-[34dvh]" fitToReports onSelect={(r) => setActive(r)} ariaLabel={t('vol.mapAria')} />
+              <CityIncidentMap
+                embedded
+                externalReports={tasks}
+                fitPointsOnMount
+                onSelectPoint={(r) => setActive(r)}
+                className="h-[34dvh]"
+                ariaLabel={t('vol.mapAria')}
+              />
               <div className="space-y-3">
                 {tasks.map((r) => (
                   <div key={r.id} className="space-y-1">

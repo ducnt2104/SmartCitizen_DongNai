@@ -3,6 +3,8 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  base: '/',
+  envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
   plugins: [react()],
   resolve: {
     alias: {
@@ -21,12 +23,13 @@ export default defineConfig({
   worker: { format: 'es' },
   build: {
     target: 'es2022',
-    chunkSizeWarningLimit: 900,
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
-          map: ['leaflet', 'react-leaflet', 'leaflet.markercluster', 'leaflet.heat'],
+          'google-maps': ['@vis.gl/react-google-maps', '@googlemaps/markerclusterer'],
+          maplibre: ['maplibre-gl'],
           charts: ['recharts'],
           db: ['dexie', 'dexie-react-hooks'],
         },

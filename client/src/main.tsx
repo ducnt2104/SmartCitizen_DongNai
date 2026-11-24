@@ -8,7 +8,10 @@ import { ensureDeviceFingerprint } from './lib/deviceFp';
 import { AuthGateProvider } from './state/authGate';
 import { SettingsProvider } from './state/settings';
 import { ToastProvider } from './state/toast';
+import { installPreloadRecovery } from './utils/lazyWithRetry';
 import './index.css';
+
+installPreloadRecovery();
 
 function Boot() {
   return (

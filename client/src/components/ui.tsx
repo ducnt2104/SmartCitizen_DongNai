@@ -159,10 +159,22 @@ export function CategoryIcon({ r, size = 'md' }: { r: Pick<ClientReport, 'catego
   );
 }
 
-/** Hộp thoại dạng bottom-sheet (mobile) / modal giữa màn hình (desktop). Esc để đóng, trả focus khi đóng. */
+/** Hộp thoại dạng bottom-sheet (mobile) / modal hoặc slide-over drawer (desktop). Esc để đóng, trả focus khi đóng. */
 export function Sheet({
-  open, onClose, title, children, wide = false,
-}: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+  open,
+  onClose,
+  title,
+  children,
+  wide = false,
+  variant = 'modal',
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+  variant?: 'modal' | 'drawer';
+}) {
   const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -181,21 +193,42 @@ export function Sheet({
     };
   }, [open, onClose]);
   if (!open) return null;
+
+  const isDrawer = variant === 'drawer';
+
   return (
-    <div className="fixed inset-0 z-[1500] flex items-end justify-center sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
-      <button type="button" className="absolute inset-0 bg-slate-950/55" onClick={onClose} aria-label={t('common.close')} tabIndex={-1} />
+    <div
+      className={`fixed inset-0 z-[1500] flex ${
+        isDrawer ? 'items-end justify-center lg:items-stretch lg:justify-end' : 'items-end justify-center sm:items-center'
+      }`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-950/50 backdrop-blur-[1px]"
+        onClick={onClose}
+        aria-label={t('common.close')}
+        tabIndex={-1}
+      />
       <div
         ref={ref}
         tabIndex={-1}
-        className={`relative flex max-h-[92dvh] w-full animate-slideup flex-col rounded-t-3xl bg-surface shadow-lift outline-none sm:rounded-3xl ${wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'}`}
+        className={`relative flex w-full animate-slideup flex-col bg-surface shadow-lift outline-none ${
+          isDrawer
+            ? 'max-h-[88dvh] rounded-t-3xl lg:h-dvh lg:max-h-dvh lg:max-w-[29rem] lg:rounded-none lg:rounded-l-3xl lg:border-l lg:border-line'
+            : `max-h-[92dvh] rounded-t-3xl sm:rounded-3xl ${wide ? 'sm:max-w-3xl' : 'sm:max-w-lg'}`
+        }`}
       >
+        <div className="mx-auto mt-2 h-1.5 w-11 shrink-0 rounded-full bg-line lg:hidden" aria-hidden />
         <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
           <h2 className="min-w-0 truncate text-lg font-bold">{title}</h2>
           <button type="button" onClick={onClose} className="btn btn-ghost !min-h-10 !min-w-10 !px-2" aria-label={t('common.close')}>
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="overflow-y-auto px-4 py-4">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 py-4">{children}</div>
       </div>
     </div>
   );

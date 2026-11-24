@@ -2,8 +2,9 @@ import { BarChart3, ChevronsLeft, ChevronsRight, ClipboardCheck, FileClock, LogO
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Logo } from '../../components/Logo';
-import { MapView, type MapMode } from '../../components/MapView';
+import { CityIncidentMap, type MapMode } from '../../components/map';
 import { OfflineBanner } from '../../components/OfflineBanner';
+import { ReportDetail } from '../../components/ReportDetail';
 import { ScopePicker } from '../../components/Header';
 import { useAllReports, useOnline } from '../../db/hooks';
 import { useI18n, type I18nKey } from '../../i18n';
@@ -43,6 +44,7 @@ export default function AdminPage() {
   const [view, setView] = useState<View>('overview');
   const [collapsed, setCollapsed] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>('pins');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   if (!session) return <Navigate to="/auth" replace />;
   const u = session.user;
@@ -98,7 +100,21 @@ export default function AdminPage() {
                 <button type="button" aria-pressed={mapMode === 'pins'} className={`ioc-btn ${mapMode === 'pins' ? 'ioc-btn-cyan' : ''}`} onClick={() => setMapMode('pins')}>{t('map.pins')}</button>
                 <button type="button" aria-pressed={mapMode === 'heat'} className={`ioc-btn ${mapMode === 'heat' ? 'ioc-btn-cyan' : ''}`} onClick={() => setMapMode('heat')}>{t('map.heat')}</button>
               </div>
-              {scoped ? <MapView key={`${scope}-${mapMode}`} reports={scoped} mode={mapMode} tone="ioc" className="h-[72dvh]" fitToReports showArterials /> : <div className="ioc-skeleton h-[72dvh]" />}
+              {scoped ? (
+                <CityIncidentMap
+                  key={`${scope}-${mapMode}`}
+                  embedded
+                  externalReports={scoped}
+                  defaultMode={mapMode}
+                  tone="ioc"
+                  fitPointsOnMount
+                  onSelectPoint={(r) => setSelectedId(r.id)}
+                  className="h-[72dvh]"
+                />
+              ) : (
+                <div className="ioc-skeleton h-[72dvh]" />
+              )}
+              <ReportDetail id={selectedId} onClose={() => setSelectedId(null)} variant="drawer" />
             </div>
           )}
           {view === 'audit' && <AuditView scope={scope} isCity={isCity} />}

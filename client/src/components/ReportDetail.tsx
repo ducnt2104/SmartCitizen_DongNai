@@ -36,7 +36,15 @@ function Stars({ value, onChange, readOnly = false, label }: { value: number; on
   );
 }
 
-export function ReportDetail({ id, onClose }: { id: string | null; onClose: () => void }) {
+export function ReportDetail({
+  id,
+  onClose,
+  variant = 'modal',
+}: {
+  id: string | null;
+  onClose: () => void;
+  variant?: 'modal' | 'drawer';
+}) {
   const { t, fmtDate } = useI18n();
   const toast = useToast();
   const { requireAuth } = useAuthGate();
@@ -51,7 +59,7 @@ export function ReportDetail({ id, onClose }: { id: string | null; onClose: () =
   if (!id) return null;
   if (!r) {
     return (
-      <Sheet open onClose={onClose} title={t('detail.title')}>
+      <Sheet open onClose={onClose} title={t('detail.title')} variant={variant}>
         <div className="flex justify-center py-10"><Spinner className="text-brand" /></div>
       </Sheet>
     );
@@ -99,7 +107,7 @@ export function ReportDetail({ id, onClose }: { id: string | null; onClose: () =
 
   const authScore = r.ai.authenticityScore;
   return (
-    <Sheet open onClose={onClose} title={t('detail.title')} wide>
+    <Sheet open onClose={onClose} title={t('detail.title')} wide variant={variant}>
       <div className="space-y-4">
         {photos.length > 0 && (
           <div>

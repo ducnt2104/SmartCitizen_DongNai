@@ -20,6 +20,7 @@ server/.env.*
 !server/.env.example
 
 # Local JSON persistence & runtime logs
+data/
 server/data/
 *.log
 npm-debug.log*

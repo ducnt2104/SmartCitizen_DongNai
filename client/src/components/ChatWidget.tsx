@@ -32,8 +32,12 @@ export function ChatWidget() {
   const ttsRef = useRef(tts);
   ttsRef.current = tts;
 
-  useEffect(() => setTts(settings.senior), [settings.senior]);
-  useEffect(() => endRef.current?.scrollIntoView({ block: 'end' }), [msgs, open]);
+  useEffect(() => {
+    setTts(settings.senior);
+  }, [settings.senior]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [msgs, open]);
 
   const stopAll = useCallback(() => {
     abortRef.current?.abort();

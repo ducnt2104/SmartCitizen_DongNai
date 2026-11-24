@@ -55,7 +55,9 @@ export function QueueView({ scope, isCity, online }: { scope: string; isCity: bo
 
   const selected = rows.find((r) => r.id === sel) ?? null;
   const canAct = online && !q.stale;
-  useEffect(() => setCursor((c) => Math.min(c, Math.max(0, rows.length - 1))), [rows.length]);
+  useEffect(() => {
+    setCursor((c) => Math.min(c, Math.max(0, rows.length - 1)));
+  }, [rows.length]);
 
   const quickRestore = useCallback(async (r: ClientReport) => {
     try {

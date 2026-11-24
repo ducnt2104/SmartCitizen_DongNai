@@ -10,9 +10,7 @@
 @import '@fontsource/jetbrains-mono/latin-600.css';
 @import '@fontsource/jetbrains-mono/vietnamese-400.css';
 @import '@fontsource/jetbrains-mono/vietnamese-600.css';
-@import 'leaflet/dist/leaflet.css';
-@import 'leaflet.markercluster/dist/MarkerCluster.css';
-@import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
+@import 'maplibre-gl/dist/maplibre-gl.css';
 
 @tailwind base;
 @tailwind components;
@@ -189,23 +187,107 @@ h1, h2, h3, h4 { line-height: 1.35; }
   }
 }
 
-/* Leaflet: pin tùy biến & cụm ưu tiên (CartoDB Dark Matter thật, không dùng filter invert) */
-.sc-pin { background: transparent; border: 0; }
+/* Google Maps & MapLibre Unified GIS Markers & Clusters (GPU transform/opacity only) */
+@keyframes scPulseRing {
+  0% { transform: scale(0.85); opacity: 0.85; }
+  70% { transform: scale(1.55); opacity: 0; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+.sc-map-pin {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transform-origin: 50% 95%;
+  transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.sc-map-pin:hover,
+.sc-map-pin:focus-visible {
+  transform: scale(1.1);
+  z-index: 40;
+}
+.sc-map-pin:active {
+  transform: scale(0.96);
+}
+.sc-map-pin-svg {
+  filter: drop-shadow(0 3px 6px rgba(15, 23, 42, 0.36));
+}
+.sc-map-pin-pulse {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  border: 3px solid #e11d48;
+  pointer-events: none;
+  animation: scPulseRing 1.8s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+.sc-map-pin-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: #0f172a;
+  color: #ffffff;
+  border: 1.5px solid #ffffff;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  z-index: 2;
+}
 .sc-cluster {
   display: grid;
   place-items: center;
   border-radius: 9999px;
   color: #fff;
+  cursor: pointer;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 13px;
   font-weight: 700;
-  border: 3px solid rgba(255, 255, 255, 0.92);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+  border: 3px solid rgba(255, 255, 255, 0.94);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.38);
+  transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-.leaflet-container { font-family: inherit; background: rgb(var(--surface-2)); }
-.leaflet-popup-content-wrapper { border-radius: 14px; }
-.leaflet-container a.leaflet-popup-close-button { width: 32px; height: 32px; font-size: 22px; line-height: 32px; }
-.leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+.sc-cluster:hover,
+.sc-cluster:focus-visible {
+  transform: scale(1.08);
+}
+.sc-user-dot {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #0b57d0;
+  border: 3px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(11, 87, 208, 0.55);
+}
+.sc-user-dot::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 9999px;
+  border: 2px solid rgba(59, 130, 246, 0.55);
+  animation: scPulseRing 2.2s ease-out infinite;
+}
+.maplibregl-map {
+  font-family: inherit;
+  background: rgb(var(--surface-2));
+}
+.maplibregl-ctrl-attrib {
+  font-size: 10px !important;
+  opacity: 0.78;
+}
 
 /* Before/After slider */
 .ba-slider { touch-action: pan-y; user-select: none; }

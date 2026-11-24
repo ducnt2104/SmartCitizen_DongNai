@@ -53,5 +53,8 @@ services:
         value: "3"
       - key: AI_VISION_PER_HOUR
         value: "10"
+      # Google Maps Platform cho Frontend (bật Maps JavaScript API, Places API, Geocoding API; có MapLibre fallback)
+      - key: VITE_GOOGLE_MAPS_API_KEY
+        sync: false
       - key: DATA_DIR
         value: ./data

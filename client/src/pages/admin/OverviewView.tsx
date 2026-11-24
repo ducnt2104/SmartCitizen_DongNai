@@ -1,9 +1,8 @@
 import { Activity, AlertOctagon, CheckCircle2, Timer } from 'lucide-react';
 import { useMemo } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import type { Category, ClientReport } from '@shared/types';
-import { MapView } from '../../components/MapView';
+import { CityIncidentMap } from '../../components/map';
 import { SkeletonBlock } from '../../components/ui';
 import { inScope } from '../../db/hooks';
 import { useI18n } from '../../i18n';
@@ -114,7 +113,19 @@ export function OverviewView({ scope, reports, isCity }: { scope: string; report
 
       <section className="ioc-panel p-3" aria-label={t('ioc.heatmap')}>
         <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.heatmap')}</h2>
-        {!rows ? <SkeletonBlock className="h-72" /> : <MapView key={scope} reports={rows} mode="heat" tone="ioc" className="h-[22rem]" center={isCity ? DONG_NAI_CITY_CENTER : undefined} zoom={isCity ? 9 : 14} fitToReports={isCity} showArterials />}
+        {!rows ? (
+          <SkeletonBlock className="h-72" />
+        ) : (
+          <CityIncidentMap
+            key={scope}
+            embedded
+            externalReports={rows}
+            defaultMode="heat"
+            tone="ioc"
+            fitPointsOnMount={isCity}
+            className="h-[22rem]"
+          />
+        )}
       </section>
 
       {isCity && ov.data.ranking.length > 0 && (

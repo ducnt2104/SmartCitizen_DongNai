@@ -1,8 +1,8 @@
-/* Service Worker: mở app tức thì khi ngoại tuyến (app shell + tài nguyên build + tile bản đồ đã xem).
- * Dữ liệu nghiệp vụ nằm ở IndexedDB (Dexie) nên SW KHÔNG cache /api. */
-const SHELL = 'sc-shell-v1';
-const TILES = 'sc-tiles-v1';
-const ASSETS = 'sc-assets-v1';
+/* Service Worker v2: mở app tức thì khi ngoại tuyến (app shell + tài nguyên build + tile bản đồ đã xem).
+ * Dữ liệu nghiệp vụ nằm ở IndexedDB (Dexie) nên SW KHÔNG cache /api và KHÔNG cache nhầm HTML cho chunk .js/.css. */
+const SHELL = 'sc-shell-v2';
+const TILES = 'sc-tiles-v2';
+const ASSETS = 'sc-assets-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -18,12 +18,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-async function staleWhileRevalidate(cacheName, request) {
+function isCacheableAssetResponse(pathname, res) {
+  if (!res || !res.ok) return false;
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if ((pathname.endsWith('.js') || pathname.endsWith('.mjs')) && ct.includes('text/html')) return false;
+  if (pathname.endsWith('.css') && ct.includes('text/html')) return false;
+  return true;
+}
+
+async function staleWhileRevalidate(cacheName, request, checkMime = false) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
+  const url = new URL(request.url);
   const network = fetch(request)
     .then((res) => {
-      if (res && (res.ok || res.type === 'opaque')) cache.put(request, res.clone());
+      const valid = checkMime
+        ? isCacheableAssetResponse(url.pathname, res)
+        : Boolean(res && (res.ok || res.type === 'opaque'));
+      if (valid) cache.put(request, res.clone());
       return res;
     })
     .catch(() => cached);
@@ -35,25 +47,32 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  if (url.pathname.startsWith('/api') || url.pathname === '/healthz') return; // luôn đi mạng
+  if (url.pathname.startsWith('/api') || url.pathname === '/healthz' || url.pathname === '/sw.js') return;
 
-  if (url.hostname.endsWith('tile.openstreetmap.org')) {
-    event.respondWith(staleWhileRevalidate(TILES, req));
+  if (
+    url.hostname.endsWith('tile.openstreetmap.org') ||
+    url.hostname.endsWith('basemaps.cartocdn.com') ||
+    url.hostname === 'server.arcgisonline.com'
+  ) {
+    event.respondWith(staleWhileRevalidate(TILES, req, false));
     return;
   }
   if (url.origin !== self.location.origin) return;
 
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-store' })
         .then((res) => {
-          const copy = res.clone();
-          caches.open(SHELL).then((c) => c.put('/', copy));
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(SHELL).then((c) => c.put('/', copy));
+          }
           return res;
         })
         .catch(() => caches.match('/').then((r) => r || new Response('Offline', { status: 503 }))),
     );
     return;
   }
-  event.respondWith(staleWhileRevalidate(ASSETS, req));
+
+  event.respondWith(staleWhileRevalidate(ASSETS, req, true));
 });

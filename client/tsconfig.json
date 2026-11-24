@@ -13,7 +13,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false,
-    "types": ["vite/client"],
+    "types": ["vite/client", "google.maps"],
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["../shared/*"],

@@ -55,12 +55,13 @@ export default function MinePage() {
     }
   };
 
-  const unread = session?.user.notifications.filter((n) => !n.read) ?? [];
+  const notifications = session?.user?.notifications ?? [];
+  const unread = notifications.filter((n) => !n.read);
   const markRead = async (): Promise<void> => {
     try {
       await api('/api/me/notifications/read', { method: 'POST', body: {} });
       const s = authStore.get();
-      if (s) authStore.updateUser({ ...s.user, notifications: s.user.notifications.map((n) => ({ ...n, read: true })) });
+      if (s) authStore.updateUser({ ...s.user, notifications: (s.user.notifications ?? []).map((n) => ({ ...n, read: true })) });
     } catch (e) {
       toast('error', t('state.genericError'), e instanceof Error ? e.message : undefined);
     }
@@ -84,14 +85,14 @@ export default function MinePage() {
         {results && results.length > 0 && <div className="space-y-3">{results.map((r) => <ReportCard key={r.id} r={r} onOpen={(x) => setOpenId(x.id)} />)}</div>}
       </section>
 
-      {session && session.user.notifications.length > 0 && (
+      {session && notifications.length > 0 && (
         <section className="card p-3" aria-label={t('mine.notifications')}>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="flex items-center gap-2 font-bold"><Bell className="h-4 w-4 text-brand" aria-hidden />{t('mine.notifications')}{unread.length > 0 && <span className="rounded-full bg-danger px-2 text-xs font-bold text-white">{unread.length}</span>}</h2>
             {unread.length > 0 && <button type="button" className="text-sm font-semibold text-brand underline" onClick={() => void markRead()}>{t('mine.markRead')}</button>}
           </div>
           <ul className="space-y-2">
-            {session.user.notifications.slice(0, 5).map((n) => (
+            {notifications.slice(0, 5).map((n) => (
               <li key={n.id} className={`rounded-xl p-2 text-sm ${n.read ? 'bg-surface-2' : 'bg-brand-soft'}`}>
                 <p className="break-words">{n.text}</p>
                 <p className="mono text-[11px] text-muted">{fmtDate(n.at)}</p>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useI18n, type I18nKey } from '../i18n';
 import { useSettings } from '../state/settings';
 
@@ -30,18 +31,26 @@ function findTarget(name: string): HTMLElement | null {
 /** Spotlight Tour 4 bước: làm tối nền, khoét lỗ sáng quanh nút quan trọng. Tự bật 1 lần cho người mới. */
 export function SpotlightTour() {
   const { t } = useI18n();
+  const { pathname } = useLocation();
   const { settings, set, tourOpen, setTourOpen } = useSettings();
   const [i, setI] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
 
-  // Tự động bật 1 lần cho người mới
+  // Tự động bật 1 lần cho người mới khi đang đứng ở Trang chủ
   useEffect(() => {
-    if (settings.tourSeen) return;
+    if (settings.tourSeen || pathname !== '/') return;
     const id = window.setTimeout(() => {
-      if (location.pathname === '/') setTourOpen(true);
+      if (window.location.pathname === '/') setTourOpen(true);
     }, 1200);
     return () => window.clearTimeout(id);
-  }, [settings.tourSeen, setTourOpen]);
+  }, [settings.tourSeen, pathname, setTourOpen]);
+
+  // Tự động đóng lớp phủ hướng dẫn nếu người dùng bấm chuyển sang route khác (/report, /map...)
+  useEffect(() => {
+    if (tourOpen && pathname !== '/') {
+      setTourOpen(false);
+    }
+  }, [tourOpen, pathname, setTourOpen]);
 
   const finish = useCallback(() => {
     setTourOpen(false);

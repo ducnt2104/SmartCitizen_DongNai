@@ -100,7 +100,7 @@ export default function ProfilePage() {
     <div className="mx-auto max-w-2xl space-y-4">
       <div className="card flex flex-wrap items-center gap-4 p-5">
         <div className="grid h-14 w-14 place-items-center rounded-2xl bg-brand text-xl font-extrabold text-brand-ink">
-          {u.name.slice(0, 1).toUpperCase()}
+          {(u.name || '?').slice(0, 1).toUpperCase()}
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-extrabold">{u.name}</h1>
@@ -118,7 +118,7 @@ export default function ProfilePage() {
                 <MapPin className="h-3.5 w-3.5" aria-hidden /> {defaultWardName}
               </span>
             )}
-            {u.badges.map((b) => (
+            {(u.badges ?? []).map((b) => (
               <span key={b} className="pill bg-ok-soft font-semibold text-ok">{b}</span>
             ))}
           </div>

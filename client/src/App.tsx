@@ -1,28 +1,25 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { UserProfile } from '@shared/types';
 import { CommunityLayout } from './components/CommunityLayout';
+import { RouteErrorBoundary, RouteLoadingSkeleton } from './components/RouteErrorBoundary';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { SpotlightTour } from './components/SpotlightTour';
-import { Spinner } from './components/ui';
 import { syncBus, type SyncEventDetail } from './db/sync';
 import { useI18n, type I18nKey } from './i18n';
 import { api } from './lib/api';
 import { authStore } from './lib/authStore';
-import { useToast } from './state/toast';
 import HomePage from './pages/Home';
+import { useToast } from './state/toast';
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
-const ReportPage = lazy(() => import('./pages/Report'));
-const MapPage = lazy(() => import('./pages/MapPage'));
-const MinePage = lazy(() => import('./pages/MinePage'));
-const ProfilePage = lazy(() => import('./pages/ProfilePage'));
-const VolunteerPage = lazy(() => import('./pages/VolunteerPage'));
-const AuthPage = lazy(() => import('./pages/AuthPage'));
-const AdminPage = lazy(() => import('./pages/admin/AdminPage'));
-
-function Fallback() {
-  return <div className="grid min-h-[40dvh] place-items-center"><Spinner className="h-8 w-8 text-brand" /></div>;
-}
+const ReportPage = lazyWithRetry(() => import('./pages/Report'), 'ReportPage');
+const MapPage = lazyWithRetry(() => import('./pages/MapPage'), 'MapPage');
+const MinePage = lazyWithRetry(() => import('./pages/MinePage'), 'MinePage');
+const ProfilePage = lazyWithRetry(() => import('./pages/ProfilePage'), 'ProfilePage');
+const VolunteerPage = lazyWithRetry(() => import('./pages/VolunteerPage'), 'VolunteerPage');
+const AuthPage = lazyWithRetry(() => import('./pages/AuthPage'), 'AuthPage');
+const AdminPage = lazyWithRetry(() => import('./pages/admin/AdminPage'), 'AdminPage');
 
 /** Đồng bộ hồ sơ & xoay vòng cookie phiên khi khởi động nếu trình duyệt đang lưu phiên. */
 function SessionSync() {
@@ -30,7 +27,9 @@ function SessionSync() {
     if (!authStore.get()) return;
     void api<{ user: UserProfile }>('/api/me')
       .then((res) => authStore.updateUser(res.user))
-      .catch(() => { /* api.ts tự thử refresh hoặc xóa phiên nếu hết hạn */ });
+      .catch((err) => {
+        console.warn('[SessionSync] Không thể làm mới hồ sơ phiên khởi động:', err);
+      });
   }, []);
   return null;
 }
@@ -44,7 +43,11 @@ function SyncToasts() {
       const d = (e as CustomEvent<SyncEventDetail>).detail;
       if (d.type === 'report_result') {
         const bad = d.messageCode.startsWith('quarantine');
-        toast(bad ? 'info' : d.messageCode === 'emergency' ? 'error' : 'success', t(`result.${d.messageCode}` as I18nKey), d.report.code);
+        toast(
+          bad ? 'info' : d.messageCode === 'emergency' ? 'error' : 'success',
+          t(`result.${d.messageCode}` as I18nKey),
+          d.report.code,
+        );
       } else if (d.type === 'item_failed') {
         toast('error', t('outbox.failedToast'), d.message);
       }
@@ -57,31 +60,38 @@ function SyncToasts() {
 
 function ScrollTop() {
   const { pathname } = useLocation();
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  useEffect(() => {
+    // Bắt buộc bọc ngoặc nhọn {}: trên Chromium mới, window.scrollTo() trả về Promise thay vì undefined;
+    // nếu trả về ngầm Promise từ useEffect, React sẽ gọi Promise như hàm cleanup khi đổi route và gây crash trắng trang!
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
+  }, [pathname]);
   return null;
 }
 
 export default function App() {
   return (
     <BrowserRouter>
-      <ScrollTop />
       <SessionSync />
       <SyncToasts />
-      <Suspense fallback={<Fallback />}>
-        <Routes>
-          <Route element={<CommunityLayout />}>
-            <Route index element={<HomePage />} />
-            <Route path="report" element={<ReportPage />} />
-            <Route path="map" element={<MapPage />} />
-            <Route path="mine" element={<MinePage />} />
-            <Route path="profile" element={<ProfilePage />} />
-            <Route path="volunteer" element={<VolunteerPage />} />
-            <Route path="*" element={<HomePage />} />
-          </Route>
-          <Route path="auth" element={<AuthPage />} />
-          <Route path="admin" element={<AdminPage />} />
-        </Routes>
-      </Suspense>
+      <RouteErrorBoundary>
+        <ScrollTop />
+        <Suspense fallback={<RouteLoadingSkeleton fullScreen />}>
+          <Routes>
+            <Route element={<CommunityLayout />}>
+              <Route index element={<HomePage />} />
+              <Route path="report" element={<ReportPage />} />
+              <Route path="map" element={<MapPage />} />
+              <Route path="mine" element={<MinePage />} />
+              <Route path="profile" element={<ProfilePage />} />
+              <Route path="volunteer" element={<VolunteerPage />} />
+              <Route path="*" element={<HomePage />} />
+            </Route>
+            <Route path="auth" element={<AuthPage />} />
+            <Route path="admin" element={<AdminPage />} />
+            <Route path="dashboard" element={<AdminPage />} />
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
       <SettingsDrawer />
       <SpotlightTour />
     </BrowserRouter>

@@ -14,16 +14,16 @@ export interface PreciseLocationState {
   stop: () => void;
 }
 
-const TARGET_ACCURACY_M = 20;
+const TARGET_ACCURACY_M = 18;
 const LOW_ACCURACY_THRESHOLD_M = 50;
-const SAMPLE_WINDOW_MS = 4500;
+const SAMPLE_WINDOW_MS = 4000;
 const HARD_TIMEOUT_MS = 12000;
 
 /**
- * Định vị GPS độ chính xác cao (`watchPosition`):
- * - Thu mẫu liên tục tối đa 4.5 giây, dừng ngay lập tức khi đạt `accuracy <= 20m`.
- * - Luôn chọn tọa độ có sai số (`accuracy`) nhỏ nhất thay vì lấy mẫu đầu tiên bị lệch cell-tower.
- * - Giải phóng watcher khi hoàn tất hoặc component unmount.
+ * Định vị GPS độ chính xác cao (`watchPosition` với `enableHighAccuracy: true`):
+ * - Thu mẫu liên tục trong cửa sổ 4 giây, dừng ngay khi đạt `accuracy <= 18m`.
+ * - Luôn giữ mẫu có sai số (`accuracy`) tốt nhất thay vì lấy mẫu đầu tiên bị lệch trạm phát sóng.
+ * - Giải phóng triệt để `clearWatch` và mọi timer khi hoàn tất hoặc khi component unmount.
  */
 export function usePreciseLocation(): PreciseLocationState {
   const [fix, setFix] = useState<GpsFix | null>(null);
@@ -32,32 +32,48 @@ export function usePreciseLocation(): PreciseLocationState {
   const [samples, setSamples] = useState(0);
 
   const watchIdRef = useRef<number | null>(null);
-  const timerRef = useRef<number | null>(null);
+  const sampleTimerRef = useRef<number | null>(null);
+  const hardTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
 
   const stop = useCallback(() => {
-    if (watchIdRef.current !== null && 'geolocation' in navigator) {
+    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
+    if (sampleTimerRef.current !== null) {
+      window.clearTimeout(sampleTimerRef.current);
+      sampleTimerRef.current = null;
+    }
+    if (hardTimerRef.current !== null) {
+      window.clearTimeout(hardTimerRef.current);
+      hardTimerRef.current = null;
     }
   }, []);
 
-  useEffect(() => () => stop(), [stop]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stop();
+    };
+  }, [stop]);
 
   const locate = useCallback((): Promise<GpsFix | null> => {
     stop();
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      setStatus('error');
-      setErrorKind('unsupported');
+      if (mountedRef.current) {
+        setStatus('error');
+        setErrorKind('unsupported');
+      }
       return Promise.resolve(null);
     }
 
-    setStatus('locating');
-    setErrorKind(null);
-    setSamples(0);
+    if (mountedRef.current) {
+      setStatus('locating');
+      setErrorKind(null);
+      setSamples(0);
+    }
 
     return new Promise((resolve) => {
       let best: GpsFix | null = null;
@@ -68,38 +84,48 @@ export function usePreciseLocation(): PreciseLocationState {
         if (settled) return;
         settled = true;
         stop();
-        if (result) {
-          setFix(result);
-          setStatus('ok');
-          setErrorKind(null);
-        } else {
-          setStatus(err === 'denied' ? 'denied' : 'error');
-          setErrorKind(err ?? 'unavailable');
+        if (mountedRef.current) {
+          if (result) {
+            setFix(result);
+            setStatus('ok');
+            setErrorKind(null);
+          } else {
+            setStatus(err === 'denied' ? 'denied' : 'error');
+            setErrorKind(err ?? 'unavailable');
+          }
         }
         resolve(result);
       };
 
       const startSampleWindow = (): void => {
-        if (timerRef.current !== null) return;
-        timerRef.current = window.setTimeout(() => finish(best, best ? null : 'timeout'), SAMPLE_WINDOW_MS);
+        if (sampleTimerRef.current !== null) return;
+        sampleTimerRef.current = window.setTimeout(
+          () => finish(best, best ? null : 'timeout'),
+          SAMPLE_WINDOW_MS,
+        );
       };
 
-      // Hard timeout nếu thiết bị không trả về bất kỳ mẫu nào trong 12 giây
-      const hardTimer = window.setTimeout(() => finish(best, best ? null : 'timeout'), HARD_TIMEOUT_MS);
+      hardTimerRef.current = window.setTimeout(
+        () => finish(best, best ? null : 'timeout'),
+        HARD_TIMEOUT_MS,
+      );
 
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
-          window.clearTimeout(hardTimer);
+          if (hardTimerRef.current !== null) {
+            window.clearTimeout(hardTimerRef.current);
+            hardTimerRef.current = null;
+          }
           const candidate: GpsFix = {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
-            accuracy: Math.round(pos.coords.accuracy),
+            accuracy: Math.max(1, Math.round(pos.coords.accuracy)),
           };
           count += 1;
-          setSamples(count);
+          if (mountedRef.current) setSamples(count);
           if (!best || candidate.accuracy < best.accuracy) {
             best = candidate;
-            setFix(candidate);
+            if (mountedRef.current) setFix(candidate);
           }
           if (candidate.accuracy <= TARGET_ACCURACY_M) {
             finish(best, null);
@@ -108,7 +134,6 @@ export function usePreciseLocation(): PreciseLocationState {
           }
         },
         (err) => {
-          window.clearTimeout(hardTimer);
           const kind: GpsErrorKind =
             err.code === err.PERMISSION_DENIED ? 'denied' : err.code === err.TIMEOUT ? 'timeout' : 'unavailable';
           finish(best, kind);

@@ -402,4 +402,15 @@ describe('Chatbot SSE', () => {
     expect(inj).toContain('không thể');
     expect(inj.toLowerCase()).not.toContain('api key:');
   });
+
+  it('CSP cho phép Google Maps + MapLibre và không trả nhầm text/html cho asset .js bị thiếu', async () => {
+    const health = await fetch(`${base}/healthz`);
+    const csp = health.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('https://maps.googleapis.com');
+    expect(csp).toContain('https://*.basemaps.cartocdn.com');
+
+    const missingChunk = await fetch(`${base}/assets/Report-nonexistent-chunk.js`);
+    expect(missingChunk.status).toBe(404);
+    expect(missingChunk.headers.get('content-type') ?? '').not.toContain('text/html');
+  });
 });

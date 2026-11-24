@@ -8,6 +8,16 @@ import { en } from '../i18n/en';
 import { vi } from '../i18n/vi';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard, resolveAdminUnit } from '../lib/dongNaiGeo';
 import { localVision } from '../lib/localVision';
+import { isChunkLoadError } from '../utils/lazyWithRetry';
+import {
+  buildMapLibreStyle,
+  createGeoJsonCircle,
+  DONG_NAI_GOOGLE_BOUNDS,
+  getPinState,
+  isGoogleMapsHealthy,
+  markGoogleMapsFailed,
+} from '../lib/mapConfig';
+import { searchPlacesDongNai } from '../lib/geoClient';
 
 const extractPlaceholders = (s: string): string[] =>
   [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -87,5 +97,45 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     expect(a1).toBeGreaterThanOrEqual(4000);
     expect(a5).toBeGreaterThan(a1);
     expect(a20).toBeLessThanOrEqual(300_800);
+  });
+
+  it('cấu hình GIS Google Maps + MapLibre Fallback bao trọn 95 ĐVHC và phân loại ghim chính xác', async () => {
+    expect(DONG_NAI_GOOGLE_BOUNDS.south).toBeLessThanOrEqual(10.55);
+    expect(DONG_NAI_GOOGLE_BOUNDS.north).toBeGreaterThanOrEqual(12.25);
+
+    const roadmap = buildMapLibreStyle('roadmap');
+    const hybrid = buildMapLibreStyle('hybrid');
+    const dark = buildMapLibreStyle('dark');
+    expect(roadmap.layers.length).toBe(1);
+    expect(hybrid.layers.length).toBe(2); // Vệ tinh + Nhãn tên đường
+    expect(dark.layers.length).toBe(1);
+
+    const circle = createGeoJsonCircle(10.9465, 106.8243, 25, 32);
+    expect(circle.geometry.coordinates[0]).toHaveLength(33);
+
+    expect(
+      getPinState({
+        id: '1',
+        title: 'Khẩn cấp',
+        category: 'mat_duong',
+        severity: 5,
+        isEmergency: true,
+        emergencyLevel: 1,
+        priority: 'emergency',
+        status: 'received',
+        lat: 10.9465,
+        lng: 106.8243,
+        clusterCount: 1,
+      }),
+    ).toBe('emergency');
+
+    const localPlaces = await searchPlacesDongNai('ta lai');
+    expect(localPlaces.some((p) => p.wardCode === 'DN-TLA')).toBe(true);
+
+    markGoogleMapsFailed('unit_test_auth_failure');
+    expect(isGoogleMapsHealthy()).toBe(false);
+
+    expect(isChunkLoadError(new TypeError('Failed to fetch dynamically imported module: /assets/Report-abc.js'))).toBe(true);
+    expect(isChunkLoadError(new Error('Normal validation error'))).toBe(false);
   });
 });
