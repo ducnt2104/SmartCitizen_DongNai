@@ -469,3 +469,41 @@ h1, h2, h3, h4 { line-height: 1.35; }
 
 .safe-b { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
 .sr-only-focusable:not(:focus) { @apply sr-only; }
+
+/* Dynamic Animated Weather Background */
+@keyframes sc-wx-sun-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.42; }
+  50% { transform: scale(1.12); opacity: 0.62; }
+}
+@keyframes sc-wx-float {
+  0%, 100% { transform: translate3d(0, 0, 0); opacity: 0.25; }
+  50% { transform: translate3d(8px, -10px, 0); opacity: 0.65; }
+}
+@keyframes sc-wx-cloud-drift {
+  0% { transform: translate3d(-12%, 0, 0); }
+  50% { transform: translate3d(8%, 0, 0); }
+  100% { transform: translate3d(-12%, 0, 0); }
+}
+@keyframes sc-wx-rain-fall {
+  0% { transform: translate3d(6px, -24px, 0) rotate(14deg); opacity: 0; }
+  20% { opacity: 0.55; }
+  85% { opacity: 0.5; }
+  100% { transform: translate3d(-26px, 240px, 0) rotate(14deg); opacity: 0; }
+}
+@keyframes sc-wx-lightning {
+  0%, 86%, 91%, 95%, 100% { opacity: 0; }
+  88% { opacity: 0.14; }
+  92% { opacity: 0.08; }
+}
+@keyframes sc-wx-twinkle {
+  0%, 100% { opacity: 0.25; transform: scale(0.9); }
+  50% { opacity: 0.9; transform: scale(1.15); }
+}
+
+.wx-sun-glow { animation: sc-wx-sun-pulse 6s ease-in-out infinite; }
+.wx-float-dot { animation: sc-wx-float 7s ease-in-out infinite; }
+.wx-cloud-slow { animation: sc-wx-cloud-drift 26s ease-in-out infinite; }
+.wx-cloud-med { animation: sc-wx-cloud-drift 19s ease-in-out infinite reverse; }
+.wx-rain-drop { animation: sc-wx-rain-fall 1.15s linear infinite; will-change: transform, opacity; }
+.wx-lightning { animation: sc-wx-lightning 7s ease-in-out infinite; }
+.wx-star { animation: sc-wx-twinkle 4.5s ease-in-out infinite; }

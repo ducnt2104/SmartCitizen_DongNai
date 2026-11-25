@@ -34,7 +34,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeRole } from '@shared/constants';
 import { inDongNaiBBox } from '@shared/geo';
-import heroPhoto from '../assets/dongnai-hero.jpg';
+import { DynamicWeatherBackdrop, getWeatherCardGradient } from '../components/DynamicWeatherBackdrop';
 import type {
   AlertCategory,
   AlertSeverity,
@@ -110,14 +110,8 @@ function WeatherGlyphInk({ kind, isDay = true, className = 'h-5 w-5' }: { kind: 
   }
 }
 
-function heroOverlayStyle(w: DongNaiWeather): string {
-  if (!w.isDay) {
-    return 'linear-gradient(180deg, rgba(2, 6, 23, 0.82) 0%, rgba(15, 23, 42, 0.94) 100%)';
-  }
-  if (w.kind === 'storm' || w.kind === 'heavyRain' || w.kind === 'rain' || w.kind === 'cloud') {
-    return 'linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.92) 100%)';
-  }
-  return 'linear-gradient(180deg, rgba(15, 23, 42, 0.72) 0%, rgba(15, 23, 42, 0.88) 100%)';
+function weatherKindFallbackGradient(): string {
+  return 'linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%)';
 }
 
 const WardInspectorDrawer = lazy(() =>
@@ -876,19 +870,10 @@ export default function AlertsPage() {
             {!forecast ? (
               <section
                 aria-label="Đang tải dự báo thời tiết"
-                className="hero-photo-card relative overflow-hidden rounded-[1.75rem] bg-slate-900 p-6 text-white"
+                className="relative overflow-hidden rounded-[1.75rem] p-6 text-white shadow-lift"
+                style={{ background: weatherKindFallbackGradient() }}
               >
-                <img
-                  src={heroPhoto}
-                  alt=""
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
-                />
-                <div
-                  className="pointer-events-none absolute inset-0 backdrop-blur-[4px]"
-                  style={{ background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.90) 100%)' }}
-                  aria-hidden
-                />
+                <DynamicWeatherBackdrop kind="partlyCloudy" isDay={true} />
                 <div className="relative z-10">
                   {forecastError ? (
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -918,19 +903,10 @@ export default function AlertsPage() {
               <>
                 <section
                   aria-label="Dự báo thời tiết hiện tại theo vị trí"
-                  className="hero-photo-card relative overflow-hidden rounded-[1.75rem] bg-slate-900 p-5 text-white sm:p-6"
+                  className="relative overflow-hidden rounded-[1.75rem] p-5 text-white shadow-lift transition-colors duration-700 sm:p-6"
+                  style={{ background: getWeatherCardGradient(forecast.kind, forecast.isDay) }}
                 >
-                  <img
-                    src={heroPhoto}
-                    alt=""
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
-                  />
-                  <div
-                    className="pointer-events-none absolute inset-0 backdrop-blur-[4px]"
-                    style={{ background: heroOverlayStyle(forecast) }}
-                    aria-hidden
-                  />
+                  <DynamicWeatherBackdrop kind={forecast.kind} isDay={forecast.isDay} />
                   <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
