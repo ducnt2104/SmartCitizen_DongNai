@@ -178,7 +178,7 @@ export function aiController(s: Services) {
       res.json(briefing);
     },
 
-    /** SSE Streaming trực tiếp qua Google Gemini API (gemini-2.5-flash) kèm ngữ cảnh thời gian thực. */
+    /** SSE Streaming trực tiếp qua Google Gemini API (gemini-3.8-flash + auto-fallback 404) kèm ngữ cảnh thời gian thực. */
     chat: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.chat>;
       const last = b.messages[b.messages.length - 1];

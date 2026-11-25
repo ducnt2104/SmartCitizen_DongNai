@@ -304,6 +304,37 @@ export function saveStoredGeminiApiKey(rawKey: string): void {
   }
 }
 
+let cachedClientGeminiModel = 'gemini-3.8-flash';
+
+async function discoverLatestFlashModelClient(apiKey: string, signal: AbortSignal): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+      { signal },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+    };
+    const candidates = (data.models ?? [])
+      .filter((m) => {
+        const name = (m.name ?? '').toLowerCase();
+        const methods = m.supportedGenerationMethods ?? [];
+        return (
+          name.includes('flash') &&
+          !/embedding|tts|image|audio|lite-preview/i.test(name) &&
+          (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
+        );
+      })
+      .map((m) => (m.name ?? '').replace(/^models\//, ''))
+      .filter(Boolean)
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    return candidates[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function streamDirectGeminiClient(
   apiKey: string,
   body: { messages: Array<{ role: 'user' | 'model'; text: string }>; wardCode?: string; locale: 'vi' | 'en' },
@@ -315,24 +346,38 @@ async function streamDirectGeminiClient(
     `Trả lời ngắn gọn, súc tích (khoảng 3-5 gạch đầu dòng rõ ý), dùng từ ngữ đời thường dễ hiểu, không viết quá dài dòng. ` +
     `Khu vực đang chọn: ${body.wardCode ?? 'Toàn TP. Đồng Nai'}. Số khẩn cấp Đồng Nai: Công an 113, Cứu hỏa 114, Cấp cứu 115.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: sysText }] },
-      contents: body.messages.slice(-20).map((m) => ({
-        role: m.role === 'model' ? 'model' : 'user',
-        parts: [{ text: m.text }],
-      })),
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 800,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    }),
-    signal,
-  });
+  const callModel = (modelId: string) => {
+    const isV3OrNewer = /^gemini-(?:3|4)(?:\.|-|$)/i.test(modelId);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: sysText }] },
+        contents: body.messages.slice(-20).map((m) => ({
+          role: m.role === 'model' ? 'model' : 'user',
+          parts: [{ text: m.text }],
+        })),
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 800,
+          thinkingConfig: isV3OrNewer ? { thinkingLevel: 'low' } : { thinkingBudget: 0 },
+        },
+      }),
+      signal,
+    });
+  };
+
+  let modelId = cachedClientGeminiModel;
+  let res = await callModel(modelId);
+  if (res.status === 404) {
+    const discovered = await discoverLatestFlashModelClient(apiKey, signal);
+    if (discovered && discovered !== modelId) {
+      modelId = discovered;
+      cachedClientGeminiModel = discovered;
+      res = await callModel(modelId);
+    }
+  }
 
   if (!res.ok || !res.body) {
     const raw = await res.text().catch(() => '');

@@ -1933,7 +1933,7 @@ export class GeminiService {
   }
 
   /**
-   * Trò chuyện AI tự do qua Google Gemini API (gemini-2.5-flash) với SSE streaming thật.
+   * Trò chuyện AI tự do qua Google Gemini API (gemini-3.8-flash + tự động dò model Flash mới nhất khi 404) với SSE streaming thật.
    * Tuyệt đối KHÔNG rơi về câu trả lời mẫu/phường xã giả lập khi thiếu API key hoặc lỗi mạng.
    */
   async *streamRealGeminiChat(input: {
@@ -1975,26 +1975,75 @@ export class GeminiService {
       parts: [{ text: sanitizeUserText(m.text, 2000) }],
     }));
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15_000);
-    timer.unref?.();
+    const buildGenerationConfig = (modelId: string) => {
+      const isV3OrNewer = /^gemini-(?:3|4)(?:\.|-|$)/i.test(modelId);
+      return {
+        temperature: 0.7,
+        maxOutputTokens: 800,
+        thinkingConfig: isV3OrNewer ? { thinkingLevel: 'low' } : { thinkingBudget: 0 },
+      };
+    };
 
-    try {
-      const upstream = await fetch(url, {
+    const callStreamEndpoint = (modelId: string, signal: AbortSignal) => {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+      return fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: fullSystem }] },
           contents,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 800,
-            thinkingConfig: { thinkingBudget: 0 },
-          },
+          generationConfig: buildGenerationConfig(modelId),
         }),
-        signal: ctrl.signal,
+        signal,
       });
+    };
+
+    const discoverFlashModel = async (signal: AbortSignal): Promise<string | null> => {
+      try {
+        const listRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+          { signal },
+        );
+        if (!listRes.ok) return null;
+        const data = (await listRes.json()) as {
+          models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+        };
+        const candidates = (data.models ?? [])
+          .filter((m) => {
+            const name = (m.name ?? '').toLowerCase();
+            const methods = m.supportedGenerationMethods ?? [];
+            return (
+              name.includes('flash') &&
+              !/embedding|tts|image|audio|lite-preview/i.test(name) &&
+              (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
+            );
+          })
+          .map((m) => (m.name ?? '').replace(/^models\//, ''))
+          .filter(Boolean)
+          .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+        return candidates[0] ?? null;
+      } catch {
+        return null;
+      }
+    };
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    timer.unref?.();
+
+    try {
+      let modelId = cachedLiveGeminiModel ?? 'gemini-3.8-flash';
+      let upstream = await callStreamEndpoint(modelId, ctrl.signal);
+
+      if (upstream.status === 404) {
+        const discovered = await discoverFlashModel(ctrl.signal);
+        if (discovered && discovered !== modelId) {
+          console.warn(`[ai/chat] Model "${modelId}" trả 404, tự động chuyển sang "${discovered}"`);
+          modelId = discovered;
+          cachedLiveGeminiModel = discovered;
+          upstream = await callStreamEndpoint(modelId, ctrl.signal);
+        }
+      }
 
       if (!upstream.ok || !upstream.body) {
         const errBody = await upstream.text().catch(() => '');
