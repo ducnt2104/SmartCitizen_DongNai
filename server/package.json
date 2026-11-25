@@ -1,0 +1,12 @@
+{
+  "name": "smartcitizen-server-render-compat",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Compatibility shim for Render services still configured with --prefix server -> forwards to ../backend",
+  "main": "../backend/dist/index.js",
+  "scripts": {
+    "postinstall": "node ../scripts/render-compat.mjs install backend",
+    "build": "node ../scripts/render-compat.mjs build backend",
+    "start": "node ../scripts/render-compat.mjs start backend"
+  }
+}

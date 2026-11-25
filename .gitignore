@@ -37,6 +37,8 @@ build/
 **/build/
 out/
 coverage/
+server/package-lock.json
+client/package-lock.json
 
 # OS & Editor files
 .DS_Store
