@@ -732,7 +732,7 @@ export default function AlertsPage() {
                     </span>
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
                       <span className={`h-2 w-2 rounded-full ${forecast.source === 'live' ? 'bg-emerald-400' : 'bg-amber-300'}`} aria-hidden />
-                      <span>{forecast.source === 'live' ? 'Open-Meteo Trực tiếp' : 'Dữ liệu dự phòng'}</span>
+                      <span>{forecast.providerLabel}</span>
                     </span>
                     <button
                       type="button"
@@ -751,9 +751,11 @@ export default function AlertsPage() {
                     </div>
                     <div>
                       <div className="flex items-baseline gap-2.5">
-                        <span className="mono text-4xl font-extrabold tracking-tight sm:text-5xl">{forecast.temp}°C</span>
+                        <span className={`mono text-4xl font-extrabold tracking-tight sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
+                          {forecast.temp.toFixed(1)}°C
+                        </span>
                         <span className="text-sm font-semibold text-white/85">
-                          C: {forecast.tempHigh}° · T: {forecast.tempLow}°
+                          C: {forecast.tempHigh.toFixed(1)}° · T: {forecast.tempLow.toFixed(1)}°
                         </span>
                       </div>
                       <p className="mt-0.5 text-base font-bold text-white sm:text-lg">

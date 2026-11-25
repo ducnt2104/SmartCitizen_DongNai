@@ -24,6 +24,7 @@ export interface DailyPoint {
 
 export interface DongNaiWeather {
   source: 'live' | 'fallback';
+  providerLabel: string;
   fetchedAt: string;
   lat: number;
   lng: number;
@@ -118,6 +119,7 @@ export function buildFallbackWeather(lat: number, lng: number, lang: 'vi' | 'en'
   const isDay = baseHour >= 6 && baseHour < 18;
   return {
     source: 'fallback',
+    providerLabel: lang === 'vi' ? 'Dữ liệu dự phòng ngoại tuyến' : 'Offline fallback',
     fetchedAt: now.toISOString(),
     lat,
     lng,
@@ -170,20 +172,74 @@ interface OpenMeteoPayload {
   };
 }
 
+interface MetNoPayload {
+  properties?: {
+    timeseries?: Array<{
+      data?: {
+        instant?: {
+          details?: {
+            air_temperature?: number;
+            relative_humidity?: number;
+            wind_speed?: number;
+            cloud_area_fraction?: number;
+          };
+        };
+      };
+    }>;
+  };
+}
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+async function fetchMetNoCurrent(lat: number, lng: number, signal: AbortSignal): Promise<{
+  temp?: number;
+  humidity?: number;
+  windKmh?: number;
+  clouds?: number;
+} | null> {
+  try {
+    const res = await fetch(
+      `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}`,
+      { signal, cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as MetNoPayload;
+    const det = json.properties?.timeseries?.[0]?.data?.instant?.details;
+    if (!det || typeof det.air_temperature !== 'number') return null;
+    return {
+      temp: det.air_temperature,
+      humidity: det.relative_humidity,
+      windKmh: typeof det.wind_speed === 'number' ? det.wind_speed * 3.6 : undefined,
+      clouds: det.cloud_area_fraction,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDongNaiWeather(lat: number, lng: number, lang: 'vi' | 'en'): Promise<DongNaiWeather> {
   const url =
-    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
     '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,cloud_cover,wind_speed_10m' +
     '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,uv_index' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max' +
     '&timezone=Asia%2FHo_Chi_Minh&forecast_days=5';
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6500);
+  const timer = setTimeout(() => ctrl.abort(), 7000);
   try {
-    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as OpenMeteoPayload;
+    const [omResult, metResult] = await Promise.allSettled([
+      fetch(url, { signal: ctrl.signal, cache: 'no-store' }).then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as OpenMeteoPayload;
+      }),
+      fetchMetNoCurrent(lat, lng, ctrl.signal),
+    ]);
+
+    if (omResult.status !== 'fulfilled') throw new Error('Open-Meteo unavailable');
+    const data = omResult.value;
+    const met = metResult.status === 'fulfilled' ? metResult.value : null;
+
     const cur = data.current;
     const h = data.hourly;
     const d = data.daily;
@@ -199,9 +255,9 @@ export async function fetchDongNaiWeather(lat: number, lng: number, lang: 'vi' |
       return {
         timeIso: t,
         hourLabel: idx === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : formatHour(t),
-        temp: Math.round(h.temperature_2m?.[i] ?? cur.temperature_2m ?? 30),
+        temp: round1(h.temperature_2m?.[i] ?? cur.temperature_2m ?? 30),
         rainProb: Math.round(h.precipitation_probability?.[i] ?? 0),
-        rainMm: Number((h.precipitation?.[i] ?? 0).toFixed(1)),
+        rainMm: round1(h.precipitation?.[i] ?? 0),
         kind: mapped.kind,
       };
     });
@@ -211,10 +267,10 @@ export async function fetchDongNaiWeather(lat: number, lng: number, lang: 'vi' |
       return {
         dateIso,
         dayLabel: formatDay(dateIso, idx, lang),
-        tempMin: Math.round(d.temperature_2m_min?.[idx] ?? 24),
-        tempMax: Math.round(d.temperature_2m_max?.[idx] ?? 33),
+        tempMin: round1(d.temperature_2m_min?.[idx] ?? 24),
+        tempMax: round1(d.temperature_2m_max?.[idx] ?? 33),
         rainProbMax: Math.round(d.precipitation_probability_max?.[idx] ?? 0),
-        rainSum: Number((d.precipitation_sum?.[idx] ?? 0).toFixed(1)),
+        rainSum: round1(d.precipitation_sum?.[idx] ?? 0),
         uvMax: Math.round(d.uv_index_max?.[idx] ?? 7),
         kind: mapped.kind,
         summaryVi: mapped.vi,
@@ -225,18 +281,30 @@ export async function fetchDongNaiWeather(lat: number, lng: number, lang: 'vi' |
     const curMapped = mapWmoCode(cur.weather_code ?? 2);
     const uvNow = Math.round(h.uv_index?.[startIdx] ?? daily[0]?.uvMax ?? 5);
 
+    const omTemp = cur.temperature_2m ?? 30;
+    const blendedTemp = met?.temp !== undefined ? round1((omTemp + met.temp) / 2) : round1(omTemp);
+    const blendedHumidity =
+      met?.humidity !== undefined && cur.relative_humidity_2m !== undefined
+        ? Math.round((cur.relative_humidity_2m + met.humidity) / 2)
+        : Math.round(cur.relative_humidity_2m ?? 75);
+    const blendedWind =
+      met?.windKmh !== undefined && cur.wind_speed_10m !== undefined
+        ? Math.round((cur.wind_speed_10m + met.windKmh) / 2)
+        : Math.round(cur.wind_speed_10m ?? 10);
+
     return {
       source: 'live',
+      providerLabel: met?.temp !== undefined ? 'Open-Meteo · Yr.no (MET Norway)' : 'Open-Meteo Trực tiếp',
       fetchedAt: new Date().toISOString(),
       lat,
       lng,
-      temp: Math.round(cur.temperature_2m ?? 30),
-      feelsLike: Math.round(cur.apparent_temperature ?? cur.temperature_2m ?? 32),
-      humidity: Math.round(cur.relative_humidity_2m ?? 75),
-      windSpeed: Math.round(cur.wind_speed_10m ?? 10),
-      rainNow: Number((cur.precipitation ?? 0).toFixed(1)),
+      temp: blendedTemp,
+      feelsLike: round1(cur.apparent_temperature ?? blendedTemp),
+      humidity: blendedHumidity,
+      windSpeed: blendedWind,
+      rainNow: round1(cur.precipitation ?? 0),
       rainProbNow: hourly[0]?.rainProb ?? 0,
-      cloudCover: Math.round(cur.cloud_cover ?? 45),
+      cloudCover: Math.round(cur.cloud_cover ?? met?.clouds ?? 45),
       uvIndex: (cur.is_day ?? 1) ? uvNow : 0,
       isDay: Boolean(cur.is_day ?? 1),
       kind: curMapped.kind,
