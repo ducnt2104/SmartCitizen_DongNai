@@ -155,6 +155,44 @@ export function createApp(
     path.resolve(process.cwd(), 'frontend/dist'),
   ];
   const dist = candidates.find((p) => fs.existsSync(path.join(p, 'index.html')));
+
+  // Phục vụ nguyên bản file xác minh Google Search Console (/google:id.html) TRƯỚC express.static & SPA fallback
+  const verificationSearchDirs = [
+    ...(dist ? [dist] : []),
+    path.resolve(__dirname, '../../frontend/public'),
+    path.resolve(process.cwd(), '../frontend/public'),
+    path.resolve(process.cwd(), 'frontend/public'),
+  ];
+  app.get('/google:id.html', (req, res) => {
+    const rawId = typeof req.params.id === 'string' ? req.params.id : '';
+    if (!/^[a-z0-9_-]+$/i.test(rawId)) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(404).type('text/plain; charset=utf-8').send('Verification file not found');
+      return;
+    }
+
+    const candidateNames = Array.from(new Set([`google${rawId}.html`, `google${rawId.toLowerCase()}.html`]));
+    const foundPath = verificationSearchDirs
+      .flatMap((dir) => candidateNames.map((name) => path.join(dir, name)))
+      .find((candidatePath) => {
+        try {
+          return fs.statSync(candidatePath).isFile();
+        } catch {
+          return false;
+        }
+      });
+
+    if (!foundPath) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(404).type('text/plain; charset=utf-8').send('Verification file not found');
+      return;
+    }
+
+    const rawBytes = fs.readFileSync(foundPath);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.status(200).type('text/html; charset=utf-8').send(rawBytes);
+  });
+
   if (dist) {
     const assetsDir = path.join(dist, 'assets') + path.sep;
     const indexHtmlPath = path.join(dist, 'index.html');
@@ -178,8 +216,8 @@ export function createApp(
       }),
     );
 
-    // Tuyệt đối KHÔNG trả index.html cho request .js/.css/.svg/.json/.woff2 bị thiếu sau khi redeploy (tránh lỗi MIME type gây trắng trang)
-    app.get(/^(?!\/api|\/healthz|\/robots\.txt$|\/sitemap\.xml$).*/, (req, res) => {
+    // Tuyệt đối KHÔNG trả index.html cho request .js/.css/.svg/.json/.woff2 hoặc google*.html bị thiếu (tránh lỗi MIME/soft-404)
+    app.get(/^(?!\/api|\/healthz|\/robots\.txt$|\/sitemap\.xml$|\/google[a-z0-9_-]+\.html$).*/i, (req, res) => {
       if (req.path.startsWith('/assets/') || STATIC_ASSET_EXT_RE.test(req.path)) {
         res.setHeader('Cache-Control', 'no-store');
         res.status(404).type('text/plain').send('Asset not found');

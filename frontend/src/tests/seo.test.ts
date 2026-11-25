@@ -28,7 +28,7 @@ describe('Technical SEO route metadata', () => {
   });
 
   it('marks internal, auth, and private routes as noindex, nofollow', () => {
-    for (const p of ['/admin', '/ioc', '/dashboard', '/rescue', '/rescue/login', '/auth', '/profile', '/volunteer']) {
+    for (const p of ['/admin', '/ioc', '/officer', '/login', '/dashboard', '/rescue', '/rescue/login', '/auth', '/profile', '/volunteer']) {
       const seo = resolveRouteSeo(p, 'vi');
       expect(seo.robots).toBe('noindex, nofollow');
     }

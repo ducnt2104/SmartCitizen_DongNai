@@ -524,7 +524,7 @@ export default function RescuePortalPage() {
 
         {/* THẺ NHẬN ĐƠN NỔI (INCOMING MISSION POPUP / CARD — GRAB DRIVER STYLE) */}
         {!isOnline ? (
-          <div className="pointer-events-auto rounded-3xl border border-slate-800 bg-slate-900/98 p-4 shadow-2xl backdrop-blur-xl">
+          <div className="pointer-events-auto rounded-3xl border border-slate-800 bg-slate-900/95 p-4 shadow-2xl backdrop-blur-xl">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-extrabold text-white">Đội của bạn đang tạm nghỉ ca</p>
@@ -545,7 +545,7 @@ export default function RescuePortalPage() {
         ) : incomingMission && badgeMeta ? (
           <section
             aria-label="Đơn sự cố gần nhất đang chờ tiếp nhận"
-            className={`pointer-events-auto rounded-3xl border bg-slate-900/98 p-4 shadow-[0_16px_48px_rgba(0,0,0,0.65)] backdrop-blur-xl ${
+            className={`pointer-events-auto rounded-3xl border bg-slate-900/95 p-4 shadow-[0_16px_48px_rgba(0,0,0,0.65)] backdrop-blur-xl ${
               badgeMeta.isUrgent ? 'border-rose-500/70 ring-1 ring-rose-500/40' : 'border-slate-700/95'
             }`}
           >

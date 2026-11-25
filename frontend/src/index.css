@@ -207,7 +207,7 @@ h1, h2, h3, h4 { line-height: 1.35; }
   [data-mode='contrast'] .hero-scrim {
     background: rgb(2 6 23 / 0.84);
   }
-  .card { @apply rounded-[1.25rem] border border-line/85 bg-surface/92 shadow-card backdrop-blur-md; }
+  .card { @apply rounded-[1.25rem] border border-line/85 bg-surface/90 shadow-card backdrop-blur-md; }
   .field {
     @apply min-h-12 w-full rounded-xl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-muted/70 transition-colors focus:border-brand;
   }

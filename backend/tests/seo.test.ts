@@ -75,10 +75,58 @@ describe('SEO helpers (robots.txt, sitemap.xml, HTML injection)', () => {
     expect(withToken).toContain('<meta name="google-site-verification" content="token-&quot;abc&quot;&amp;123" />');
     expect(withToken).toContain('<link rel="canonical" href="https://custom.dongnai.gov.vn/map" />');
     expect(withToken).toContain('<meta property="og:url" content="https://custom.dongnai.gov.vn/map" />');
+    expect(withToken).toContain('<title>Bản Đồ Sự Cố Trực Tuyến 95 Phường/Xã — SmartCitizen Đồng Nai</title>');
+
+    const withFullMeta = injectHtmlSeo(baseHtml, {
+      siteUrl: 'https://smartcitizen-dongnai.onrender.com',
+      googleSiteVerification: '<meta name="google-site-verification" content="abcXYZ_123" />',
+    });
+    expect(withFullMeta).toContain('<meta name="google-site-verification" content="abcXYZ_123" />');
+
+    const notFoundHtml = injectHtmlSeo(baseHtml, {
+      siteUrl: 'https://smartcitizen-dongnai.onrender.com',
+      pathname: '/non-existent-xyz',
+      forceNoIndex: true,
+    });
+    expect(notFoundHtml).toContain('<meta name="robots" content="noindex, nofollow" />');
+    expect(notFoundHtml).not.toContain('rel="canonical"');
   });
 });
 
 describe('Express crawl & HTTP status hygiene', () => {
+  it('serves Google Search Console verification HTML verbatim before SPA fallback and never falls back to index.html', async () => {
+    const publicDir = path.resolve(__dirname, '../../frontend/public');
+    const files = fs.readdirSync(publicDir).filter((name) => /^google[a-z0-9_-]+\.html$/i.test(name));
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const fileName of files) {
+      const expected = fs.readFileSync(path.join(publicDir, fileName), 'utf8');
+      const distPath = path.resolve(__dirname, '../../frontend/dist', fileName);
+      if (fs.existsSync(path.resolve(__dirname, '../../frontend/dist/index.html'))) {
+        expect(fs.existsSync(distPath)).toBe(true);
+        expect(fs.readFileSync(distPath, 'utf8')).toBe(expected);
+      }
+
+      const res = await fetch(`${base}/${fileName}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toMatch(/^text\/html;\s*charset=utf-8$/i);
+      const body = await res.text();
+      expect(body).toBe(expected);
+      expect(body).toContain(`google-site-verification: ${fileName}`);
+      expect(body).not.toContain('<!doctype html>');
+    }
+
+    const badIdVerification = await fetch(`${base}/googlebad$id.html`);
+    expect(badIdVerification.status).toBe(404);
+    expect(badIdVerification.headers.get('content-type')).toMatch(/^text\/plain\b/i);
+    expect(await badIdVerification.text()).not.toContain('<!doctype html>');
+
+    const missingVerification = await fetch(`${base}/googlemissing00000000.html`);
+    expect(missingVerification.status).toBe(404);
+    expect(missingVerification.headers.get('content-type')).toMatch(/^text\/plain\b/i);
+    expect(await missingVerification.text()).not.toContain('<!doctype html>');
+  });
+
   it('serves /robots.txt as text/plain and /sitemap.xml as application/xml', async () => {
     const robots = await fetch(`${base}/robots.txt`);
     expect(robots.status).toBe(200);
@@ -127,15 +175,26 @@ describe('Express crawl & HTTP status hygiene', () => {
     const manifest = await fetch(`${base}/manifest.webmanifest`);
     expect(manifest.status).toBe(200);
 
+    const mapPage = await fetch(`${base}/map`);
+    expect(mapPage.status).toBe(200);
+    const mapHtml = await mapPage.text();
+    expect(mapHtml).toContain('<link rel="canonical" href="https://smartcitizen-dongnai.onrender.com/map" />');
+    expect(mapHtml).toContain('<title>Bản Đồ Sự Cố Trực Tuyến 95 Phường/Xã — SmartCitizen Đồng Nai</title>');
+
     const admin = await fetch(`${base}/admin`);
     expect(admin.status).toBe(200);
     expect(admin.headers.get('x-robots-tag')).toBe('noindex, nofollow');
     const adminHtml = await admin.text();
     expect(adminHtml).toContain('<meta name="robots" content="noindex, nofollow" />');
 
+    const officer = await fetch(`${base}/officer`);
+    expect(officer.status).toBe(404);
+    expect(officer.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+
     const missingPage = await fetch(`${base}/non-existent-xyz`);
     expect(missingPage.status).toBe(404);
     expect(missingPage.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+    expect(await missingPage.text()).not.toContain('rel="canonical"');
 
     const missingAsset = await fetch(`${base}/assets/non-existent-xyz.js`);
     expect(missingAsset.status).toBe(404);

@@ -98,5 +98,10 @@ services:
       # Google Maps Platform cho Frontend (bật Maps JavaScript API, Places API, Geocoding API; có MapLibre fallback)
       - key: VITE_GOOGLE_MAPS_API_KEY
         sync: false
+      # Technical SEO & Google Search Console (tùy chọn bổ sung thẻ meta backup trong <head>)
+      - key: SITE_URL
+        value: https://smartcitizen-dongnai.onrender.com
+      - key: GOOGLE_SITE_VERIFICATION
+        sync: false
       - key: DATA_DIR
         value: ./data

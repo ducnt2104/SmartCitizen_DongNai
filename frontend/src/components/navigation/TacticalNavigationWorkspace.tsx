@@ -679,7 +679,7 @@ export function TacticalNavigationWorkspace({
       <section
         ref={bottomSheetRef}
         aria-label="Bảng tác chiến nhiệm vụ cứu hộ đang thực hiện"
-        className={`absolute inset-x-0 bottom-0 z-[45] mx-auto flex max-w-2xl flex-col rounded-t-3xl border-t border-slate-700/90 bg-slate-900/98 shadow-[0_-14px_40px_rgba(0,0,0,0.6)] backdrop-blur-xl transition-all duration-200 ease-out ${leftOffsetClass} lg:right-4 lg:mx-0 ${
+        className={`absolute inset-x-0 bottom-0 z-[45] mx-auto flex max-w-2xl flex-col rounded-t-3xl border-t border-slate-700/90 bg-slate-900/95 shadow-[0_-14px_40px_rgba(0,0,0,0.6)] backdrop-blur-xl transition-all duration-200 ease-out ${leftOffsetClass} lg:right-4 lg:mx-0 ${
           sheetExpanded || completionOpen || releaseOpen ? 'max-h-[82dvh]' : 'max-h-[21.5rem]'
         }`}
       >
