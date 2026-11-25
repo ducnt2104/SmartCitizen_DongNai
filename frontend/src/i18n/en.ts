@@ -45,8 +45,8 @@ export const en: Record<keyof typeof vi, string> = {
 
   // ── Home ──
   'home.tagline': 'Digital Citizen Portal · 95 Dong Nai Wards & Communes',
-  'home.heroTitle': 'Spot an urban issue? Report it in 30 seconds.',
-  'home.heroText': 'Capture on-site photos, pinpoint the location, and track resolution transparently.',
+  'home.heroTitle': 'Listening to every pulse of life, protecting every journey.',
+  'home.heroText': 'Real-time weather data, flood alerts, and a direct channel to local authorities.',
   'home.cta': 'Report an issue now',
   'home.heroMapCta': 'Map',
   'home.heroImgAlt': 'Panoramic view of the Dong Nai riverfront skyline and modern cable-stayed bridge',

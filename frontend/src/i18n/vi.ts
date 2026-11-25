@@ -43,8 +43,8 @@ export const vi = {
 
   // ── Trang chủ ──
   'home.tagline': 'Cổng công dân số · 95 Phường & Xã Đồng Nai',
-  'home.heroTitle': 'Thấy sự cố đô thị? Báo cáo trong 30 giây.',
-  'home.heroText': 'Chụp ảnh hiện trường, chọn vị trí và theo dõi tiến độ xử lý minh bạch.',
+  'home.heroTitle': 'Lắng nghe từng nhịp sống, bảo vệ mọi hành trình.',
+  'home.heroText': 'Dữ liệu thời tiết thời gian thực, cảnh báo ngập lụt và kênh kết nối trực tiếp với chính quyền địa phương.',
   'home.cta': 'Báo cáo sự cố ngay',
   'home.heroMapCta': 'Bản đồ',
   'home.heroImgAlt': 'Toàn cảnh đô thị ven sông Đồng Nai và cầu dây văng hiện đại',

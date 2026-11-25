@@ -259,10 +259,10 @@ export default function HomePage() {
               </span>
               <span>{t('home.tagline')}</span>
             </p>
-            <h1 className="mt-3.5 max-w-3xl text-[1.4rem] font-extrabold leading-[1.2] tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.45)] sm:text-[1.85rem] md:text-[2.1rem] md:leading-[1.15]">
+            <h1 className="mt-3.5 max-w-3xl text-[1.45rem] font-extrabold leading-[1.25] tracking-tight text-white [text-wrap:balance] drop-shadow-[0_2px_12px_rgba(0,0,0,0.55)] sm:text-[1.85rem] md:text-[2.1rem] md:leading-[1.2]">
               {t('home.heroTitle')}
             </h1>
-            <p className="mt-2 max-w-xl text-sm font-medium leading-relaxed text-slate-100/95 drop-shadow-[0_1px_6px_rgba(0,0,0,0.45)] sm:text-base">
+            <p className="mt-2.5 max-w-2xl text-[15px] font-medium leading-relaxed text-white/95 drop-shadow-[0_1px_8px_rgba(0,0,0,0.55)] sm:text-base">
               {t('home.heroText')}
             </p>
           </div>
