@@ -56,6 +56,12 @@ export const edge = {
   processImage: (blob: Blob): Promise<ProcessedImageResult> => processImageInWorker(blob),
   geoScan: (p: Omit<Extract<EdgeRequest, { type: 'geo' }>, 'id' | 'type'>) => call({ type: 'geo', ...p }, 'geo'),
   hammingMatch: (hash: string, known: Array<{ id: string; hash: string }>) => call({ type: 'hamming', hash, known }, 'hamming'),
+  duplicateMatch: (
+    target: { dHash: string; pHash?: string; subGridHashes?: string[]; colorHistogram?: number[] },
+    candidates: Extract<EdgeRequest, { type: 'duplicate_match' }>['candidates'],
+  ) => call({ type: 'duplicate_match', target, candidates }, 'duplicate_match'),
+  compareBeforeAfter: (p: Omit<Extract<EdgeRequest, { type: 'compare_before_after' }>, 'id' | 'type'>) =>
+    call({ type: 'compare_before_after', ...p }, 'compare_before_after'),
   terminate: (): void => {
     worker?.terminate();
     worker = null;

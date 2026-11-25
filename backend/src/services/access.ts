@@ -4,6 +4,7 @@ import { isValidHash } from '../shared/dhash';
 import type { Photo, Report, Role } from '../shared/types';
 import type { UserRecord } from '../repositories/types';
 import { badRequest, forbidden } from '../utils/errors';
+import { isAllowedImageMagicBytes } from '../utils/magicBytes';
 import { mediaService } from './media.service';
 
 export const STAFF_ROLES: readonly Role[] = ['officer', 'admin'];
@@ -60,7 +61,14 @@ export function parsePhotoDataUrl(dataUrl: string): { mime: string; base64: stri
   const m = DATA_URL_RE.exec(dataUrl);
   if (!m) throw badRequest('Ảnh phải là JPEG/PNG/WebP dạng data URL base64.', 'invalid_photo');
   if (m[2].length > MAX_PHOTO_BASE64) throw badRequest('Ảnh quá lớn (tối đa ~1.3MB sau nén).', 'photo_too_large');
-  return { mime: m[1], base64: m[2], buffer: Buffer.from(m[2], 'base64') };
+  const buffer = Buffer.from(m[2], 'base64');
+  if (!isAllowedImageMagicBytes(buffer)) {
+    throw badRequest(
+      'Dữ liệu ảnh không đúng chữ ký Magic Bytes của JPEG/PNG/WebP thật.',
+      'invalid_image_magic_bytes',
+    );
+  }
+  return { mime: m[1], base64: m[2], buffer };
 }
 
 export async function resolvePhotoInputFromRequest(
@@ -70,6 +78,9 @@ export async function resolvePhotoInputFromRequest(
 ): Promise<PhotoInput> {
   const up = req.uploadedImages;
   if (up?.displayBuffer) {
+    if (!isAllowedImageMagicBytes(up.displayBuffer)) {
+      throw badRequest('Tệp ảnh không hợp lệ (sai Magic Bytes JPEG/PNG/WebP).', 'invalid_image_magic_bytes');
+    }
     const candidateHash = bodyPhoto?.dHash ?? fallbackDHash;
     const dHash =
       candidateHash && isValidHash(candidateHash)

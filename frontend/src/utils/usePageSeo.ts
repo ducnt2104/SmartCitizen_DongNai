@@ -36,12 +36,26 @@ const PUBLIC_SEO_VI: Record<string, RouteSeoEntry> = {
     robots: INDEX_ROBOTS,
     canonicalPath: '/map',
   },
+  '/alerts': {
+    title: 'Cảnh Báo Thiên Tai, Ngập Lụt & Giao Thông — SmartCitizen Đồng Nai',
+    description:
+      'Theo dõi lượng mưa thực tế Open-Meteo, cảnh báo thiên tai/ngập lụt, tuyến đường thi công và bản tin chính thống toàn tỉnh Đồng Nai 24/7.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/alerts',
+  },
   '/mine': {
     title: 'Tra Cứu Hồ Sơ & Phản Ánh Của Tôi — SmartCitizen Đồng Nai',
     description:
       'Tra cứu mã hồ sơ phản ánh hiện trường tại Đồng Nai, theo dõi tiến độ tiếp nhận – xử lý của cơ quan chức năng và đối chiếu ảnh Trước – Sau.',
     robots: INDEX_ROBOTS,
     canonicalPath: '/mine',
+  },
+  '/gioi-thieu': {
+    title: 'Giới Thiệu SmartCitizen Đồng Nai & Team Victer — Đô Thị Thông Minh',
+    description:
+      'Tìm hiểu SmartCitizen Đồng Nai do Team Victer phát triển: nền tảng phản ánh hiện trường Đồng Nai 95 phường/xã với Local AI, bản đồ trực tuyến và SMS OTP.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/gioi-thieu',
   },
 };
 
@@ -67,12 +81,26 @@ const PUBLIC_SEO_EN: Record<string, RouteSeoEntry> = {
     robots: INDEX_ROBOTS,
     canonicalPath: '/map',
   },
+  '/alerts': {
+    title: 'Disaster, Flood & Traffic Alerts — SmartCitizen Dong Nai',
+    description:
+      'Live Open-Meteo rainfall monitoring, disaster/flood warnings, road construction zones, and verified official bulletins across Dong Nai.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/alerts',
+  },
   '/mine': {
     title: 'Track Reports & Case Lookup — SmartCitizen Dong Nai',
     description:
       'Look up incident tracking codes, follow real-time dispatch progress, and compare Before and After resolution photos in Dong Nai.',
     robots: INDEX_ROBOTS,
     canonicalPath: '/mine',
+  },
+  '/gioi-thieu': {
+    title: 'About SmartCitizen Dong Nai & Team Victer — Smart Urban Portal',
+    description:
+      'Learn about SmartCitizen Dong Nai built by Team Victer: AI-powered civic incident reporting across 95 wards and communes of Dong Nai.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/gioi-thieu',
   },
 };
 
@@ -131,6 +159,23 @@ export function resolveRouteSeo(pathname: string, lang: 'vi' | 'en' = 'vi'): Rou
   const publicMap = lang === 'en' ? PUBLIC_SEO_EN : PUBLIC_SEO_VI;
   if (path in publicMap) {
     return publicMap[path];
+  }
+  const caseMatch = /^\/phan-anh\/([A-Za-z0-9-]+)$/i.exec(path);
+  if (caseMatch) {
+    const code = caseMatch[1].toUpperCase();
+    return lang === 'en'
+      ? {
+          title: `Incident ${code} — SmartCitizen Dong Nai`,
+          description: `Live processing status and field photo verification for incident ${code} on SmartCitizen Dong Nai (Team Victer).`,
+          robots: INDEX_ROBOTS,
+          canonicalPath: `/phan-anh/${caseMatch[1]}`,
+        }
+      : {
+          title: `Hồ Sơ Phản Ánh ${code} — SmartCitizen Đồng Nai`,
+          description: `Chi tiết hiện trường và tiến độ xử lý hồ sơ phản ánh ${code} trên Cổng Đô thị thông minh SmartCitizen Đồng Nai (Team Victer).`,
+          robots: INDEX_ROBOTS,
+          canonicalPath: `/phan-anh/${caseMatch[1]}`,
+        };
   }
   if (path in PRIVATE_SEO) {
     return {

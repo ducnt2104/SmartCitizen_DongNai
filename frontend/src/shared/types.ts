@@ -85,12 +85,25 @@ export interface Photo {
   bytes?: number;
   /** 64-bit dHash dạng 16 ký tự hex */
   dHash: string;
+  /** 64-bit 2D-DCT pHash dạng 16 ký tự hex */
+  pHash?: string;
+  /** Lưới băm 3x3 chống cắt xén (crop) */
+  subGridHashes?: string[];
+  /** Histogram màu 24-bin chuẩn hóa */
+  colorHistogram?: number[];
   kind: 'before' | 'angle' | 'after' | 'verify';
   takenBy: string;
   createdAt: string;
 }
 
-export type AiMode = 'local_rust_llm' | 'local_rust' | 'ollama' | 'gemini' | 'fallback' | 'seed';
+export type AiMode =
+  | 'local_ai'
+  | 'local_rust_llm'
+  | 'local_rust'
+  | 'ollama'
+  | 'gemini'
+  | 'fallback'
+  | 'seed';
 
 export interface TacticalBriefing {
   /** (1) Tóm tắt rủi ro hiện trường */
@@ -161,6 +174,7 @@ export interface RescueMissionState {
 
 export type ModerationDecision = 'AUTO_APPROVE' | 'HUMAN_REVIEW' | 'AUTO_REJECT';
 export type AbuseRisk = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
+export type TrustLevel = 'high' | 'normal' | 'watchlist' | 'flagged';
 export type StandardizedCivicCategory =
   | 'RAC_THAI_MOI_TRUONG'
   | 'HA_TANG_GIAO_THONG'
@@ -170,6 +184,33 @@ export type StandardizedCivicCategory =
   | 'TRAT_TU_DO_THI'
   | 'PCCC_KHAN_CAP'
   | 'KHAC';
+
+export interface ExifForensicInfo {
+  capturedAt?: string | null;
+  gpsLat?: number | null;
+  gpsLng?: number | null;
+  cameraMake?: string | null;
+  cameraModel?: string | null;
+  software?: string | null;
+  hasCameraExif?: boolean;
+  c2paDetected?: boolean;
+  aiSignatureMatched?: string | null;
+}
+
+export interface ForensicSignals {
+  elaScore: number;
+  noiseResidualScore: number;
+  fftSmoothnessScore: number;
+  moireScore: number;
+  edgeDensityScore: number;
+  screenshotProbability: number;
+  aiProbability: number;
+  staleExifMinutes?: number | null;
+  gpsDriftMeters?: number | null;
+  exifSummary?: ExifForensicInfo;
+  flags: string[];
+  hardwareAuthenticated: boolean;
+}
 
 export interface AiAnalysis {
   authenticityScore: number;
@@ -191,6 +232,7 @@ export interface AiAnalysis {
   abuseRisk?: AbuseRisk;
   isScreenCaptureOrFake?: boolean;
   forensicFlags?: string[];
+  forensics?: ForensicSignals | null;
   keyEvidenceTags?: string[];
   officerReviewNotes?: string | null;
   citizenFeedback?: string | null;
@@ -211,9 +253,22 @@ export interface DispatchOrder {
 
 export interface ResolutionVerification {
   resolutionVerified: boolean;
+  resolutionStatus?: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
+  rejectedReasonCode?: string | null;
   matchConfidence: number;
   sceneMatchScore?: number;
   resolutionScore?: number;
+  ssimScore?: number | null;
+  gpsDistanceMeters?: number | null;
+  temporalValid?: boolean;
+  forensicPassed?: boolean;
+  forensics?: ForensicSignals | null;
+  criteria?: {
+    isAuthentic: boolean;
+    sameScene: boolean;
+    issueResolved: boolean;
+    spatiotemporalValid: boolean;
+  };
   inlierKeypoints?: number;
   summary: string;
   mode: AiMode;
@@ -299,7 +354,9 @@ export interface Report {
   rescueReleaseHistory?: RescueReleaseEntry[];
   rescueMission?: RescueMissionState | null;
   resolvedAt: string | null;
+  resolutionStatus?: 'NONE' | 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
   resolution: ResolutionVerification | null;
+  afterExif?: ExifForensicInfo | null;
   rating: Rating | null;
   timeline: TimelineEvent[];
   source: 'seed' | 'user';
@@ -381,6 +438,7 @@ export interface AuditEntry {
   targetId: string;
   beforeState: unknown;
   afterState: unknown;
+  ip?: string | null;
   timestamp: string;
   prevHash: string;
   hash: string;
@@ -394,6 +452,32 @@ export interface Notification {
   read: boolean;
 }
 
+export interface SessionInfo {
+  id: string;
+  userId: string;
+  userName?: string;
+  role?: Role;
+  wardCode?: string | null;
+  deviceFingerprint: string;
+  ip: string;
+  userAgent: string;
+  createdAt: number;
+  lastActiveAt: number;
+  expiresAt: number;
+  isRevoked: boolean;
+  revokedAt: number | null;
+  revokedReason: string | null;
+  isCurrent?: boolean;
+}
+
+export interface UserViolationEntry {
+  id: string;
+  action: string;
+  detail: string;
+  reportId?: string | null;
+  at: string;
+}
+
 export interface UserProfile {
   id: string;
   role: Role;
@@ -405,10 +489,18 @@ export interface UserProfile {
   wardCode: string | null;
   unitCode: string | null;
   defaultWardCode?: string | null;
+  followedWardCodes?: string[];
   notificationsEnabled?: boolean;
   revoked?: boolean;
   isActive?: boolean;
   trustScore: number;
+  trustLevel?: TrustLevel;
+  violationCount?: number;
+  tokenVersion?: number;
+  activeSessionId?: string | null;
+  hasPassword?: boolean;
+  lastLoginAt?: number | null;
+  lastLoginIp?: string | null;
   badges: string[];
   volunteerHours: number;
   points: number;
@@ -452,6 +544,7 @@ export interface VisionResult {
   keyEvidenceTags?: string[];
   isScreenCaptureOrFake?: boolean;
   forensicFlags?: string[];
+  forensics?: ForensicSignals | null;
   relevanceScore?: number;
   abuseRisk?: AbuseRisk;
   decision?: ModerationDecision;
@@ -482,4 +575,136 @@ export interface ScopeStats {
   emergency: number;
   quarantined: number;
   slaOverdue: number;
+}
+
+export type WeatherRiskLevel = 'normal' | 'advisory' | 'warning' | 'emergency';
+
+export interface WeatherSnapshotItem {
+  id: string;
+  regionKey: string;
+  regionName: string;
+  wardCode: string;
+  lat: number;
+  lng: number;
+  temperatureC: number;
+  humidityPct: number;
+  precipitationMm: number;
+  precipitation24hMm: number;
+  precipitationProbabilityPct: number;
+  windGustsKmh: number;
+  weatherCode: number;
+  weatherLabel: string;
+  riskLevel: WeatherRiskLevel;
+  isHazard: boolean;
+  source: string;
+  observedAt: string;
+  fetchedAt: string;
+}
+
+export type AlertCategory = 'disaster' | 'traffic' | 'utility' | 'official_notice';
+export type AlertSeverity = 1 | 2 | 3;
+export type AlertSourceType =
+  | 'official_rss'
+  | 'weather_api'
+  | 'rescue_admin'
+  | 'community_cluster'
+  | 'community_user';
+export type AlertGeometryType = 'point' | 'circle' | 'polyline';
+
+export interface CivicAlertItem {
+  id: string;
+  title: string;
+  description: string;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  sourceType: AlertSourceType;
+  sourceLabel: string;
+  sourceUrl?: string | null;
+  sourceUrlHash?: string | null;
+  wardIds: string[];
+  affectedRoads: string[];
+  detourNote?: string | null;
+  geometryType: AlertGeometryType;
+  lat: number;
+  lng: number;
+  radiusM?: number | null;
+  polyline?: Array<[number, number]>;
+  status: 'active' | 'resolved';
+  isVerifiedOfficial: boolean;
+  confirmCount: number;
+  confirmedByUserIds?: string[];
+  clusterReportCount?: number | null;
+  clusterDistinctUsers?: number | null;
+  createdById?: string | null;
+  createdByName?: string | null;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OfficialBulletinItem {
+  id: string;
+  title: string;
+  cleanSummary: string;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  wardIds: string[];
+  affectedRoads: string[];
+  sourceName: string;
+  sourceUrl: string;
+  sourceUrlHash: string;
+  publishedAt: string;
+  fetchedAt: string;
+}
+
+export interface DailyDigestItem {
+  id: string;
+  dateKey: string;
+  bullets: string[];
+  highlightsCount: {
+    alerts: number;
+    bulletins: number;
+    openIncidents: number;
+  };
+  generatedAt: string;
+  expiresAt: string;
+  cached: boolean;
+  model?: string;
+}
+
+export type WardOverviewStatus = 'Ổn định' | 'Cần chú ý' | 'Điểm nóng';
+
+export interface WardOverviewResponse {
+  ward: Ward;
+  stats30d: {
+    totalReports: number;
+    resolvedReports: number;
+    resolvedPct: number;
+    openReports: number;
+    emergencyReports: number;
+    avgResolutionHours: number | null;
+    areaStatus: WardOverviewStatus;
+  };
+  heatmapPoints: Array<[number, number, number]>;
+  incidents: {
+    items: Report[];
+    total: number;
+    page: number;
+    pageSize: number;
+    hasMore: boolean;
+  };
+  alerts: CivicAlertItem[];
+  bulletins: OfficialBulletinItem[];
+  weather: WeatherSnapshotItem | null;
+}
+
+export interface RouteCheckResponse {
+  roadQuery: string;
+  status: 'clear' | 'caution' | 'danger';
+  maxSeverity: 0 | 1 | 2 | 3;
+  activeAlerts: CivicAlertItem[];
+  relatedIncidentsCount: number;
+  message: string;
+  checkedAt: string;
 }

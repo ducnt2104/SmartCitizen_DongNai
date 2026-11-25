@@ -2,6 +2,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import multer from 'multer';
 import { MAX_IMAGE_BYTES } from '../services/media.service';
 import { HttpError, badRequest } from '../utils/errors';
+import { isAllowedImageMagicBytes } from '../utils/magicBytes';
 import { hasMongoOperators, stripMongoOperators } from '../utils/sanitize';
 
 export interface UploadedImageBuffers {
@@ -78,6 +79,18 @@ export const parseMultipartOrJson: RequestHandler = (req: Request, res: Response
     const files = req.files as Record<string, Express.Multer.File[]> | undefined;
     const aiFile = pickFile(files, ['aiImage']);
     const displayFile = pickFile(files, ['displayImage', 'image', 'photo', 'afterPhoto']);
+
+    for (const candidate of [aiFile, displayFile]) {
+      if (candidate && !isAllowedImageMagicBytes(candidate.buffer)) {
+        next(
+          badRequest(
+            'Tệp tải lên không khớp chữ ký Magic Bytes của ảnh hợp lệ (chỉ chấp nhận JPEG, PNG hoặc WebP thật).',
+            'invalid_image_magic_bytes',
+          ),
+        );
+        return;
+      }
+    }
 
     req.uploadedImages = {
       aiBuffer: aiFile?.buffer ?? displayFile?.buffer,

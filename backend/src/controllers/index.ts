@@ -5,11 +5,18 @@ import { DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { toClientReport } from '../shared/report';
 import type { ReportStatus } from '../shared/types';
 import { purgeDemoData } from '../data/seedStore';
-import { clearAuthCookies, readCookie, REFRESH_COOKIE, setAuthCookies } from '../middleware/auth';
+import {
+  clearAuthCookies,
+  extractClientMeta,
+  readCookie,
+  REFRESH_COOKIE,
+  setAuthCookies,
+} from '../middleware/auth';
 import type { BoundingBoxQuery } from '../repositories/types';
 import { isAdminRole, isRescueCapable, resolvePhotoInputFromRequest } from '../services/access';
 import type { Services } from '../services/container';
 import { isValidMediaId } from '../services/media.service';
+import { registerSessionStream } from '../services/sessionEvents';
 import { toProfile } from '../services/trust.service';
 import { sha256 } from '../utils/crypto';
 import { badRequest, forbidden } from '../utils/errors';
@@ -55,44 +62,96 @@ export function authController(s: Services) {
     otpVerify: async (req: Request, res: Response) => {
       const b = body(req, 'otpVerify');
       const target = (b.identifier ?? b.phone ?? '').trim();
+      const meta = extractClientMeta(req);
       const issued = await s.auth.verifyOtp(target, b.code, {
         name: b.name,
         password: b.password,
         defaultWardCode: b.defaultWardCode,
-        userAgent: req.get('user-agent') ?? '',
+        userAgent: meta.userAgent,
+        meta,
       });
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     passwordLogin: async (req: Request, res: Response) => {
       const b = body(req, 'passwordLogin');
-      const issued = await s.auth.passwordLogin(b.identifier, b.password, req.get('user-agent') ?? '');
+      const issued = await s.auth.passwordLogin(b.identifier, b.password, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     passwordReset: async (req: Request, res: Response) => {
       const b = body(req, 'passwordReset');
-      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, req.get('user-agent') ?? '');
+      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
+    },
+    reauth: async (req: Request, res: Response) => {
+      const b = body(req, 'reauth');
+      const meta = extractClientMeta(req);
+      res.json(
+        await s.auth.issueReauthToken(req.user!, req.sessionId!, {
+          currentPassword: b.currentPassword,
+          otpCode: b.otpCode,
+          ip: meta.ip,
+        }),
+      );
+    },
+    changePassword: async (req: Request, res: Response) => {
+      const b = body(req, 'changePassword');
+      const { issued, revokedOtherSessions } = await s.auth.changePassword(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    changeEmail: async (req: Request, res: Response) => {
+      const b = body(req, 'changeEmail');
+      const { issued, revokedOtherSessions } = await s.auth.changeEmail(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    changePhone: async (req: Request, res: Response) => {
+      const b = body(req, 'changePhone');
+      const { issued, revokedOtherSessions } = await s.auth.changePhone(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    sessionEvents: async (req: Request, res: Response) => {
+      registerSessionStream(req.user!.id, req.sessionId!, res);
+    },
+    mySessions: async (req: Request, res: Response) => {
+      res.json(await s.auth.listMySessions(req.user!.id, req.sessionId));
     },
     staffLogin: async (req: Request, res: Response) => {
       const b = body(req, 'staffLogin');
       const target = (b.staffCode ?? b.identifier ?? '').trim();
-      const issued = await s.auth.staffLogin(target, b.password, b.unit, req.get('user-agent') ?? '');
+      const issued = await s.auth.staffLogin(target, b.password, b.unit, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     rescueLogin: async (req: Request, res: Response) => {
       const { identifier, password } = body(req, 'rescueLogin');
-      const issued = await s.auth.rescueLogin(identifier, password, req.get('user-agent') ?? '');
+      const issued = await s.auth.rescueLogin(identifier, password, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     refresh: async (req: Request, res: Response) => {
       const token = readCookie(req, REFRESH_COOKIE);
       try {
-        const issued = await s.auth.refreshSession(token, req.get('user-agent') ?? '');
+        const issued = await s.auth.refreshSession(token, extractClientMeta(req));
         setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
         res.json(issued.session);
       } catch (err) {
@@ -101,7 +160,7 @@ export function authController(s: Services) {
       }
     },
     logout: async (req: Request, res: Response) => {
-      await s.auth.logout(readCookie(req, REFRESH_COOKIE));
+      await s.auth.logout(readCookie(req, REFRESH_COOKIE), req.sessionId, req.user?.id);
       clearAuthCookies(res);
       res.json({ ok: true });
     },
@@ -112,7 +171,7 @@ export function authController(s: Services) {
     },
     registerVolunteer: async (req: Request, res: Response) => {
       const { wardCode, unitCode } = body(req, 'volunteerRegister');
-      const issued = await s.auth.registerVolunteer(req.user!.id, wardCode, unitCode);
+      const issued = await s.auth.registerVolunteer(req.user!.id, wardCode, unitCode, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
@@ -121,8 +180,13 @@ export function authController(s: Services) {
     },
     updateProfile: async (req: Request, res: Response) => {
       const b = body(req, 'updateProfile');
-      const updated = await s.auth.updateProfile(req.user!.id, b);
-      res.json({ user: toProfile(updated) });
+      const { user, issued } = await s.auth.updateProfile(req.user!.id, b, req.sessionId, extractClientMeta(req));
+      if (issued) {
+        setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+        res.json({ user: toProfile(user), session: issued.session });
+        return;
+      }
+      res.json({ user: toProfile(user) });
     },
     readNotifications: async (req: Request, res: Response) => {
       await s.auth.markNotificationsRead(req.user!.id);
@@ -222,15 +286,50 @@ export function reportController(s: Services) {
     list: async (req: Request, res: Response) => {
       const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
       const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
+      const scope = scopeOf(req);
       const paginated = req.query.paginated === '1' || cursor !== undefined || req.query.limit !== undefined;
       if (paginated) {
         const rawStatus = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
         const status = rawStatus && VALID_STATUSES.has(rawStatus) ? (rawStatus as ReportStatus) : undefined;
         const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 100);
-        res.json(await s.reports.listPaginated(req.user ?? null, { scope: scopeOf(req), category, status, cursor, limit }));
+        if (!req.user) {
+          const cacheKey = `list_pag:pub:${scope}:${category ?? ''}:${status ?? ''}:${cursor ?? ''}:${limit}`;
+          let entry = s.cache.getReportCached(cacheKey);
+          if (!entry) {
+            entry = s.cache.setReportCached(
+              cacheKey,
+              await s.reports.listPaginated(null, { scope, category, status, cursor, limit }),
+              20_000,
+            );
+          }
+          res.set('ETag', entry.etag);
+          res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+          if (req.headers['if-none-match'] === entry.etag) {
+            res.status(304).end();
+            return;
+          }
+          res.json(entry.body);
+          return;
+        }
+        res.json(await s.reports.listPaginated(req.user, { scope, category, status, cursor, limit }));
         return;
       }
-      res.json(await s.reports.list(req.user ?? null, scopeOf(req), category));
+      if (!req.user) {
+        const cacheKey = `list_all:pub:${scope}:${category ?? ''}`;
+        let entry = s.cache.getReportCached(cacheKey);
+        if (!entry) {
+          entry = s.cache.setReportCached(cacheKey, await s.reports.list(null, scope, category), 20_000);
+        }
+        res.set('ETag', entry.etag);
+        res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+        if (req.headers['if-none-match'] === entry.etag) {
+          res.status(304).end();
+          return;
+        }
+        res.json(entry.body);
+        return;
+      }
+      res.json(await s.reports.list(req.user, scope, category));
     },
     mine: async (req: Request, res: Response) => {
       res.json(await s.reports.mine(req.user!));
@@ -345,6 +444,8 @@ export function rescueController(s: Services) {
           afterPhoto,
           b.override,
           b.edge,
+          b.exif,
+          process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl),
         ),
       );
     },
@@ -378,6 +479,8 @@ export function rescueController(s: Services) {
           b.edge,
           b.lat,
           b.lng,
+          b.exif,
+          process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl),
         ),
       );
     },
@@ -389,9 +492,62 @@ export function adminController(s: Services) {
     const q = typeof req.query.scope === 'string' ? req.query.scope : undefined;
     return s.staff.resolveScope(req.user!, q);
   };
+  const reportSnap = (r: { id: string; status: string; severity?: number | string; wardCode: string; assignedTo?: unknown } | null) =>
+    r ? { id: r.id, status: r.status, severity: r.severity, wardCode: r.wardCode, assignedTo: r.assignedTo ?? null } : null;
+  const userSnap = (u: { id: string; role: string; name: string; wardCode: string | null; revoked?: boolean; trustScore: number; trustLevel?: string } | null) =>
+    u
+      ? {
+          id: u.id,
+          role: u.role,
+          name: u.name,
+          wardCode: u.wardCode,
+          revoked: Boolean(u.revoked),
+          trustScore: u.trustScore,
+          trustLevel: u.trustLevel ?? 'normal',
+        }
+      : null;
+  const secAudit = (
+    req: Request,
+    action: string,
+    targetType: string,
+    targetId: string,
+    beforeState: unknown,
+    afterState: unknown,
+    metadata?: Record<string, unknown>,
+  ): void => {
+    const meta = extractClientMeta(req);
+    void s.securityAudit
+      .log({
+        actorId: req.user?.id ?? 'unknown',
+        actorName: req.user?.name ?? 'Unknown',
+        actorRole: req.user?.role ?? 'unknown',
+        action,
+        targetType,
+        targetId,
+        ip: meta.ip,
+        deviceHash: meta.deviceHash,
+        userAgent: meta.userAgent,
+        beforeState,
+        afterState,
+        metadata,
+      })
+      .catch(() => undefined);
+  };
   return {
     overview: async (req: Request, res: Response) => {
-      res.json(await s.staff.overview(req.user!, scope(req)));
+      const resolvedScope = scope(req);
+      const cacheKey = `admin_overview:${resolvedScope}:${req.user?.role ?? 'staff'}`;
+      let entry = s.cache.getReportCached(cacheKey);
+      if (!entry) {
+        entry = s.cache.setReportCached(cacheKey, await s.staff.overview(req.user!, resolvedScope), 15_000);
+      }
+      res.set('ETag', entry.etag);
+      res.set('Cache-Control', 'private, max-age=10');
+      if (req.headers['if-none-match'] === entry.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json(entry.body);
     },
     queue: async (req: Request, res: Response) => {
       const tab = String(req.query.tab ?? 'open');
@@ -399,49 +555,155 @@ export function adminController(s: Services) {
       res.json(await s.staff.queue(req.user!, scope(req), tab as 'emergency' | 'high' | 'open' | 'quarantine'));
     },
     assign: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'assign');
-      res.json(await s.staff.assign(req.user!, String(req.params.id), b.department as never, b.slaHours));
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.assign(req.user!, id, b.department as never, b.slaHours);
+      secAudit(req, 'admin.report_assign', 'report', id, reportSnap(before), b);
+      res.json(out);
     },
     status: async (req: Request, res: Response) => {
-      res.json(await s.staff.setStatus(req.user!, String(req.params.id), body(req, 'status').status));
+      const id = String(req.params.id);
+      const b = body(req, 'status');
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.setStatus(req.user!, id, b.status);
+      secAudit(req, 'admin.report_status', 'report', id, reportSnap(before), { status: b.status });
+      res.json(out);
     },
     dispatch: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'dispatch');
-      res.json(await s.staff.dispatch(req.user!, String(req.params.id), b.wardCodes, b.units as never, b.note));
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.dispatch(req.user!, id, b.wardCodes, b.units as never, b.note);
+      secAudit(req, 'admin.report_dispatch', 'report', id, reportSnap(before), { wardCodes: b.wardCodes, units: b.units, note: b.note });
+      res.json(out);
     },
     transfer: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'transferWard');
-      res.json(await s.staff.transferWard(req.user!, String(req.params.id), b.wardCode, b.note));
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.transferWard(req.user!, id, b.wardCode, b.note);
+      secAudit(req, 'admin.report_transfer', 'report', id, reportSnap(before), { wardCode: b.wardCode, note: b.note });
+      res.json(out);
     },
     restore: async (req: Request, res: Response) => {
-      res.json(await s.staff.restore(req.user!, String(req.params.id)));
+      const id = String(req.params.id);
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.restore(req.user!, id);
+      secAudit(req, 'admin.report_restore', 'report', id, reportSnap(before), { restored: true });
+      res.json(out);
     },
     spam: async (req: Request, res: Response) => {
-      res.json(await s.staff.markSpam(req.user!, String(req.params.id), body(req, 'markSpam').reason));
+      const id = String(req.params.id);
+      const reason = body(req, 'markSpam').reason;
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.markSpam(req.user!, id, reason);
+      secAudit(req, 'admin.report_mark_spam', 'report', id, reportSnap(before), { reason });
+      res.json(out);
     },
     resolve: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'resolve');
+      const before = await s.repos.reports.get(id);
       const afterPhoto = await resolvePhotoInputFromRequest(req, b.afterPhoto, b.dHash);
-      res.json(await s.staff.resolve(req.user!, String(req.params.id), afterPhoto, b.note, b.override));
+      const out = await s.staff.resolve(req.user!, id, afterPhoto, b.note, b.override, {
+        lat: b.lat,
+        lng: b.lng,
+        edge: b.edge,
+        exif: b.exif,
+        allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl) && (b.afterPhoto?.dataUrl?.length ?? 0) < 900,
+      });
+      secAudit(req, 'admin.report_resolve', 'report', id, reportSnap(before), { note: b.note, override: Boolean(b.override) });
+      res.json(out);
     },
     audit: async (req: Request, res: Response) => {
       const limit = Math.min(Number(req.query.limit) || 200, 1000);
-      const rows = await s.staff.auditList(limit);
+      const action = typeof req.query.action === 'string' && req.query.action ? req.query.action : undefined;
+      const actorId = typeof req.query.actorId === 'string' && req.query.actorId ? req.query.actorId : undefined;
+      const targetId = typeof req.query.targetId === 'string' && req.query.targetId ? req.query.targetId : undefined;
+      const q = typeof req.query.q === 'string' && req.query.q ? req.query.q : undefined;
+      const rows = await s.staff.auditListFiltered({ limit, action, actorId, targetId, q });
       res.json(isAdminRole(req.user) ? rows : rows.filter((e) => e.actorId === req.user!.id));
+    },
+    auditExport: async (req: Request, res: Response) => {
+      const format = req.query.format === 'json' ? 'json' : 'csv';
+      const action = typeof req.query.action === 'string' && req.query.action ? req.query.action : undefined;
+      const actorId = typeof req.query.actorId === 'string' && req.query.actorId ? req.query.actorId : undefined;
+      const targetId = typeof req.query.targetId === 'string' && req.query.targetId ? req.query.targetId : undefined;
+      const q = typeof req.query.q === 'string' && req.query.q ? req.query.q : undefined;
+      const out = await s.staff.auditExport(req.user!, { action, actorId, targetId, q }, format);
+      res.set({ 'Content-Type': out.contentType, 'Content-Disposition': `attachment; filename="${out.filename}"` }).send(out.body);
     },
     auditVerify: async (_req: Request, res: Response) => {
       res.json(await s.audit.verifyChain());
+    },
+    securityAuditLogs: async (req: Request, res: Response) => {
+      const limit = Math.min(Number(req.query.limit) || 100, 500);
+      const action = typeof req.query.action === 'string' && req.query.action ? req.query.action : undefined;
+      const actorId = typeof req.query.actorId === 'string' && req.query.actorId ? req.query.actorId : undefined;
+      res.json(await s.securityAudit.listRecent({ limit, action, actorId }));
+    },
+    moderationQueue: async (req: Request, res: Response) => {
+      res.json(await s.staff.moderationQueue(req.user!, scope(req)));
+    },
+    moderationDecide: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const b = body(req, 'adminModerationDecision');
+      const before = await s.repos.reports.get(id);
+      const out = await s.staff.decideModeration(req.user!, id, b, req.ip);
+      secAudit(req, 'admin.moderation_decide', 'report', id, reportSnap(before), b);
+      res.json(out);
+    },
+    listSessions: async (req: Request, res: Response) => {
+      const userId = typeof req.query.userId === 'string' && req.query.userId ? req.query.userId : undefined;
+      const includeRevoked = req.query.includeRevoked === 'true';
+      res.json(await s.staff.listSessions(req.user!, { userId, includeRevoked }));
+    },
+    revokeSession: async (req: Request, res: Response) => {
+      const sessionId = String(req.params.sessionId);
+      const out = await s.staff.revokeSessionById(req.user!, sessionId, req.ip);
+      secAudit(req, 'admin.session_revoke', 'session', sessionId, null, out);
+      res.json(out);
+    },
+    forceLogoutUser: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const before = await s.repos.users.get(id);
+      const out = await s.staff.forceLogoutUser(req.user!, id, req.ip);
+      secAudit(req, 'admin.user_force_logout', 'user', id, userSnap(before), out);
+      res.json(out);
+    },
+    forceLogoutAll: async (req: Request, res: Response) => {
+      const out = await s.staff.forceLogoutAllSystem(req.user!, req.sessionId!, req.ip);
+      secAudit(req, 'admin.force_logout_all', 'system', 'sessions', null, out);
+      res.json(out);
+    },
+    userViolations: async (req: Request, res: Response) => {
+      res.json(await s.staff.getUserViolations(req.user!, String(req.params.id)));
+    },
+    flagUserTrust: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const b = body(req, 'adminTrustFlag');
+      const before = await s.repos.users.get(id);
+      const out = await s.staff.flagUserTrust(req.user!, id, b, req.ip);
+      secAudit(req, 'admin.user_trust_flag', 'user', id, userSnap(before), b);
+      res.json(out);
     },
     staff: async (_req: Request, res: Response) => {
       res.json(await s.staff.staffList());
     },
     createStaff: async (req: Request, res: Response) => {
       const b = body(req, 'createStaff');
-      res.status(201).json(await s.staff.createOfficer(req.user!, b));
+      const out = await s.staff.createOfficer(req.user!, b);
+      secAudit(req, 'admin.staff_create', 'user', b.staffCode, null, { staffCode: b.staffCode, wardCode: b.wardCode ?? null });
+      res.status(201).json(out);
     },
     revokeStaff: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'revokeStaff');
-      res.json(await s.staff.setStaffRevoked(req.user!, String(req.params.id), b.revoked));
+      const before = await s.repos.users.get(id);
+      const out = await s.staff.setStaffRevoked(req.user!, id, b.revoked);
+      secAudit(req, 'admin.staff_revoke', 'user', id, userSnap(before), { revoked: b.revoked });
+      res.json(out);
     },
     // Super Admin & Admin User CRUD + AI Config
     listUsers: async (req: Request, res: Response) => {
@@ -454,18 +716,34 @@ export function adminController(s: Services) {
     },
     createUser: async (req: Request, res: Response) => {
       const b = body(req, 'adminCreateUser');
-      res.status(201).json(await s.staff.createUser(req.user!, b));
+      const out = await s.staff.createUser(req.user!, b);
+      secAudit(req, 'admin.user_create', 'user', String((out as { id?: string }).id ?? b.email ?? b.phone ?? 'new'), null, {
+        role: b.role,
+        wardCode: b.wardCode ?? null,
+      });
+      res.status(201).json(out);
     },
     updateUser: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'adminUpdateUser');
-      res.json(await s.staff.updateUser(req.user!, String(req.params.id), b));
+      const before = await s.repos.users.get(id);
+      const out = await s.staff.updateUser(req.user!, id, b);
+      secAudit(req, 'admin.user_update', 'user', id, userSnap(before), b);
+      res.json(out);
     },
     resetUserPassword: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
       const b = body(req, 'adminResetPassword');
-      res.json(await s.staff.resetUserPassword(req.user!, String(req.params.id), b.newPassword));
+      const out = await s.staff.resetUserPassword(req.user!, id, b.newPassword);
+      secAudit(req, 'admin.user_reset_password', 'user', id, null, { reset: true });
+      res.json(out);
     },
     deleteUser: async (req: Request, res: Response) => {
-      res.json(await s.staff.deleteUser(req.user!, String(req.params.id)));
+      const id = String(req.params.id);
+      const before = await s.repos.users.get(id);
+      const out = await s.staff.deleteUser(req.user!, id);
+      secAudit(req, 'admin.user_delete', 'user', id, userSnap(before), { deleted: true });
+      res.json(out);
     },
     getAiConfig: async (_req: Request, res: Response) => {
       const [config, cv, llm, dbStats, recentEvaluations] = await Promise.all([
@@ -497,10 +775,12 @@ export function adminController(s: Services) {
         prev,
         next,
       );
+      secAudit(req, 'admin.ai_config_update', 'ai_config', 'singleton', prev, next);
       res.json(next);
     },
     purgeDemo: async (req: Request, res: Response) => {
       const summary = await purgeDemoData(s.repos, s.audit, req.user!);
+      secAudit(req, 'admin.purge_demo', 'system', 'demo_seed', null, summary);
       res.json(summary);
     },
     export: async (req: Request, res: Response) => {

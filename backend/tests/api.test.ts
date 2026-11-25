@@ -213,13 +213,13 @@ describe('AI Triage & chống spam', () => {
     expect(first.data.outcome).toBe('created');
     const motherId = first.data.report.id;
 
-    // C gửi lại ảnh gần như y hệt (distance 2) → cách ly
+    // C gửi lại ảnh gần như y hệt (distance 2) → Tầng 2 Gatekeeper chặn ngay (HTTP 422), không cho lọt lên bản đồ
     const dup = await call<any>('/api/reports', {
       token: c,
       body: report({ lat: 10.94, lng: 106.81, photo: { dataUrl: TINY_JPEG, dHash: 'aaaaaaaaaaaaaaa3' } }),
     });
-    expect(dup.data.outcome).toBe('quarantined');
-    expect(dup.data.report.quarantine.reason).toBe('duplicate_image');
+    expect(dup.status).toBe(422);
+    expect(dup.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
 
     // B khác SĐT, cách ~30m, ảnh khác hẳn (distance 64) → gộp
     const merged = await call<any>('/api/reports', {
@@ -244,7 +244,7 @@ describe('AI Triage & chống spam', () => {
     expect(r1.status).toBe(201);
     expect(r2.data.outcome).toBe('duplicate_submit');
 
-    // C đã gửi 2 đơn → đơn thứ 3 OK, đơn thứ 4 bị chặn 429
+    // C mới có 1 đơn được lưu (dup bị Gatekeeper chặn 422 từ đầu) -> đơn 2 & 3 OK, đơn 4 bị chặn 429 (3/giờ)
     const third = await call<any>('/api/reports', {
       token: c,
       body: report({ lat: 10.96, lng: 106.86, photo: { dataUrl: TINY_JPEG, dHash: '3434343434343434' } }),
@@ -252,9 +252,14 @@ describe('AI Triage & chống spam', () => {
     expect(third.status).toBe(201);
     const fourth = await call<any>('/api/reports', {
       token: c,
+      body: report({ lat: 10.965, lng: 106.865, photo: { dataUrl: TINY_JPEG, dHash: '5656565656565656' } }),
+    });
+    expect(fourth.status).toBe(201);
+    const fifth = await call<any>('/api/reports', {
+      token: c,
       body: report({ lat: 10.97, lng: 106.87, photo: { dataUrl: TINY_JPEG, dHash: '7878787878787878' } }),
     });
-    expect(fourth.status).toBe(429);
+    expect(fifth.status).toBe(429);
   });
 
   it('cùng xác nhận: mỗi tài khoản chỉ 1 lần, không tự xác nhận đơn của mình', async () => {

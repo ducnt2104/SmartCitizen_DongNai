@@ -8,10 +8,10 @@ import { OtpToken, otpTokenSchema } from '../src/models/OtpToken';
 import type { Services } from '../src/services/container';
 import {
   AndroidGatewaySmsOtpProvider,
-  DemoSmsOtpProvider,
   EsmsSmsOtpProvider,
   FirebasePhoneVerifier,
   FirebaseSmsOtpProvider,
+  generateOtpSalt,
   generateSixDigitOtp,
   hashOtpCodeSha256,
   MultiSmsOtpDispatcher,
@@ -20,6 +20,7 @@ import {
   PhoneOtpService,
   SpeedSmsOtpProvider,
   TwilioSmsOtpProvider,
+  VonageSmsOtpProvider,
   vnPhoneToLocal,
 } from '../src/services/otp';
 import type { OtpSendPayload, OtpTransport } from '../src/services/otpDelivery.service';
@@ -67,8 +68,8 @@ describe('1. Chuẩn hóa SĐT di động Việt Nam normalizeVnPhone()', () => 
   });
 });
 
-describe('2. Bảo mật OtpToken Schema, SHA-256, Cooldown 60s, 5 SMS/giờ & Khóa mã sau 5 lần sai', () => {
-  it('OtpToken có đủ channel (email|phone), target, otpHash, attempts và MongoDB TTL Index trên expiresAt', () => {
+describe('2. Bảo mật OtpToken Schema, SHA-256 + Salt, Cooldown 60s, 3 SMS/10 phút & Khóa mã sau 5 lần sai', () => {
+  it('OtpToken có đủ channel (email|phone), target, otpHash, otpSalt, attempts và MongoDB TTL Index trên expiresAt', () => {
     const indexes = otpTokenSchema.indexes();
     const hasTtlIndex = indexes.some(
       ([keys, opts]) =>
@@ -79,22 +80,28 @@ describe('2. Bảo mật OtpToken Schema, SHA-256, Cooldown 60s, 5 SMS/giờ & K
 
     const code = generateSixDigitOtp();
     expect(code).toMatch(/^\d{6}$/);
+    const salt = generateOtpSalt();
+    expect(salt).toMatch(/^[a-f0-9]{32}$/);
     const hashed = hashOtpCodeSha256(code);
     expect(hashed).toBe(crypto.createHash('sha256').update(code).digest('hex'));
+    const saltedHash = hashOtpCodeSha256(code, salt);
+    expect(saltedHash).toBe(crypto.createHash('sha256').update(`${salt}:${code}`).digest('hex'));
 
     const doc = new OtpToken({
       channel: 'phone',
       target: '+84912345678',
-      otpHash: hashed,
+      otpHash: saltedHash,
+      otpSalt: salt,
       attempts: 0,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
     expect(doc.validateSync()).toBeUndefined();
     expect(doc.channel).toBe('phone');
     expect(doc.target).toBe('+84912345678');
+    expect(doc.otpSalt).toBe(salt);
   });
 
-  it('chặn gửi lại trong 60s cooldown và chặn vượt quá 5 tin SMS / giờ / SĐT', async () => {
+  it('chặn gửi lại trong 60s cooldown và chặn vượt quá 3 tin SMS / 10 phút / SĐT', async () => {
     let capturedOtp = '';
     const mockFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const parsed = JSON.parse(String(init?.body ?? '{}')) as { message?: string };
@@ -126,34 +133,32 @@ describe('2. Bảo mật OtpToken Schema, SHA-256, Cooldown 60s, 5 SMS/giờ & K
       svc.sendPhoneOtp('+84912345678', { now: t0 + 30_000, envSource: envMock }),
     ).rejects.toMatchObject({ status: 429, code: 'otp_cooldown' });
 
-    // Sau 61s -> được phép gửi lần 2, 3, 4, 5 trong cùng 1 giờ
+    // Sau 61s -> được phép gửi lần 2 và lần 3 trong vòng 10 phút
     await svc.sendPhoneOtp('0912345678', { now: t0 + 61_000, envSource: envMock });
     await svc.sendPhoneOtp('0912345678', { now: t0 + 122_000, envSource: envMock });
-    await svc.sendPhoneOtp('0912345678', { now: t0 + 183_000, envSource: envMock });
-    await svc.sendPhoneOtp('0912345678', { now: t0 + 244_000, envSource: envMock });
 
-    // Lần thứ 6 trong vòng 1 giờ (dù đã qua 60s cooldown) -> bị chặn 429 otp_hourly_limit
+    // Lần thứ 4 trong vòng 10 phút -> bị chặn 429 otp_rate_limit_10m
     await expect(
-      svc.sendPhoneOtp('0912345678', { now: t0 + 305_000, envSource: envMock }),
-    ).rejects.toMatchObject({ status: 429, code: 'otp_hourly_limit' });
+      svc.sendPhoneOtp('0912345678', { now: t0 + 183_000, envSource: envMock }),
+    ).rejects.toMatchObject({ status: 429, code: 'otp_rate_limit_10m' });
 
-    // Sang giờ tiếp theo (> 3600s) -> mở lại bình thường
-    const rNextHour = await svc.sendPhoneOtp('0912345678', {
-      now: t0 + 3_700_000,
+    // Sang cửa sổ 10 phút tiếp theo (> 600s) -> mở lại bình thường
+    const rNextWindow = await svc.sendPhoneOtp('0912345678', {
+      now: t0 + 610_000,
       envSource: envMock,
     });
-    expect(rNextHour.provider).toBe('android_gateway');
+    expect(rNextWindow.provider).toBe('android_gateway');
   });
 
   it('nhập sai OTP đến lần thứ 5 lập tức hủy/khóa mã OTP đó (kể cả nhập mã đúng sau đó cũng bị từ chối)', async () => {
     let realCode = '';
     const svc = new PhoneOtpService();
     svc.smsDispatcher.setOverrideProvider({
-      name: 'demo',
+      name: 'android_gateway',
       isConfigured: () => true,
       send: async (input) => {
         realCode = input.otp;
-        return { provider: 'demo', delivered: true };
+        return { provider: 'android_gateway', delivered: true, messageId: 'mock_gw_1' };
       },
     });
 
@@ -184,7 +189,7 @@ describe('2. Bảo mật OtpToken Schema, SHA-256, Cooldown 60s, 5 SMS/giờ & K
   });
 });
 
-describe('3. Mock Unit Test các SMS Provider (android_gateway, esms, speedsms, twilio, firebase, demo)', () => {
+describe('3. Mock Unit Test các SMS Provider (android_gateway, esms, speedsms, twilio, vonage, firebase)', () => {
   it('AndroidGatewaySmsOtpProvider gửi chuẩn TextBee API kèm header x-api-key và E.164 +84', async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -341,26 +346,48 @@ describe('3. Mock Unit Test các SMS Provider (android_gateway, esms, speedsms, 
     ).rejects.toMatchObject({ status: 401 });
   });
 
-  it('DemoSmsOtpProvider ẩn devOtpPreview khi ALLOW_DEMO_OTP=false và chỉ trả khi ALLOW_DEMO_OTP=true', async () => {
-    const tgCalls: string[] = [];
+  it('VonageSmsOtpProvider gửi REST SMS và MultiSmsOtpDispatcher ưu tiên firebase -> speedsms/esms/twilio/vonage -> android_gateway', async () => {
     const mockFetch = vi.fn(async (url: string | URL | Request) => {
-      tgCalls.push(String(url));
+      if (String(url).includes('nexmo.com')) {
+        return new Response(
+          JSON.stringify({ messages: [{ status: '0', 'message-id': 'vonage_msg_777' }] }),
+          { status: 200 },
+        );
+      }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch;
 
-    const demo = new DemoSmsOtpProvider(mockFetch);
-    const hidden = await demo.send(
+    const vonage = new VonageSmsOtpProvider(mockFetch);
+    const out = await vonage.send(
       { phoneE164: '+84905123456', phoneLocal: '0905123456', otp: '777888', ttlMinutes: 5, purpose: 'login' },
-      { ALLOW_DEMO_OTP: 'false', TELEGRAM_BOT_TOKEN: 'tg_bot_1', TELEGRAM_CHAT_ID: '12345' },
+      { VONAGE_API_KEY: 'vg_key', VONAGE_API_SECRET: 'vg_secret', VONAGE_FROM: 'SmartCitizen' },
     );
-    expect(hidden.devOtpPreview).toBeUndefined();
-    expect(tgCalls).toHaveLength(1);
+    expect(out).toEqual({ provider: 'vonage', delivered: true, messageId: 'vonage_msg_777' });
 
-    const visible = await demo.send(
-      { phoneE164: '+84905123456', phoneLocal: '0905123456', otp: '777888', ttlMinutes: 5, purpose: 'login' },
-      { ALLOW_DEMO_OTP: 'true' },
-    );
-    expect(visible.devOtpPreview).toBe('777888');
+    const dispatcher = new MultiSmsOtpDispatcher(mockFetch);
+    expect(
+      dispatcher.resolveActiveProvider({
+        FIREBASE_PROJECT_ID: 'p',
+        FIREBASE_API_KEY: 'k',
+        SPEEDSMS_ACCESS_TOKEN: 'sp',
+        SMS_GATEWAY_URL: 'https://gw.example.com/send',
+      })?.name,
+    ).toBe('firebase');
+    expect(
+      dispatcher.resolveActiveProvider({
+        SPEEDSMS_ACCESS_TOKEN: 'sp',
+        VONAGE_API_KEY: 'vk',
+        VONAGE_API_SECRET: 'vs',
+        SMS_GATEWAY_URL: 'https://gw.example.com/send',
+      })?.name,
+    ).toBe('speedsms');
+    expect(
+      dispatcher.resolveActiveProvider({
+        SMS_GATEWAY_URL: 'https://gw.example.com/send',
+      })?.name,
+    ).toBe('android_gateway');
+    expect(() => dispatcher.resolveActiveProvider({})).not.toThrow();
+    expect(dispatcher.resolveActiveProvider({})).toBeNull();
   });
 });
 

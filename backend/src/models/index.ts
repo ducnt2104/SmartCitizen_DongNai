@@ -39,6 +39,7 @@ reportSchema.index({ location: '2dsphere' });
 reportSchema.index({ status: 1, createdAt: -1 });
 reportSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 reportSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
+reportSchema.index({ wardCode: 1, category: 1, status: 1, createdAt: -1 });
 reportSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });
@@ -56,6 +57,8 @@ const appUserSchema = mk({
   email: { type: String, default: null, index: true },
   staffCode: { type: String, default: null, index: true },
   wardCode: { type: String, default: null, index: true },
+  defaultWardCode: { type: String, default: null },
+  followedWardCodes: { type: [String], default: [] },
   revoked: { type: Boolean, default: false, index: true },
   trustScore: { type: Number, default: 70, min: 0, max: 100 },
   createdAt: { type: String, required: true },
@@ -122,16 +125,28 @@ const otpSchema = mk({
   expiresAt: { type: Number, required: true },
   expiresAtDate: { type: Date, default: () => new Date(Date.now() + 5 * 60 * 1000) },
 });
-otpSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 3600 });
+otpSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 0 });
 
 const sessionSchema = mk({
   id: { type: String, required: true, unique: true },
   userId: { type: String, required: true, index: true },
   refreshHash: { type: String, required: true, unique: true },
+  tokenHash: { type: String, default: null, index: true },
+  deviceFingerprint: { type: String, default: '' },
+  ip: { type: String, default: '' },
+  userAgent: { type: String, default: '' },
+  tokenVersion: { type: Number, default: 0 },
+  createdAt: { type: Number, required: true },
+  lastActiveAt: { type: Number, default: () => Date.now() },
   expiresAt: { type: Number, required: true },
+  isRevoked: { type: Boolean, default: false, index: true },
+  revokedAt: { type: Number, default: null },
+  revokedReason: { type: String, default: null },
+  replacedBySessionId: { type: String, default: null },
   expiresAtDate: { type: Date, default: () => new Date(Date.now() + 7 * 24 * 3600 * 1000) },
 });
 sessionSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 0 });
+sessionSchema.index({ userId: 1, isRevoked: 1, lastActiveAt: -1 });
 
 const auditSchema = mk({
   id: { type: String, required: true, unique: true },
@@ -253,6 +268,22 @@ export {
 } from './AuditLog';
 export { ApiKey, apiKeySchema, type IApiKey, type ApiKeyDocument } from './ApiKey';
 export { MediaAsset, mediaAssetSchema, type IMediaAsset, type MediaAssetDocument } from './Media';
+export {
+  SecurityAuditLog,
+  securityAuditLogSchema,
+  SECURITY_AUDIT_TTL_SECONDS,
+  type ISecurityAuditLog,
+  type SecurityAuditLogDocument,
+} from './SecurityAuditLog';
+export {
+  WeatherSnapshot,
+  weatherSnapshotSchema,
+  type IWeatherSnapshot,
+  type WeatherSnapshotDocument,
+} from './WeatherSnapshot';
+export { Alert, alertSchema, type IAlert, type AlertDocument } from './Alert';
+export { Bulletin, bulletinSchema, type IBulletin, type BulletinDocument } from './Bulletin';
+export { DailyDigest, dailyDigestSchema, type IDailyDigest, type DailyDigestDocument } from './DailyDigest';
 export {
   DONG_NAI_GEO_BOUNDS,
   SYNC_STATUSES,

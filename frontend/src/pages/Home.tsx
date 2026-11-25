@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  BellRing,
   Bot,
   Camera,
   CheckCircle2,
@@ -11,18 +12,26 @@ import {
   Map as MapIcon,
   MapPin,
   Mic,
+  ShieldAlert,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import type { WardOverviewResponse } from '@shared/types';
 import heroPhoto from '../assets/dongnai-hero.jpg';
 import { ReportCard } from '../components/ReportCard';
-import { ReportDetail } from '../components/ReportDetail';
-import { openAssistant } from '../components/ChatWidget';
+import { WardInspectorDrawer } from '../components/WardInspectorDrawer';
 import { EmptyState, SkeletonBlock, SkeletonList } from '../components/ui';
 import { useScopedReports, useStats } from '../db/hooks';
 import { useI18n } from '../i18n';
+import { api } from '../lib/api';
+import { useFollowedWards } from '../lib/followedWards';
+import { onIntentPrefetch } from '../lib/prefetch';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
-import { useSettings } from '../state/settings';
+import { openAssistant, useSettings } from '../state/settings';
+
+const ReportDetail = lazy(() =>
+  import('../components/ReportDetail').then((m) => ({ default: m.ReportDetail })),
+);
 
 function Kpi({
   label,
@@ -97,9 +106,43 @@ export default function HomePage() {
   const stats = useStats(settings.scope);
   const reports = useScopedReports(settings.scope);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [inspectWardCode, setInspectWardCode] = useState<string | null>(null);
+  const { followedCodes } = useFollowedWards();
+  const [pinnedOverviews, setPinnedOverviews] = useState<WardOverviewResponse[]>([]);
+
+  useEffect(() => {
+    if (followedCodes.length === 0) {
+      setPinnedOverviews([]);
+      return;
+    }
+    let active = true;
+    void Promise.allSettled(
+      followedCodes.slice(0, 4).map((wc) => api<WardOverviewResponse>(`/api/wards/${encodeURIComponent(wc)}/overview?pageSize=1`)),
+    ).then((results) => {
+      if (!active) return;
+      const loaded = results
+        .filter((r): r is PromiseFulfilledResult<WardOverviewResponse> => r.status === 'fulfilled')
+        .map((r) => r.value);
+      setPinnedOverviews(loaded);
+    });
+    return () => {
+      active = false;
+    };
+  }, [followedCodes]);
   const scopeName = settings.scope === 'city' ? t('scope.cityName') : (WARD_BY_CODE[settings.scope.replace('ward:', '')]?.name ?? settings.scope);
-  const recent = reports?.filter((r) => r.status !== 'quarantined' && r.status !== 'rejected').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
-  const emergency = reports?.filter((r) => r.emergencyLevel === 1 && r.status !== 'resolved' && r.status !== 'quarantined').length ?? 0;
+  const recent = useMemo(
+    () =>
+      reports
+        ?.filter((r) => r.status !== 'quarantined' && r.status !== 'rejected')
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 5),
+    [reports],
+  );
+  const emergency = useMemo(
+    () =>
+      reports?.filter((r) => r.emergencyLevel === 1 && r.status !== 'resolved' && r.status !== 'quarantined').length ?? 0,
+    [reports],
+  );
 
   const kpis = (
     <section aria-label={t('home.kpiTitle')}>
@@ -178,6 +221,9 @@ export default function HomePage() {
         <img
           src={heroPhoto}
           alt={t('home.heroImgAlt')}
+          width={1200}
+          height={675}
+          fetchPriority="high"
           decoding="async"
           className="absolute inset-0 h-full w-full object-cover object-[76%_44%] transition-transform duration-700 ease-out group-hover:scale-[1.02] sm:object-[66%_45%] lg:object-[60%_45%]"
         />
@@ -205,6 +251,8 @@ export default function HomePage() {
             <Link
               to="/report"
               data-tour="report"
+              onMouseEnter={() => onIntentPrefetch('/report')}
+              onFocus={() => onIntentPrefetch('/report')}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2.5 rounded-2xl bg-white px-6 py-3 text-sm font-extrabold text-slate-900 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.45)] transition-all hover:-translate-y-0.5 hover:bg-slate-50 active:scale-[0.98] sm:w-auto sm:text-base"
             >
               <Camera className="h-5 w-5 text-brand" aria-hidden />
@@ -212,14 +260,79 @@ export default function HomePage() {
             </Link>
             <Link
               to="/map"
+              onMouseEnter={() => onIntentPrefetch('/map')}
+              onFocus={() => onIntentPrefetch('/map')}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-slate-900/55 px-5 py-3 text-sm font-bold text-white backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-white/45 hover:bg-slate-900/75 active:scale-[0.98] sm:w-auto sm:text-base"
             >
               <MapIcon className="h-5 w-5 text-sky-300" aria-hidden />
               <span>{t('home.heroMapCta')}</span>
             </Link>
+            <Link
+              to="/alerts"
+              onMouseEnter={() => onIntentPrefetch('/alerts')}
+              onFocus={() => onIntentPrefetch('/alerts')}
+              className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-rose-300/40 bg-rose-600/85 px-5 py-3 text-sm font-bold text-white backdrop-blur-md transition-all hover:-translate-y-0.5 hover:bg-rose-600 active:scale-[0.98] sm:w-auto sm:text-base"
+            >
+              <ShieldAlert className="h-5 w-5" aria-hidden />
+              <span>Cảnh báo & Thiên tai</span>
+            </Link>
           </div>
         </div>
       </section>
+
+      {followedCodes.length > 0 && (
+        <section aria-label="Khu vực đang theo dõi" className="card border-brand/25 bg-brand-soft/35 p-3.5 sm:p-4">
+          <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="flex items-center gap-2 text-sm font-extrabold text-brand sm:text-base">
+              <BellRing className="h-4 w-4" aria-hidden /> Khu vực đang theo dõi ({followedCodes.length})
+            </h2>
+            <Link to="/map" className="text-xs font-bold text-brand hover:underline">
+              Quản lý trên Bản đồ →
+            </Link>
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            {followedCodes.slice(0, 4).map((wc) => {
+              const ov = pinnedOverviews.find((x) => x.ward.wardCode === wc);
+              const w = WARD_BY_CODE[wc];
+              return (
+                <button
+                  key={wc}
+                  type="button"
+                  onClick={() => setInspectWardCode(wc)}
+                  className="card flex flex-col justify-between p-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/40"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="truncate text-sm font-bold text-ink">{ov?.ward.name ?? w?.name ?? wc}</span>
+                    {ov && (
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                          ov.stats30d.areaStatus === 'Điểm nóng'
+                            ? 'bg-rose-500/15 text-rose-700'
+                            : ov.stats30d.areaStatus === 'Cần chú ý'
+                              ? 'bg-amber-500/15 text-amber-800'
+                              : 'bg-emerald-500/15 text-emerald-700'
+                        }`}
+                      >
+                        {ov.stats30d.areaStatus}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[11px] text-muted">
+                    {ov ? (
+                      <>
+                        <span>30 ngày: <strong className="text-ink">{ov.stats30d.totalReports}</strong> tin</span>
+                        <span>Xử lý: <strong className="text-ok">{ov.stats30d.resolvedPct}%</strong></span>
+                      </>
+                    ) : (
+                      <span>Bấm để xem hồ sơ chi tiết</span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {emergency > 0 && (
         <Link to="/map" className="group flex items-center gap-3 rounded-2xl border border-danger/35 bg-danger-soft/90 p-3.5 text-danger shadow-card ring-1 ring-danger/10 transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-[0.99]">
@@ -303,7 +416,12 @@ export default function HomePage() {
           <div className="space-y-3">{recent.map((r) => <ReportCard key={r.id} r={r} onOpen={(x) => setOpenId(x.id)} />)}</div>
         )}
       </section>
-      <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+      {openId && (
+        <Suspense fallback={null}>
+          <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+        </Suspense>
+      )}
+      <WardInspectorDrawer wardCode={inspectWardCode} onClose={() => setInspectWardCode(null)} />
     </div>
   );
 }

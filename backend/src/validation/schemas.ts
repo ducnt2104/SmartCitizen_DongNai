@@ -27,6 +27,9 @@ export const edgeStatsSchema = z.object({
   brightness: z.number().min(0).max(255),
   flatRatio: z.number().min(0).max(1),
   aspect: z.number().min(0.05).max(20),
+  sharpEdgeDensity: z.number().min(0).max(1).optional(),
+  likelyScreenshot: z.boolean().optional(),
+  screenshotConfidence: z.number().min(0).max(1).optional(),
 });
 
 export const exifMetadataSchema = z.object({
@@ -49,7 +52,7 @@ export const schemas = {
     .object({
       identifier: identifier.optional(),
       phone: identifier.optional(),
-      purpose: z.enum(['login', 'reset_password']).default('login'),
+      purpose: z.enum(['login', 'reset_password', 'change_email', 'change_phone']).default('login'),
     })
     .refine((d) => Boolean(d.identifier || d.phone), 'Cần cung cấp email hoặc số điện thoại.'),
   otpVerify: z
@@ -71,6 +74,25 @@ export const schemas = {
     code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
     newPassword: z.string().min(8).max(128),
   }),
+  reauth: z.object({
+    currentPassword: z.string().min(1).max(128).optional(),
+    otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số').optional(),
+  }).refine((d) => Boolean(d.currentPassword || d.otpCode), 'Cần nhập mật khẩu hiện tại hoặc mã OTP.'),
+  changePassword: z.object({
+    currentPassword: z.string().min(1).max(128).optional(),
+    otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số').optional(),
+    newPassword: z.string().min(8).max(128),
+  }),
+  changeEmail: z.object({
+    newEmail: z.string().email().max(120),
+    otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
+    currentPassword: z.string().min(1).max(128).optional(),
+  }),
+  changePhone: z.object({
+    newPhone: z.string().min(8).max(24),
+    otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
+    currentPassword: z.string().min(1).max(128).optional(),
+  }),
   staffLogin: z
     .object({
       staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/).optional(),
@@ -86,8 +108,22 @@ export const schemas = {
   updateProfile: z.object({
     name: z.string().min(2).max(80).optional(),
     defaultWardCode: wardCode.nullable().optional(),
+    followedWardCodes: z.array(wardCode).max(30).optional(),
     notificationsEnabled: z.boolean().optional(),
     newPassword: z.string().min(8).max(128).optional(),
+    currentPassword: z.string().min(1).max(128).optional(),
+  }),
+  updateFollowedWards: z.object({
+    wardCodes: z.array(wardCode).max(30),
+  }),
+  adminTrustFlag: z.object({
+    trustLevel: z.enum(['high', 'normal', 'watchlist', 'flagged']),
+    reason: z.string().min(3).max(300),
+    trustScore: z.number().min(0).max(100).optional(),
+  }),
+  adminModerationDecision: z.object({
+    decision: z.enum(['APPROVE', 'REJECT']),
+    note: z.string().max(400).default(''),
   }),
   volunteerRegister: z.object({ wardCode, unitCode: z.string().max(16) }),
 
@@ -137,6 +173,9 @@ export const schemas = {
   analyzeImage: z.object({
     image: photo.optional(),
     dHash: hash.optional(),
+    pHash: hash.optional(),
+    subGridHashes: z.array(hash).max(9).optional(),
+    colorHistogram: z.array(z.number().min(0).max(1)).max(32).optional(),
     category: category.optional(),
     hintText: z.string().max(500).optional(),
     lat: z.number().finite().optional(),
@@ -149,7 +188,10 @@ export const schemas = {
     reportId: z.string().min(3).max(64),
     afterPhoto: photo.optional(),
     dHash: hash.optional(),
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
     edge: edgeStatsSchema.optional(),
+    exif: exifMetadataSchema.optional(),
   }),
   tacticalBriefing: z.object({
     reportId: z.string().min(3).max(64).optional(),
@@ -206,6 +248,10 @@ export const schemas = {
     dHash: hash.optional(),
     note: z.string().max(300).default(''),
     override: z.boolean().default(false),
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
+    edge: edgeStatsSchema.optional(),
+    exif: exifMetadataSchema.optional(),
   }),
   markSpam: z.object({ reason: z.string().max(300).default('') }),
 
@@ -261,6 +307,7 @@ export const schemas = {
       afterPhoto: photo.optional(),
       override: z.boolean().default(false),
       edge: edgeStatsSchema.optional(),
+      exif: exifMetadataSchema.optional(),
     })
     .refine((d) => Boolean(d.status || d.step), 'Cần truyền trạng thái nhiệm vụ (EN_ROUTE, ARRIVED, IN_PROGRESS, RESOLVED).'),
   rescueRelease: z.object({
@@ -280,8 +327,44 @@ export const schemas = {
     note: z.string().max(400).default(''),
     override: z.boolean().default(false),
     edge: edgeStatsSchema.optional(),
+    exif: exifMetadataSchema.optional(),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
+  }),
+
+  createAlert: z.object({
+    title: z.string().trim().min(5).max(180),
+    description: z.string().trim().min(5).max(1500),
+    category: z.enum(['disaster', 'traffic', 'utility', 'official_notice']),
+    severity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    wardIds: z.array(z.union([wardCode, z.literal('ALL_DONG_NAI')])).min(1).max(95),
+    affectedRoads: z.array(z.string().trim().min(2).max(120)).max(20).default([]),
+    detourNote: z.string().trim().max(500).optional(),
+    geometryType: z.enum(['point', 'circle', 'polyline']).default('circle'),
+    lat: z.number().min(10.3).max(12.2),
+    lng: z.number().min(106.4).max(107.9),
+    radiusM: z.number().min(50).max(50000).optional(),
+    polyline: z.array(z.tuple([z.number().min(10.3).max(12.2), z.number().min(106.4).max(107.9)])).min(2).max(80).optional(),
+    expiresAt: z.string().max(64).optional(),
+    sourceUrl: z.string().url().max(500).optional(),
+  }),
+  updateAlert: z.object({
+    status: z.enum(['active', 'resolved']).optional(),
+    severity: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+    title: z.string().trim().min(5).max(180).optional(),
+    description: z.string().trim().min(5).max(1500).optional(),
+    detourNote: z.string().trim().max(500).nullable().optional(),
+    isVerifiedOfficial: z.boolean().optional(),
+  }),
+  createCommunityAlert: z.object({
+    title: z.string().trim().min(5).max(160),
+    description: z.string().trim().min(8).max(1000),
+    category: z.enum(['disaster', 'traffic', 'utility', 'official_notice']).default('disaster'),
+    severity: z.union([z.literal(1), z.literal(2)]).default(1),
+    wardCode: wardCode.optional(),
+    lat: z.number().min(10.3).max(12.2),
+    lng: z.number().min(106.4).max(107.9),
+    affectedRoads: z.array(z.string().trim().min(2).max(120)).max(10).default([]),
   }),
 } as const;
 

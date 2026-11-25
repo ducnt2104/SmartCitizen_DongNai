@@ -1,6 +1,9 @@
-# SmartCitizen Đồng Nai 2.0 — Local-First High-Speed AI, Rust CV/ONNX & 5-Tier RBAC
+# SmartCitizen Đồng Nai 2.0 — Phản ánh Hiện trường & Đô thị Thông minh (Team Victer)
 
-Nền tảng **Phản ánh Hiện trường & Điều phối Đô thị Thông minh** quy mô toàn **Thành phố Đồng Nai** (**95 ĐVHC**: **33 Phường** và **62 Xã**), vận hành trên kiến trúc **Local-First High-Speed AI** kết hợp **Rust Computer Vision & ONNX Engine**, **Local LLM + BM25 RAG**, **MongoDB Atlas Real Persistence** và hệ thống **Super Admin & RBAC 5 cấp**.
+> 🌐 **Cổng Trực tuyến Chính thức:** [https://smartcitizen-dongnai.onrender.com/](https://smartcitizen-dongnai.onrender.com/)  
+> 🔗 Truy cập nhanh: [Trang chủ](https://smartcitizen-dongnai.onrender.com/) · [Bản đồ sự cố 95 Phường/Xã](https://smartcitizen-dongnai.onrender.com/map) · [Gửi phản ánh 3 bước](https://smartcitizen-dongnai.onrender.com/report) · [Tra cứu hồ sơ](https://smartcitizen-dongnai.onrender.com/mine) · [Giới thiệu & Team Victer](https://smartcitizen-dongnai.onrender.com/gioi-thieu)
+
+Nền tảng **SmartCitizen Đồng Nai** (**Phản ánh hiện trường Đồng Nai** & **Đô thị thông minh Đồng Nai**) do **Team Victer** phát triển, phục vụ toàn bộ **95 Phường/Xã Thành phố Đồng Nai** (**33 Phường** và **62 Xã**) trên kiến trúc **Hybrid Local-First AI**, **Rust/Sharp + ONNX CV**, **SMS OTP thật (+84)** và **MongoDB Atlas**.
 
 ---
 

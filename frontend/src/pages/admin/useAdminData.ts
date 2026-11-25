@@ -149,8 +149,17 @@ export function useQueueCounts(scope: string): Record<QueueTab, number> | null {
   return counts;
 }
 
-export function useAudit(): LoadState<AuditEntry[]> {
-  return useLoader<AuditEntry[]>('audit', () => api<AuditEntry[]>('/api/admin/audit?limit=200'), async () => [], 0);
+export function useAudit(action = '', q = ''): LoadState<AuditEntry[]> {
+  const params = new URLSearchParams({ limit: '300' });
+  if (action.trim()) params.set('action', action.trim());
+  if (q.trim()) params.set('q', q.trim());
+  const qs = params.toString();
+  return useLoader<AuditEntry[]>(
+    `audit:${qs}`,
+    () => api<AuditEntry[]>(`/api/admin/audit?${qs}`),
+    async () => [],
+    0,
+  );
 }
 
 export { isStaffRole };

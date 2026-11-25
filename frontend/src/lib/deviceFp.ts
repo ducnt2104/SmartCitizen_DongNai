@@ -25,6 +25,20 @@ function canvasSignature(): string {
   }
 }
 
+function webglSignature(): string {
+  try {
+    const c = document.createElement('canvas');
+    const gl = (c.getContext('webgl') || c.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+    if (!gl) return 'nowebgl';
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const vendor = dbg ? String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) ?? '') : String(gl.getParameter(gl.VENDOR) ?? '');
+    const renderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) ?? '') : String(gl.getParameter(gl.RENDERER) ?? '');
+    return `${vendor}~${renderer}`.slice(0, 96);
+  } catch {
+    return 'webgl-err';
+  }
+}
+
 let cached: string | null = null;
 try {
   if (typeof globalThis.localStorage !== 'undefined' && typeof globalThis.localStorage.getItem === 'function') {
@@ -34,10 +48,19 @@ try {
   console.warn('Không đọc được device fingerprint từ localStorage:', err);
 }
 
-/** Device fingerprint nhẹ sinh cục bộ từ canvas + UA + màn hình + múi giờ (không dùng để định danh cá nhân). */
+/** Device fingerprint nhẹ sinh cục bộ từ canvas + WebGL + UA + màn hình + múi giờ (không dùng để định danh cá nhân). */
 export async function ensureDeviceFingerprint(): Promise<string> {
   if (cached) return cached;
-  const raw = [navigator.userAgent, navigator.language, screen.width, screen.height, screen.colorDepth, new Date().getTimezoneOffset(), canvasSignature()].join('|');
+  const raw = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width,
+    screen.height,
+    screen.colorDepth,
+    new Date().getTimezoneOffset(),
+    canvasSignature(),
+    webglSignature(),
+  ].join('|');
   cached = (await sha256Hex(raw)).slice(0, 32);
   try {
     if (typeof globalThis.localStorage !== 'undefined' && typeof globalThis.localStorage.setItem === 'function') {

@@ -8,18 +8,23 @@ import {
 } from '../config/database';
 import {
   AiCache,
+  Alert,
   AuditLog,
   AuditLogModel,
+  Bulletin,
+  DailyDigest,
   Incident,
   MediaAsset,
   OtpModel,
   OtpToken,
   ReportModel,
+  SecurityAuditLog,
   SessionModel,
   SpamLog,
   User,
   UserModel,
   Ward,
+  WeatherSnapshot,
 } from '../models';
 
 // Nạp biến môi trường từ cả backend/.env và ../.env (root workspace)
@@ -39,6 +44,11 @@ const MANAGED_MODELS = [
   OtpModel,
   SessionModel,
   AuditLogModel,
+  SecurityAuditLog,
+  WeatherSnapshot,
+  Alert,
+  Bulletin,
+  DailyDigest,
 ] as const;
 
 export interface MigrateIndexesOptions {

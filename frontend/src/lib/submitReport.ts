@@ -31,6 +31,8 @@ export interface SubmitInput {
   seniorSubmitted: boolean;
   edge?: EdgeStatsMsg;
   vision: VisionResult | null;
+  formLoadedAt?: number;
+  website?: string;
 }
 
 export function newKey(): string {
@@ -130,6 +132,8 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     isProxyReport: proxy,
     seniorSubmitted: input.seniorSubmitted,
     ...(input.edge ? { edge: input.edge } : {}),
+    ...(input.formLoadedAt ? { formLoadedAt: input.formLoadedAt } : {}),
+    ...(input.website ? { website: input.website } : {}),
   };
 
   await db.transaction('rw', db.reports, db.outboxQueue, async () => {

@@ -1,5 +1,5 @@
-import type { AuditEntry, Category, DynamicAiConfig, Notification, Report, ReportStatus, Role } from '../shared/types';
-import type { OtpChannel } from '../services/otpDelivery.service';
+import type { AuditEntry, Category, DynamicAiConfig, Notification, Report, ReportStatus, Role, TrustLevel } from '../shared/types';
+import type { OtpChannel, OtpPurpose } from '../services/otpDelivery.service';
 
 export interface UserRecord {
   id: string;
@@ -12,8 +12,15 @@ export interface UserRecord {
   wardCode: string | null;
   unitCode: string | null;
   defaultWardCode?: string | null;
+  followedWardCodes?: string[];
   notificationsEnabled?: boolean;
   revoked?: boolean;
+  tokenVersion?: number;
+  activeSessionId?: string | null;
+  trustLevel?: TrustLevel;
+  violationCount?: number;
+  lastLoginIp?: string | null;
+  lastLoginAt?: number | null;
   trustScore: number;
   badges: string[];
   volunteerHours: number;
@@ -25,8 +32,9 @@ export interface UserRecord {
 export interface OtpRecord {
   identifier: string;
   channel: OtpChannel;
-  purpose: 'login' | 'reset_password';
+  purpose: OtpPurpose;
   codeHash: string;
+  otpSalt?: string;
   expiresAt: number;
   resendAt: number;
   failedAttempts: number;
@@ -38,10 +46,17 @@ export interface SessionRecord {
   id: string;
   userId: string;
   refreshHash: string;
+  tokenHash?: string;
+  deviceFingerprint?: string;
+  ip?: string;
   userAgent: string;
+  tokenVersion?: number;
   createdAt: number;
+  lastActiveAt?: number;
   expiresAt: number;
+  isRevoked?: boolean;
   revokedAt: number | null;
+  revokedReason?: string | null;
   replacedBySessionId: string | null;
 }
 
@@ -52,9 +67,12 @@ export interface ImageFingerprintRecord {
   wardCode: string;
   category: Category;
   dHash: string;
+  flippedDHash?: string;
   pHash: string;
   centerHash: string;
   gridHashes: string[];
+  subGrid2x2?: string[];
+  colorHistogram?: number[];
   keypointCount: number;
   descriptorsBase64: string;
   lat: number;
@@ -185,10 +203,15 @@ export interface OtpRepository {
 }
 
 export interface SessionRepository {
+  get(id: string): Promise<SessionRecord | null>;
   getByRefreshHash(refreshHash: string): Promise<SessionRecord | null>;
+  listActive(filter?: { userId?: string; includeRevoked?: boolean; limit?: number }): Promise<SessionRecord[]>;
   save(rec: SessionRecord): Promise<void>;
-  revoke(id: string, replacedBySessionId?: string | null): Promise<void>;
-  revokeAllForUser(userId: string): Promise<void>;
+  touch(id: string, lastActiveAt: number, ip?: string): Promise<void>;
+  revoke(id: string, replacedBySessionId?: string | null, reason?: string | null): Promise<void>;
+  revokeAllForUser(userId: string, reason?: string | null): Promise<number>;
+  revokeAllExcept(userId: string, exceptSessionId: string, reason?: string | null): Promise<number>;
+  revokeAllSystem(exceptSessionId?: string | null, reason?: string | null): Promise<number>;
 }
 
 export interface DbHealthStats {

@@ -25,17 +25,21 @@ import type {
   RescueStageCode,
   Role,
   ScopeStats,
+  SessionInfo,
+  TrustLevel,
   UserProfile,
+  UserViolationEntry,
 } from '../shared/types';
 import type { Repositories, UserFilterQuery, UserRecord } from '../repositories/types';
 import { badRequest, conflict, forbidden, notFound } from '../utils/errors';
-import { hashPassword, newId } from '../utils/crypto';
+import { hashPassword, newId, validatePasswordStrength } from '../utils/crypto';
 import { assertScope, isAdminRole, loadStoredPhotoForVerification, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { AuditService } from './audit.service';
 import type { CacheService } from './cache.service';
 import type { EdgeStats, GeminiService } from './gemini.service';
 import type { MediaService } from './media.service';
 import { slaHoursFor } from './report.service';
+import { notifyAllSessionsTerminated, notifySessionTerminated } from './sessionEvents';
 import { toProfile, type TrustService } from './trust.service';
 
 export type QueueTab = 'emergency' | 'high' | 'open' | 'quarantine';
@@ -104,6 +108,7 @@ export class StaffService {
     private readonly audit: AuditService,
     private readonly cache?: CacheService,
     private readonly media?: MediaService,
+    private readonly onSessionsInvalidated?: (userId: string, exceptSessionId?: string | null) => void,
   ) {}
 
   private actor(u: UserRecord) {
@@ -268,8 +273,27 @@ export class StaffService {
     return toClientReport(r);
   }
 
-  /** Nghiệm thu chống báo cáo khống bằng Rust CV Engine (CLAHE + ORB/RANSAC `scene_match_score` + `resolution_score`). */
-  async resolve(u: UserRecord, id: string, afterPhoto: PhotoInput, note: string, override: boolean): Promise<{ report: ClientReport; accepted: boolean }> {
+  /** Nghiệm thu 4 bước Trước/Sau (Anti-Fake Forensics + Scene Match + Resolution Proof + Spatiotemporal GPS/EXIF). */
+  async resolve(
+    u: UserRecord,
+    id: string,
+    afterPhoto: PhotoInput,
+    note: string,
+    override: boolean,
+    opts?: {
+      lat?: number;
+      lng?: number;
+      edge?: EdgeStats;
+      exif?: {
+        capturedAt?: string | null;
+        cameraMake?: string | null;
+        cameraModel?: string | null;
+        software?: string | null;
+        gps?: { lat: number; lng: number; inBounds?: boolean } | null;
+      } | null;
+      allowTinyTestStub?: boolean;
+    },
+  ): Promise<{ report: ClientReport; accepted: boolean; resolutionStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED' }> {
     const r = await this.load(u, id);
     if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
       throw badRequest('Không thể nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
@@ -277,6 +301,19 @@ export class StaffService {
     const before = r.photos[0];
     const a = extractStaffPhoto(afterPhoto);
     const b = await loadStoredPhotoForVerification(before);
+
+    let afterLat = r.lat;
+    let afterLng = r.lng;
+    let explicitAfterCoords = false;
+    if (typeof opts?.lat === 'number' && typeof opts?.lng === 'number') {
+      afterLat = opts.lat;
+      afterLng = opts.lng;
+      explicitAfterCoords = true;
+    } else if (opts?.exif?.gps) {
+      afterLat = opts.exif.gps.lat;
+      afterLng = opts.exif.gps.lng;
+      explicitAfterCoords = true;
+    }
 
     const verdict = b.isSvg
       ? this.gemini.fallbackVerify({
@@ -289,6 +326,15 @@ export class StaffService {
           afterHash: afterPhoto.dHash,
           category: r.category,
           title: r.title,
+          beforeLat: r.lat,
+          beforeLng: r.lng,
+          afterLat,
+          afterLng,
+          explicitAfterCoords,
+          afterEdge: opts?.edge,
+          afterExif: opts?.exif,
+          reportCreatedAt: r.createdAt,
+          allowTinyTestStub: opts?.allowTinyTestStub,
         })
       : await this.gemini.verifyResolution({
           reportId: r.id,
@@ -302,33 +348,68 @@ export class StaffService {
           title: r.title,
           beforeLat: r.lat,
           beforeLng: r.lng,
-          afterLat: r.lat,
-          afterLng: r.lng,
+          afterLat,
+          afterLng,
+          explicitAfterCoords,
+          afterEdge: opts?.edge,
+          afterExif: opts?.exif,
+          reportCreatedAt: r.createdAt,
+          allowTinyTestStub: opts?.allowTinyTestStub,
         });
 
     const now = new Date().toISOString();
     const prev = snap(r);
+    const finalStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED' =
+      override ? 'AUTO_VERIFIED' : verdict.resolutionStatus;
+
+    r.resolutionStatus = finalStatus;
     r.resolution = {
-      resolutionVerified: verdict.resolutionVerified,
+      resolutionVerified: finalStatus === 'AUTO_VERIFIED',
+      resolutionStatus: finalStatus,
+      rejectedReasonCode: verdict.rejectedReasonCode,
       matchConfidence: verdict.matchConfidence,
       sceneMatchScore: verdict.sceneMatchScore,
       resolutionScore: verdict.resolutionScore,
+      ssimScore: verdict.ssimScore,
+      gpsDistanceMeters: verdict.gpsDistanceMeters,
+      temporalValid: verdict.temporalValid,
+      forensicPassed: verdict.forensicPassed,
+      forensics: verdict.forensics,
+      criteria: verdict.criteria,
       inlierKeypoints: verdict.inlierKeypoints,
       summary: verdict.summary,
       mode: verdict.mode,
       at: now,
     };
+    r.afterExif = verdict.forensics?.exifSummary ?? null;
     r.afterPhoto = await persistStaffPhoto(this.media, afterPhoto, 'after', u.id, r.id);
 
-    const accepted = verdict.resolutionVerified || override;
-    if (!accepted) {
+    if (finalStatus === 'PENDING_MODERATION') {
+      r.status = 'verifying';
+      r.timeline.push({
+        stage: 'verifying',
+        at: now,
+        note: `Ảnh hoàn thành đạt ${verdict.matchConfidence}% — chuyển Hàng đợi Kiểm duyệt Admin.`,
+      });
+      r.updatedAt = now;
+      await this.repos.reports.update(r);
+      this.cache?.invalidateReports();
+      await this.audit.log(this.actor(u), 'report.resolve_pending_moderation', r.id, prev, {
+        ...snap(r),
+        resolution: r.resolution,
+      });
+      return { report: toClientReport(r), accepted: false, resolutionStatus: 'PENDING_MODERATION' };
+    }
+
+    if (finalStatus !== 'AUTO_VERIFIED') {
       r.timeline.push({ stage: 'processing', at: now, note: `Nghiệm thu KHÔNG đạt: ${verdict.summary}` });
       r.updatedAt = now;
       await this.repos.reports.update(r);
       this.cache?.invalidateReports();
       await this.audit.log(this.actor(u), 'report.resolve_rejected', r.id, prev, { ...snap(r), resolution: r.resolution });
-      return { report: toClientReport(r), accepted: false };
+      return { report: toClientReport(r), accepted: false, resolutionStatus: 'REJECTED' };
     }
+
     r.status = 'resolved';
     r.resolvedAt = now;
     r.timeline.push({
@@ -344,7 +425,7 @@ export class StaffService {
       resolution: r.resolution,
     });
     await Promise.all(r.contributors.map((c) => this.trust.notify(c.userId, `Hồ sơ ${r.code} "${r.title}" đã được khắc phục và nghiệm thu.`, r.code)));
-    return { report: toClientReport(r), accepted: true };
+    return { report: toClientReport(r), accepted: true, resolutionStatus: 'AUTO_VERIFIED' };
   }
 
   auditList(limit: number): Promise<AuditEntry[]> {
@@ -419,8 +500,19 @@ export class StaffService {
     if (phone && (await this.repos.users.getByPhone(phone))) {
       throw badRequest(`Số điện thoại ${phone} đã được sử dụng.`, 'phone_exists');
     }
-    if (isStaffType && (!input.password || input.password.length < 8)) {
-      throw badRequest('Tài khoản nội bộ (ADMIN / OFFICER / RESCUE) bắt buộc có mật khẩu tối thiểu 8 ký tự.', 'password_required');
+    if (isStaffType) {
+      if (!input.password) {
+        throw badRequest('Tài khoản nội bộ (ADMIN / OFFICER / RESCUE) bắt buộc có mật khẩu mạnh.', 'password_required');
+      }
+      const pwCheck = validatePasswordStrength(input.password);
+      if (!pwCheck.valid) {
+        throw badRequest(pwCheck.reason ?? 'Mật khẩu chưa đạt chuẩn bảo mật.', 'weak_password');
+      }
+    } else if (input.password) {
+      const pwCheck = validatePasswordStrength(input.password);
+      if (!pwCheck.valid) {
+        throw badRequest(pwCheck.reason ?? 'Mật khẩu chưa đạt chuẩn bảo mật.', 'weak_password');
+      }
     }
 
     const rec: UserRecord = {
@@ -532,9 +624,27 @@ export class StaffService {
         throw badRequest('Không thể tự khóa tài khoản đang đăng nhập.', 'cannot_lock_self');
       }
       target.revoked = !patch.isActive;
-      if (target.revoked) {
-        await this.repos.sessions.revokeAllForUser(target.id);
-      }
+    }
+
+    const permissionChanged =
+      before.role !== target.role ||
+      before.wardCode !== target.wardCode ||
+      Boolean(target.revoked);
+
+    if (permissionChanged) {
+      target.tokenVersion = (target.tokenVersion ?? 0) + 1;
+      target.activeSessionId = null;
+      await this.repos.sessions.revokeAllForUser(
+        target.id,
+        target.revoked ? 'ACCOUNT_LOCKED' : 'ROLE_CHANGED',
+      );
+      this.onSessionsInvalidated?.(target.id);
+      notifySessionTerminated(target.id, {
+        code: 'SESSION_REVOKED',
+        message: target.revoked
+          ? 'Tài khoản của bạn đã bị quản trị viên khóa.'
+          : 'Quyền hạn tài khoản đã thay đổi — vui lòng đăng nhập lại.',
+      });
     }
 
     await this.repos.users.save(target);
@@ -551,13 +661,26 @@ export class StaffService {
 
   async resetUserPassword(actor: UserRecord, targetId: string, newPassword: string): Promise<{ ok: true }> {
     if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được đặt lại mật khẩu.');
-    if (newPassword.length < 8) throw badRequest('Mật khẩu mới tối thiểu 8 ký tự.');
+    const pwCheck = validatePasswordStrength(newPassword);
+    if (!pwCheck.valid) {
+      throw badRequest(pwCheck.reason ?? 'Mật khẩu mới chưa đạt chuẩn an toàn.', 'weak_password');
+    }
     const target = await this.repos.users.get(targetId);
     if (!target) throw notFound('Không tìm thấy tài khoản người dùng.');
     target.passwordHash = hashPassword(newPassword);
+    target.tokenVersion = (target.tokenVersion ?? 0) + 1;
+    target.activeSessionId = null;
     await this.repos.users.save(target);
-    await this.repos.sessions.revokeAllForUser(target.id);
-    await this.audit.log(this.actor(actor), 'admin.user_reset_password', target.id, null, { revokedSessions: true });
+    await this.repos.sessions.revokeAllForUser(target.id, 'PASSWORD_RESET_ADMIN');
+    this.onSessionsInvalidated?.(target.id);
+    notifySessionTerminated(target.id, {
+      code: 'SESSION_REVOKED',
+      message: 'Mật khẩu tài khoản vừa được quản trị viên đặt lại.',
+    });
+    await this.audit.log(this.actor(actor), 'admin.user_reset_password', target.id, null, {
+      revokedSessions: true,
+      tokenVersion: target.tokenVersion,
+    });
     return { ok: true };
   }
 
@@ -568,10 +691,369 @@ export class StaffService {
     }
     const target = await this.repos.users.get(targetId);
     if (!target) throw notFound('Không tìm thấy tài khoản người dùng.');
-    await this.repos.sessions.revokeAllForUser(target.id);
+    await this.repos.sessions.revokeAllForUser(target.id, 'ACCOUNT_DELETED');
+    this.onSessionsInvalidated?.(target.id);
+    notifySessionTerminated(target.id, {
+      code: 'SESSION_REVOKED',
+      message: 'Tài khoản đã bị xóa khỏi hệ thống.',
+    });
     await this.repos.users.delete(target.id);
     await this.audit.log(this.actor(actor), 'admin.user_delete', target.id, { role: target.role, name: target.name, staffCode: target.staffCode }, null);
     return { ok: true };
+  }
+
+  // ── Trung tâm Quản trị Phiên, Tin cậy, Kiểm toán & Hàng đợi Kiểm duyệt Thông minh ──
+  async listSessions(
+    actor: UserRecord,
+    opts?: { userId?: string; includeRevoked?: boolean; limit?: number },
+  ): Promise<SessionInfo[]> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới xem được danh sách phiên.');
+    const sessions = await this.repos.sessions.listActive({
+      userId: opts?.userId,
+      includeRevoked: opts?.includeRevoked ?? false,
+      limit: opts?.limit ?? 200,
+    });
+    const users = await this.repos.users.list();
+    const byUser = new Map(users.map((u) => [u.id, u]));
+    return sessions.map((s) => {
+      const u = byUser.get(s.userId);
+      return {
+        id: s.id,
+        userId: s.userId,
+        userName: u?.name ?? s.userId,
+        role: u ? normalizeRole(u.role) : undefined,
+        wardCode: u?.wardCode ?? null,
+        deviceFingerprint: s.deviceFingerprint || 'web-browser',
+        ip: s.ip || '0.0.0.0',
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        lastActiveAt: s.lastActiveAt ?? s.createdAt,
+        expiresAt: s.expiresAt,
+        isRevoked: Boolean(s.isRevoked || s.revokedAt !== null),
+        revokedAt: s.revokedAt,
+        revokedReason: s.revokedReason ?? null,
+      };
+    });
+  }
+
+  async revokeSessionById(actor: UserRecord, sessionId: string, ip?: string): Promise<{ ok: true }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được thu hồi phiên.');
+    const sess = await this.repos.sessions.get(sessionId);
+    if (!sess) throw notFound('Không tìm thấy phiên đăng nhập.');
+    await this.repos.sessions.revoke(sess.id, null, 'FORCE_LOGOUT');
+    const target = await this.repos.users.get(sess.userId);
+    if (target) {
+      target.tokenVersion = (target.tokenVersion ?? 0) + 1;
+      if (target.activeSessionId === sess.id) target.activeSessionId = null;
+      await this.repos.users.save(target);
+      this.onSessionsInvalidated?.(target.id);
+      notifySessionTerminated(target.id, {
+        targetSessionId: sess.id,
+        code: 'SESSION_REVOKED',
+        message: 'Phiên đăng nhập đã bị Quản trị viên thu hồi từ xa.',
+      });
+    }
+    await this.audit.log(
+      { ...this.actor(actor), ip },
+      'admin.session_revoke',
+      sess.userId,
+      { sessionId: sess.id, ip: sess.ip },
+      { revoked: true, reason: 'FORCE_LOGOUT' },
+      ip,
+    );
+    return { ok: true };
+  }
+
+  async forceLogoutUser(actor: UserRecord, targetId: string, ip?: string): Promise<{ ok: true; revokedCount: number }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được đăng xuất từ xa.');
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản.');
+    target.tokenVersion = (target.tokenVersion ?? 0) + 1;
+    target.activeSessionId = null;
+    await this.repos.users.save(target);
+    const revokedCount = await this.repos.sessions.revokeAllForUser(target.id, 'FORCE_LOGOUT');
+    this.onSessionsInvalidated?.(target.id);
+    notifySessionTerminated(target.id, {
+      code: 'SESSION_REVOKED',
+      message: 'Tài khoản đã bị Quản trị viên buộc đăng xuất từ xa.',
+    });
+    await this.audit.log(
+      { ...this.actor(actor), ip },
+      'admin.user_force_logout',
+      target.id,
+      null,
+      { revokedCount, tokenVersion: target.tokenVersion },
+      ip,
+    );
+    return { ok: true, revokedCount };
+  }
+
+  async forceLogoutAllSystem(
+    actor: UserRecord,
+    currentSessionId: string,
+    ip?: string,
+  ): Promise<{ ok: true; revokedCount: number }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được thu hồi toàn hệ thống.');
+    const revokedCount = await this.repos.sessions.revokeAllSystem(currentSessionId, 'FORCE_LOGOUT_SYSTEM');
+    const allUsers = await this.repos.users.list();
+    for (const u of allUsers) {
+      if (u.id === actor.id) continue;
+      if (u.activeSessionId) {
+        u.tokenVersion = (u.tokenVersion ?? 0) + 1;
+        u.activeSessionId = null;
+        await this.repos.users.save(u);
+      }
+      this.onSessionsInvalidated?.(u.id);
+    }
+    notifyAllSessionsTerminated(
+      currentSessionId,
+      'SESSION_REVOKED',
+      'Quản trị viên vừa thu hồi toàn bộ phiên đăng nhập trên hệ thống.',
+    );
+    await this.audit.log(
+      { ...this.actor(actor), ip },
+      'admin.system_force_logout_all',
+      'system',
+      null,
+      { revokedCount, preservedSessionId: currentSessionId },
+      ip,
+    );
+    return { ok: true, revokedCount };
+  }
+
+  async flagUserTrust(
+    actor: UserRecord,
+    targetId: string,
+    input: { trustLevel: TrustLevel; reason: string; trustScore?: number },
+    ip?: string,
+  ): Promise<UserProfile> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được gắn cờ tín nhiệm.');
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản.');
+    const before = {
+      trustLevel: target.trustLevel ?? 'normal',
+      trustScore: target.trustScore,
+      violationCount: target.violationCount ?? 0,
+    };
+    target.trustLevel = input.trustLevel;
+    if (input.trustScore !== undefined) {
+      target.trustScore = Math.max(0, Math.min(100, Math.round(input.trustScore)));
+    }
+    if (input.trustLevel === 'flagged') {
+      target.violationCount = (target.violationCount ?? 0) + 1;
+    }
+    await this.repos.users.save(target);
+    await this.audit.log(
+      { ...this.actor(actor), ip },
+      'admin.user_trust_flag',
+      target.id,
+      before,
+      { trustLevel: target.trustLevel, trustScore: target.trustScore, violationCount: target.violationCount, reason: input.reason },
+      ip,
+    );
+    return toProfile(target);
+  }
+
+  async getUserViolations(
+    actor: UserRecord,
+    targetId: string,
+  ): Promise<{ user: UserProfile; violations: UserViolationEntry[] }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới xem được lịch sử vi phạm.');
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản.');
+    const [logs, reports] = await Promise.all([
+      this.repos.audit.list(500),
+      this.repos.reports.list({}),
+    ]);
+    const violations: UserViolationEntry[] = [];
+    for (const r of reports) {
+      if (r.reporterId === targetId && (r.status === 'quarantined' || r.status === 'rejected')) {
+        violations.push({
+          id: `rep_${r.id}`,
+          action: r.status === 'quarantined' ? 'report.quarantined' : 'report.rejected',
+          detail: r.quarantine?.detail ?? `Hồ sơ ${r.code}: ${r.title} (${r.status})`,
+          reportId: r.id,
+          at: r.updatedAt,
+        });
+      }
+    }
+    for (const e of logs) {
+      if (
+        (e.targetId === targetId || e.actorId === targetId) &&
+        /(spam|reject|quarantine|trust_flag|reuse_detected|lock|revoke|blocked)/i.test(e.action)
+      ) {
+        violations.push({
+          id: e.id,
+          action: e.action,
+          detail: typeof e.afterState === 'string' ? e.afterState : JSON.stringify(e.afterState ?? e.action),
+          at: e.timestamp,
+        });
+      }
+    }
+    violations.sort((a, b) => b.at.localeCompare(a.at));
+    return { user: toProfile(target), violations: violations.slice(0, 100) };
+  }
+
+  async auditListFiltered(filter: {
+    limit?: number;
+    action?: string;
+    actorId?: string;
+    targetId?: string;
+    q?: string;
+  }): Promise<AuditEntry[]> {
+    const rows = await this.audit.list(Math.min(Math.max(filter.limit ?? 300, 1), 1000));
+    const q = filter.q?.trim().toLowerCase();
+    return rows.filter((e) => {
+      if (filter.action && !e.action.toLowerCase().includes(filter.action.toLowerCase())) return false;
+      if (filter.actorId && e.actorId !== filter.actorId) return false;
+      if (filter.targetId && e.targetId !== filter.targetId) return false;
+      if (q) {
+        const hay = `${e.action} ${e.actorName} ${e.targetId} ${JSON.stringify(e.afterState ?? '')}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  async auditExport(
+    actor: UserRecord,
+    filter: { action?: string; actorId?: string; targetId?: string; q?: string },
+    format: 'csv' | 'json',
+  ): Promise<{ body: string; contentType: string; filename: string }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Quản trị viên (ADMIN) mới được xuất Audit Log.');
+    const entries = await this.auditListFiltered({ ...filter, limit: 1000 });
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (format === 'json') {
+      return {
+        body: JSON.stringify({ exportedAt: new Date().toISOString(), total: entries.length, entries }, null, 2),
+        contentType: 'application/json; charset=utf-8',
+        filename: `audit-logs-${stamp}.json`,
+      };
+    }
+    const head = ['Seq', 'Thời gian', 'Actor ID', 'Người thao tác', 'Vai trò', 'Hành động', 'Mục tiêu', 'IP', 'Trước', 'Sau', 'Hash'];
+    const lines = entries.map((e) =>
+      [
+        e.seq,
+        e.timestamp,
+        e.actorId,
+        e.actorName,
+        e.role,
+        e.action,
+        e.targetId,
+        e.ip ?? '',
+        JSON.stringify(e.beforeState ?? null),
+        JSON.stringify(e.afterState ?? null),
+        e.hash,
+      ]
+        .map(csvCell)
+        .join(','),
+    );
+    return {
+      body: `\uFEFF${[head.map(csvCell).join(','), ...lines].join('\r\n')}`,
+      contentType: 'text/csv; charset=utf-8',
+      filename: `audit-logs-${stamp}.csv`,
+    };
+  }
+
+  async moderationQueue(
+    u: UserRecord,
+    scope: string,
+  ): Promise<
+    Array<{
+      report: ClientReport;
+      kind: 'report_intake' | 'resolution_proof';
+      authenticityScore: number;
+      forensicFlags: string[];
+      evidenceSummary: string;
+    }>
+  > {
+    const resolvedScope = this.resolveScope(u, scope);
+    const rows = await this.scoped(resolvedScope);
+    const items = rows.filter(
+      (r) =>
+        r.status === 'quarantined' ||
+        r.resolutionStatus === 'PENDING_MODERATION' ||
+        (r.ai?.moderationDecision === 'HUMAN_REVIEW' && r.status !== 'resolved' && r.status !== 'rejected'),
+    );
+    return items.map((r) => {
+      const isResolution = r.resolutionStatus === 'PENDING_MODERATION';
+      return {
+        report: toClientReport(r),
+        kind: isResolution ? ('resolution_proof' as const) : ('report_intake' as const),
+        authenticityScore: isResolution
+          ? (r.resolution?.matchConfidence ?? 0)
+          : (r.ai?.authenticityScore ?? 0),
+        forensicFlags: isResolution
+          ? (r.resolution?.forensics?.flags ?? [])
+          : [...(r.ai?.fraudFlags ?? []), ...(r.ai?.forensicFlags ?? [])],
+        evidenceSummary: isResolution
+          ? (r.resolution?.summary ?? 'Chờ Admin xác minh ảnh Trước/Sau')
+          : (r.quarantine?.detail ?? r.ai?.officerReviewNotes ?? 'Điểm tin cậy trung bình — cần kiểm duyệt thủ công'),
+      };
+    });
+  }
+
+  async decideModeration(
+    u: UserRecord,
+    id: string,
+    input: { decision: 'APPROVE' | 'REJECT'; note?: string },
+    ip?: string,
+  ): Promise<ClientReport> {
+    const r = await this.load(u, id);
+    const before = snap(r);
+    const now = new Date().toISOString();
+    const note = input.note?.trim() ?? '';
+
+    if (r.resolutionStatus === 'PENDING_MODERATION') {
+      if (input.decision === 'APPROVE') {
+        r.resolutionStatus = 'AUTO_VERIFIED';
+        if (r.resolution) r.resolution.resolutionVerified = true;
+        r.status = 'resolved';
+        r.resolvedAt = now;
+        if (r.rescueMission) {
+          r.rescueMission.status = 'completed';
+          r.rescueMission.stageCode = 'RESOLVED';
+          r.rescueMission.completedAt = now;
+        }
+        if (r.rescueStatus) r.rescueStatus = 'RESOLVED';
+        r.timeline.push({ stage: 'resolved', at: now, note: `Admin duyệt hoàn thành thủ công. ${note}`.trim() });
+        await this.trust.rewardVerified(r.reporterId);
+        await this.trust.notify(r.reporterId, `Phản ánh ${r.code} đã được Admin xác nhận hoàn thành.`, r.code);
+        await this.audit.log({ ...this.actor(u), ip }, 'moderation.resolution_approve', r.id, before, snap(r), ip);
+      } else {
+        r.resolutionStatus = 'REJECTED';
+        if (r.resolution) r.resolution.resolutionVerified = false;
+        r.afterPhoto = null;
+        r.status = r.department ? 'processing' : 'verifying';
+        if (r.rescueMission) r.rescueMission.status = 'in_progress';
+        if (r.rescueStatus === 'RESOLVED') r.rescueStatus = 'IN_PROGRESS';
+        r.timeline.push({ stage: 'processing', at: now, note: `Admin từ chối ảnh hoàn thành: ${note || 'Cần chụp lại ảnh hiện trường rõ hơn'}` });
+        await this.audit.log({ ...this.actor(u), ip }, 'moderation.resolution_reject', r.id, before, { ...snap(r), note }, ip);
+      }
+    } else if (r.status === 'quarantined' || r.ai?.moderationDecision === 'HUMAN_REVIEW') {
+      if (input.decision === 'APPROVE') {
+        r.status = 'received';
+        r.quarantine = null;
+        r.needsFieldVerification = false;
+        if (r.ai) r.ai.moderationDecision = 'AUTO_APPROVE';
+        r.timeline.push({ stage: 'received', at: now, note: `Admin kiểm duyệt thông qua. ${note}`.trim() });
+        await this.audit.log({ ...this.actor(u), ip }, 'moderation.report_approve', r.id, before, snap(r), ip);
+      } else {
+        r.status = 'rejected';
+        if (r.ai) r.ai.moderationDecision = 'AUTO_REJECT';
+        r.timeline.push({ stage: 'quarantined', at: now, note: `Admin từ chối sau kiểm duyệt: ${note || 'Không đạt kiểm định'}` });
+        await this.trust.penalizeSpam(r.reporterId);
+        await this.trust.notify(r.reporterId, `Phản ánh ${r.code} bị từ chối sau kiểm duyệt: ${note || 'Không hợp lệ'}.`, r.code);
+        await this.audit.log({ ...this.actor(u), ip }, 'moderation.report_reject', r.id, before, { ...snap(r), note }, ip);
+      }
+    } else {
+      throw badRequest('Hồ sơ không thuộc hàng đợi kiểm duyệt.', 'not_in_moderation');
+    }
+
+    r.updatedAt = now;
+    await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
+    return toClientReport(r);
   }
 
   // ── Backward-compatible Officer APIs (`/api/admin/staff`) ──────────────────
@@ -1239,13 +1721,32 @@ export class StaffService {
     afterPhoto?: PhotoInput,
     override = false,
     edge?: EdgeStats,
+    exif?: {
+      capturedAt?: string | null;
+      cameraMake?: string | null;
+      cameraModel?: string | null;
+      software?: string | null;
+      gps?: { lat: number; lng: number; inBounds?: boolean } | null;
+    } | null,
+    allowTinyTestStub?: boolean,
   ): Promise<RescueMissionItem> {
     if (step === 'resolved' && afterPhoto) {
-      const completed = await this.completeRescueMission(u, id, afterPhoto, note, override, edge, lat, lng);
-      if (!completed.accepted && !override) {
+      const completed = await this.completeRescueMission(
+        u,
+        id,
+        afterPhoto,
+        note,
+        override,
+        edge,
+        lat,
+        lng,
+        exif,
+        allowTinyTestStub,
+      );
+      if (!completed.accepted && completed.resolutionStatus === 'REJECTED' && !override) {
         throw badRequest(
           completed.report.resolution?.summary ?? 'AI chưa xác nhận hiện trường đã khắc phục.',
-          'ai_verify_rejected',
+          completed.report.resolution?.rejectedReasonCode ?? 'ai_verify_rejected',
         );
       }
       return completed.report;
@@ -1450,7 +1951,15 @@ export class StaffService {
     edge?: EdgeStats,
     lat?: number,
     lng?: number,
-  ): Promise<{ report: RescueMissionItem; accepted: boolean }> {
+    exif?: {
+      capturedAt?: string | null;
+      cameraMake?: string | null;
+      cameraModel?: string | null;
+      software?: string | null;
+      gps?: { lat: number; lng: number; inBounds?: boolean } | null;
+    } | null,
+    allowTinyTestStub?: boolean,
+  ): Promise<{ report: RescueMissionItem; accepted: boolean; resolutionStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED' }> {
     const r = await this.load(u, id);
     if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
       throw badRequest('Không thể hoàn tất nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
@@ -1462,12 +1971,18 @@ export class StaffService {
 
     let afterLat = r.lat;
     let afterLng = r.lng;
+    let explicitAfterCoords = false;
     if (lat !== undefined && lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng)) {
       const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
       if (norm.ok) {
         afterLat = norm.lat;
         afterLng = norm.lng;
+        explicitAfterCoords = true;
       }
+    } else if (exif?.gps) {
+      afterLat = exif.gps.lat;
+      afterLng = exif.gps.lng;
+      explicitAfterCoords = true;
     }
 
     const before = r.photos[0];
@@ -1485,7 +2000,15 @@ export class StaffService {
           afterHash: afterPhoto.dHash,
           category: r.category,
           title: r.title,
+          beforeLat: r.lat,
+          beforeLng: r.lng,
+          afterLat,
+          afterLng,
+          explicitAfterCoords,
           afterEdge: edge,
+          afterExif: exif,
+          reportCreatedAt: r.createdAt,
+          allowTinyTestStub,
         })
       : await this.gemini.verifyResolution({
           reportId: r.id,
@@ -1501,26 +2024,63 @@ export class StaffService {
           beforeLng: r.lng,
           afterLat,
           afterLng,
+          explicitAfterCoords,
           afterEdge: edge,
+          afterExif: exif,
+          reportCreatedAt: r.createdAt,
+          allowTinyTestStub,
         });
 
     const now = new Date().toISOString();
     const prev = snap(r);
+    const finalStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED' =
+      override ? 'AUTO_VERIFIED' : verdict.resolutionStatus;
+
+    r.resolutionStatus = finalStatus;
     r.resolution = {
-      resolutionVerified: verdict.resolutionVerified,
+      resolutionVerified: finalStatus === 'AUTO_VERIFIED',
+      resolutionStatus: finalStatus,
+      rejectedReasonCode: verdict.rejectedReasonCode,
       matchConfidence: verdict.matchConfidence,
       sceneMatchScore: verdict.sceneMatchScore,
       resolutionScore: verdict.resolutionScore,
+      ssimScore: verdict.ssimScore,
+      gpsDistanceMeters: verdict.gpsDistanceMeters,
+      temporalValid: verdict.temporalValid,
+      forensicPassed: verdict.forensicPassed,
+      forensics: verdict.forensics,
+      criteria: verdict.criteria,
       inlierKeypoints: verdict.inlierKeypoints,
       summary: verdict.summary,
       mode: verdict.mode,
       at: now,
     };
+    r.afterExif = verdict.forensics?.exifSummary ?? null;
     r.afterPhoto = await persistStaffPhoto(this.media, afterPhoto, 'after', u.id, r.id);
 
     const reporter = await this.repos.users.get(r.reporterId);
-    const accepted = verdict.resolutionVerified || override;
-    if (!accepted) {
+    if (finalStatus === 'PENDING_MODERATION') {
+      r.status = 'verifying';
+      r.timeline.push({
+        stage: 'verifying',
+        at: now,
+        note: `Ảnh hoàn thành đạt ${verdict.matchConfidence}% — chuyển Hàng đợi Kiểm duyệt để Admin xác nhận.`,
+      });
+      r.updatedAt = now;
+      await this.repos.reports.update(r);
+      this.cache?.invalidateReports();
+      await this.audit.log(this.actor(u), 'rescue.complete_pending_moderation', r.id, prev, {
+        ...snap(r),
+        resolution: r.resolution,
+      });
+      return {
+        report: this.enrichRescueItem(r, { lat: afterLat, lng: afterLng }, reporter),
+        accepted: false,
+        resolutionStatus: 'PENDING_MODERATION',
+      };
+    }
+
+    if (finalStatus !== 'AUTO_VERIFIED') {
       r.timeline.push({
         stage: 'processing',
         at: now,
@@ -1533,7 +2093,11 @@ export class StaffService {
         ...snap(r),
         resolution: r.resolution,
       });
-      return { report: this.enrichRescueItem(r, { lat: afterLat, lng: afterLng }, reporter), accepted: false };
+      return {
+        report: this.enrichRescueItem(r, { lat: afterLat, lng: afterLng }, reporter),
+        accepted: false,
+        resolutionStatus: 'REJECTED',
+      };
     }
 
     r.status = 'resolved';
@@ -1586,6 +2150,10 @@ export class StaffService {
         ),
       ),
     );
-    return { report: this.enrichRescueItem(r, { lat: afterLat, lng: afterLng }, reporter), accepted: true };
+    return {
+      report: this.enrichRescueItem(r, { lat: afterLat, lng: afterLng }, reporter),
+      accepted: true,
+      resolutionStatus: 'AUTO_VERIFIED',
+    };
   }
 }

@@ -60,7 +60,7 @@ function cookieHeader(cookies: Record<string, string>): string {
 
 async function req<T = any>(
   p: string,
-  opts: { method?: string; body?: unknown; token?: string; cookies?: Record<string, string>; ip?: string } = {},
+  opts: { method?: string; body?: unknown; token?: string; cookies?: Record<string, string>; ip?: string; headers?: Record<string, string> } = {},
 ): Promise<{ status: number; data: T; setCookies: Record<string, string>; rawSetCookie: string[] }> {
   const res = await fetch(`${base}${p}`, {
     method: opts.method ?? (opts.body ? 'POST' : 'GET'),
@@ -70,6 +70,7 @@ async function req<T = any>(
       ...(opts.cookies ? { Cookie: cookieHeader(opts.cookies) } : {}),
       ...(opts.ip ? { 'X-Forwarded-For': opts.ip } : {}),
       'X-Device-Fp': 'auth-test-fp-01',
+      ...(opts.headers ?? {}),
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
@@ -169,8 +170,8 @@ describe('Zero Mock Auth & Real OTP Lifecycle', () => {
     expect(v1.data.user.defaultWardCode).toBe('DN-LTH');
     expect(v1.setCookies.sc_access).toBeTruthy();
     expect(v1.setCookies.sc_refresh).toBeTruthy();
-    expect(v1.rawSetCookie.some((c) => c.startsWith('sc_access=') && c.includes('HttpOnly') && c.includes('SameSite=Lax'))).toBe(true);
-    expect(v1.rawSetCookie.some((c) => c.startsWith('sc_refresh=') && c.includes('HttpOnly') && c.includes('SameSite=Lax'))).toBe(true);
+    expect(v1.rawSetCookie.some((c) => c.startsWith('sc_access=') && c.includes('HttpOnly') && c.includes('SameSite=Strict'))).toBe(true);
+    expect(v1.rawSetCookie.some((c) => c.startsWith('sc_refresh=') && c.includes('HttpOnly') && c.includes('SameSite=Strict'))).toBe(true);
 
     // Chống replay: dùng lại đúng mã OTP vừa xác thực phải bị từ chối
     const replay = await req<any>('/api/auth/otp/verify', { body: { identifier: email, code } });
@@ -309,10 +310,18 @@ describe('Zero Mock Auth & Real OTP Lifecycle', () => {
     expect(officerLogin.status).toBe(200);
     expect((await req('/api/admin/overview', { token: officerLogin.data.token })).status).toBe(200);
 
-    // City Admin thu hồi quyền
+    // City Admin thu hồi quyền (yêu cầu Re-auth khi thiếu, thực thi khi có X-Reauth-Password)
+    const revokedUnauth = await req<any>(`/api/admin/staff/${created.data.id}/revoke`, {
+      method: 'PATCH',
+      token: city.data.token,
+      body: { revoked: true },
+    });
+    expect(revokedUnauth.status).toBe(403);
+
     const revoked = await req<any>(`/api/admin/staff/${created.data.id}/revoke`, {
       method: 'PATCH',
       token: city.data.token,
+      headers: { 'X-Reauth-Password': INITIAL_STAFF_PASSWORD },
       body: { revoked: true },
     });
     expect(revoked.status).toBe(200);

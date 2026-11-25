@@ -10,6 +10,14 @@
 
 import { normalizeCoordinates } from '@shared/coordinates';
 import { inDongNaiBBox } from '@shared/geo';
+import {
+  computeColorHistogram24,
+  computeDHashFromGrayRegion,
+  computeEdgeStatsAndScreenshot,
+  computePHashFromGray,
+  computeSubGridHashesFromGray,
+  rgbaToGray,
+} from '../lib/localCvMath';
 
 interface WorkerScope {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -39,6 +47,9 @@ export interface EdgeStatsMsg {
   brightness: number;
   flatRatio: number;
   aspect: number;
+  sharpEdgeDensity?: number;
+  likelyScreenshot?: boolean;
+  screenshotConfidence?: number;
 }
 
 export type ImageProcessorRequest =
@@ -54,6 +65,9 @@ export type ImageProcessorResponse =
       displayBuffer: ArrayBuffer;
       displayMimeType: string;
       dHash: string;
+      pHash: string;
+      subGridHashes: string[];
+      colorHistogram: number[];
       width: number;
       height: number;
       originalBytes: number;
@@ -121,9 +135,9 @@ function extractPngSoftware(buf: ArrayBuffer): string | null {
       const len = view.getUint32(offset, false);
       const type = readAsciiString(view, offset + 4, 4);
       if (type === 'IDAT' || type === 'IEND') break;
-      if ((type === 'tEXt' || type === 'iTXt') && len > 0 && len <= 2048 && offset + 8 + len <= view.byteLength) {
+      if ((type === 'tEXt' || type === 'iTXt' || type === 'zTXt') && len > 0 && len <= 4096 && offset + 8 + len <= view.byteLength) {
         const text = readAsciiString(view, offset + 8, len);
-        if (/(software|photoshop|midjourney|stable|screenshot|snipping|canva|figma|gimp|creator)/i.test(text)) {
+        if (/(software|photoshop|midjourney|dall-?e|stable\s*diffusion|firefly|c2pa|trainedalgorithmic|generative\s*ai|ai\s*generated|screenshot|snipping|canva|capcut|remini|figma|gimp|creator)/i.test(text)) {
           chunks.push(text);
         }
       }
@@ -144,10 +158,28 @@ export function extractExifMetadata(buf: ArrayBuffer): ExtractedExifMetadata {
     software: null,
   };
   try {
+    // Quét nhanh chữ ký XMP / C2PA / JUMBF AI trong 48KB đầu mọi định dạng ảnh (JPEG/PNG/WebP)
+    let rawHeaderSw: string | null = null;
+    try {
+      const scanLen = Math.min(buf.byteLength, 48_000);
+      const bytes = new Uint8Array(buf, 0, scanLen);
+      let ascii = '';
+      for (let i = 0; i < bytes.length; i++) {
+        const c = bytes[i];
+        ascii += c >= 32 && c <= 126 ? String.fromCharCode(c) : ' ';
+      }
+      const m = ascii.match(
+        /(c2pa\.claim|trainedalgorithmicmedia|c2pa|midjourney|dall[-\s·]?e|stable\s*diffusion|adobe\s*firefly|photoshop|canva|capcut|remini|generative\s*ai)/i,
+      );
+      if (m) rawHeaderSw = m[1];
+    } catch {
+      /* ignore binary scan err */
+    }
+
     const view = new DataView(buf);
-    if (view.byteLength < 12) return empty;
+    if (view.byteLength < 12) return rawHeaderSw ? { ...empty, software: rawHeaderSw } : empty;
     if (view.getUint16(0, false) !== 0xffd8) {
-      const pngSw = extractPngSoftware(buf);
+      const pngSw = extractPngSoftware(buf) ?? rawHeaderSw;
       return pngSw ? { ...empty, software: pngSw } : empty;
     }
 
@@ -269,82 +301,35 @@ export function extractExifMetadata(buf: ArrayBuffer): ExtractedExifMetadata {
   return empty;
 }
 
-function grayscaleOf(source: ImageBitmap | OffscreenCanvas, w: number, h: number): Float32Array {
-  const c = new OffscreenCanvas(w, h);
+function extractWorkerCvFeatures(
+  source: ImageBitmap | OffscreenCanvas,
+  aspect: number,
+  hasCameraExif: boolean,
+): {
+  dHash: string;
+  pHash: string;
+  subGridHashes: string[];
+  colorHistogram: number[];
+  stats: EdgeStatsMsg;
+} {
+  const W = 128;
+  const H = Math.max(32, Math.min(256, Math.round(W / Math.max(0.25, aspect))));
+  const c = new OffscreenCanvas(W, H);
   const g = c.getContext('2d', { willReadFrequently: true });
   if (!g) throw new Error('Không tạo được ngữ cảnh 2D trong Worker');
   g.imageSmoothingEnabled = true;
   g.imageSmoothingQuality = 'high';
-  g.drawImage(source, 0, 0, w, h);
-  const { data } = g.getImageData(0, 0, w, h);
-  const out = new Float32Array(w * h);
-  for (let i = 0, p = 0; i < out.length; i++, p += 4) {
-    out[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
-  }
-  return out;
-}
+  g.drawImage(source, 0, 0, W, H);
+  const { data } = g.getImageData(0, 0, W, H);
+  const gray = rgbaToGray(data, W, H);
 
-function dHash64(source: ImageBitmap | OffscreenCanvas): string {
-  const gray = grayscaleOf(source, 9, 8);
-  const nibbles: number[] = [];
-  let cur = 0;
-  let bits = 0;
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 8; x++) {
-      cur = (cur << 1) | (gray[y * 9 + x] > gray[y * 9 + x + 1] ? 1 : 0);
-      bits += 1;
-      if (bits === 4) {
-        nibbles.push(cur);
-        cur = 0;
-        bits = 0;
-      }
-    }
-  }
-  return nibbles.map((n) => n.toString(16)).join('');
-}
-
-function computeEdgeStats(source: ImageBitmap | OffscreenCanvas, aspect: number): EdgeStatsMsg {
-  const W = 128;
-  const H = Math.max(16, Math.round(W / Math.max(0.1, aspect)));
-  const g = grayscaleOf(source, W, H);
-  let sum = 0;
-  for (let i = 0; i < g.length; i++) sum += g[i];
-  const brightness = sum / g.length;
-
-  let lapSum = 0;
-  let lapSq = 0;
-  let n = 0;
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x;
-      const lap = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - W] - g[i + W];
-      lapSum += lap;
-      lapSq += lap * lap;
-      n += 1;
-    }
-  }
-  const mean = lapSum / Math.max(1, n);
-  const blurScore = lapSq / Math.max(1, n) - mean * mean;
-
-  let flat = 0;
-  let blocks = 0;
-  for (let by = 0; by + 8 <= H; by += 8) {
-    for (let bx = 0; bx + 8 <= W; bx += 8) {
-      let s = 0;
-      let sq = 0;
-      for (let y = 0; y < 8; y++) {
-        for (let x = 0; x < 8; x++) {
-          const v = g[(by + y) * W + bx + x];
-          s += v;
-          sq += v * v;
-        }
-      }
-      const variance = sq / 64 - (s / 64) ** 2;
-      if (variance < 12) flat += 1;
-      blocks += 1;
-    }
-  }
-  return { blurScore, brightness, flatRatio: blocks ? flat / blocks : 0, aspect };
+  return {
+    dHash: computeDHashFromGrayRegion(gray, W, 0, 0, W, H),
+    pHash: computePHashFromGray(gray, W, H),
+    subGridHashes: computeSubGridHashesFromGray(gray, W, H),
+    colorHistogram: computeColorHistogram24(data),
+    stats: computeEdgeStatsAndScreenshot(gray, W, H, aspect, hasCameraExif),
+  };
 }
 
 async function encodeWebPWithFallback(
@@ -402,9 +387,9 @@ async function processImage(id: number, rawBuf: ArrayBuffer, mimeType: string, o
     ]);
 
     const t1 = performance.now();
-    const dHash = dHash64(ai.canvas);
+    const hasCameraExif = Boolean(exif.cameraMake || exif.cameraModel);
+    const cv = extractWorkerCvFeatures(ai.canvas, bmp.width / Math.max(1, bmp.height), hasCameraExif);
     const hashMs = performance.now() - t1;
-    const stats = computeEdgeStats(ai.canvas, bmp.width / Math.max(1, bmp.height));
 
     const msg: ImageProcessorResponse = {
       id,
@@ -413,13 +398,16 @@ async function processImage(id: number, rawBuf: ArrayBuffer, mimeType: string, o
       aiMimeType: aiEncoded.mimeType,
       displayBuffer: displayEncoded.buffer,
       displayMimeType: displayEncoded.mimeType,
-      dHash,
+      dHash: cv.dHash,
+      pHash: cv.pHash,
+      subGridHashes: cv.subGridHashes,
+      colorHistogram: cv.colorHistogram,
       width: display.width,
       height: display.height,
       originalBytes,
       aiBytes: aiEncoded.buffer.byteLength,
       displayBytes: displayEncoded.buffer.byteLength,
-      stats,
+      stats: cv.stats,
       exif,
       timings: { totalMs: performance.now() - t0, hashMs },
     };

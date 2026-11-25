@@ -167,7 +167,12 @@ export async function processOutbox(): Promise<void> {
               }
             } catch { /* bỏ qua nếu storage không khả dụng */ }
           }
-          await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: message });
+          if (item.kind === 'create_report' || item.kind === 'proxy_report') {
+            await db.reports.delete(item.targetId);
+            await db.outboxQueue.delete(item.id);
+          } else {
+            await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: message });
+          }
           emit({ type: 'item_failed', item, message });
         }
       }

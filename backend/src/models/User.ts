@@ -33,6 +33,7 @@ export interface IUser extends HybridSyncFields {
   staffCode?: string;
   passwordHash?: string | null;
   wardCode?: string | null;
+  followedWardCodes?: string[];
   fullName: string;
   role: UserRole;
   assignedArea?: AssignedArea;
@@ -114,6 +115,10 @@ const userSchema = new Schema<IUser>(
       uppercase: true,
       maxlength: 16,
       default: null,
+    },
+    followedWardCodes: {
+      type: [String],
+      default: [],
     },
     fullName: {
       type: String,

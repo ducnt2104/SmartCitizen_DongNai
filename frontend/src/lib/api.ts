@@ -1,6 +1,7 @@
 import type { AuthSession } from '@shared/types';
 import { authStore } from './authStore';
 import { deviceFingerprintSync } from './deviceFp';
+import { requiresPowSolution, solvePowHeader } from './securityChallenge';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 
@@ -28,10 +29,55 @@ export interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   token?: string | null;
+  headers?: Record<string, string>;
   signal?: AbortSignal;
   timeoutMs?: number;
   /** Nội bộ: tránh đệ quy khi gọi /api/auth/refresh */
   _retried?: boolean;
+}
+
+export interface SessionTerminatedDetail {
+  code: string;
+  message: string;
+}
+
+export const sessionTerminatedBus = new EventTarget();
+
+let lastSessionTerminationMsgAt = 0;
+function emitSessionTerminated(code: string, message: string): void {
+  authStore.clear();
+  const now = Date.now();
+  if (now - lastSessionTerminationMsgAt > 1200) {
+    lastSessionTerminationMsgAt = now;
+    sessionTerminatedBus.dispatchEvent(
+      new CustomEvent<SessionTerminatedDetail>('terminated', { detail: { code, message } }),
+    );
+  }
+}
+
+let cachedReauthToken: { token: string; expiresAt: number } | null = null;
+
+export function getCachedReauthHeader(): Record<string, string> {
+  if (cachedReauthToken && cachedReauthToken.expiresAt > Date.now() + 5000) {
+    return { 'X-Reauth-Token': cachedReauthToken.token };
+  }
+  return {};
+}
+
+export async function authenticateReauth(currentPassword: string): Promise<string> {
+  const res = await api<{ reauthToken: string; expiresInSec: number }>('/api/auth/reauth', {
+    method: 'POST',
+    body: { currentPassword },
+  });
+  cachedReauthToken = {
+    token: res.reauthToken,
+    expiresAt: Date.now() + res.expiresInSec * 1000,
+  };
+  return res.reauthToken;
+}
+
+export function clearCachedReauth(): void {
+  cachedReauthToken = null;
 }
 
 export function apiUrl(path: string): string {
@@ -43,6 +89,7 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
   return {
     'X-Device-Fp': deviceFingerprintSync(),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...getCachedReauthHeader(),
     ...extra,
   };
 }
@@ -59,7 +106,16 @@ async function tryRefreshSession(): Promise<boolean> {
         credentials: 'include',
         headers: { 'X-Device-Fp': deviceFingerprintSync() },
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        const errJson = (await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
+        if (errJson?.error?.code === 'SESSION_REPLACED' || errJson?.error?.code === 'SESSION_COMPROMISED') {
+          emitSessionTerminated(
+            errJson.error.code,
+            errJson.error.message ?? 'Tài khoản đã được đăng nhập trên thiết bị khác.',
+          );
+        }
+        return false;
+      }
       const session = (await res.json()) as AuthSession;
       authStore.set(session);
       return true;
@@ -86,40 +142,73 @@ async function parseJsonResponse<T>(
   alreadyRetried: boolean | undefined,
   retry: () => Promise<T>,
 ): Promise<T> {
+  let preParsedData: unknown = null;
+  let hasPreParsed = false;
+
   if (res.status === 401 && !alreadyRetried && !path.startsWith('/api/auth/')) {
-    const refreshed = await tryRefreshSession();
-    if (refreshed) {
-      return retry();
+    const rawText = await res.clone().text().catch(() => '');
+    try {
+      preParsedData = rawText ? JSON.parse(rawText) : null;
+      hasPreParsed = true;
+    } catch {
+      preParsedData = null;
+    }
+    const errCode = (preParsedData as { error?: { code?: string } } | null)?.error?.code;
+    const isTerminated =
+      errCode === 'SESSION_REPLACED' || errCode === 'SESSION_REVOKED' || errCode === 'SESSION_COMPROMISED';
+    if (!isTerminated) {
+      const refreshed = await tryRefreshSession();
+      if (refreshed) {
+        return retry();
+      }
     }
   }
 
-  const text = await res.text();
-  let data: unknown = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new ApiError(res.status, 'bad_response', 'Máy chủ trả về dữ liệu không hợp lệ');
-    }
-  }
+  const text = hasPreParsed ? '' : await res.text();
+  const data: unknown = hasPreParsed
+    ? preParsedData
+    : (() => {
+        if (!text) return null;
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new ApiError(res.status, 'bad_response', 'Máy chủ trả về dữ liệu không hợp lệ');
+        }
+      })();
   if (!res.ok) {
     const e = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
-    if (res.status === 401 && authStore.token()) authStore.clear();
+    if (res.status === 401) {
+      const code = e?.code ?? 'unauthorized';
+      if (code === 'SESSION_REPLACED' || code === 'SESSION_REVOKED' || code === 'SESSION_COMPROMISED') {
+        emitSessionTerminated(code, e?.message ?? 'Tài khoản đã được đăng nhập trên thiết bị khác.');
+      } else if (authStore.token()) {
+        authStore.clear();
+      }
+    }
     throw new ApiError(res.status, e?.code ?? 'error', e?.message ?? `Lỗi ${res.status}`, e?.details);
   }
   return data as T;
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+  const method = opts.method ?? (opts.body === undefined ? 'GET' : 'POST');
+  const powHeaders: Record<string, string> = {};
+  if (requiresPowSolution(path, method) && !opts.headers?.['X-PoW-Solution']) {
+    powHeaders['X-PoW-Solution'] = await solvePowHeader(BASE, authHeaders());
+  }
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
   opts.signal?.addEventListener('abort', () => ctrl.abort());
   let res: Response;
   try {
     res = await fetch(apiUrl(path), {
-      method: opts.method ?? (opts.body === undefined ? 'GET' : 'POST'),
+      method,
       credentials: 'include',
-      headers: authHeaders(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      headers: authHeaders({
+        ...(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...powHeaders,
+        ...(opts.headers ?? {}),
+      }),
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: ctrl.signal,
     });
@@ -133,15 +222,20 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 }
 
 export async function apiMultipart<T>(path: string, opts: MultipartOptions): Promise<T> {
+  const method = opts.method ?? 'POST';
+  const powHeaders: Record<string, string> = {};
+  if (requiresPowSolution(path, method)) {
+    powHeaders['X-PoW-Solution'] = await solvePowHeader(BASE, authHeaders());
+  }
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30000);
   opts.signal?.addEventListener('abort', () => ctrl.abort());
   let res: Response;
   try {
     res = await fetch(apiUrl(path), {
-      method: opts.method ?? 'POST',
+      method,
       credentials: 'include',
-      headers: authHeaders(),
+      headers: authHeaders(powHeaders),
       body: opts.body,
       signal: ctrl.signal,
     });

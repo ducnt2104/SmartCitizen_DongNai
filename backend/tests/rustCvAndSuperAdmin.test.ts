@@ -366,10 +366,28 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     });
     expect(offLogin1.status).toBe(200);
 
+    // Thao tác nguy hiểm thiếu Re-auth phải bị chặn 403 REAUTH_REQUIRED
+    const unauthPatch = await call<any>(`/api/admin/users/${officerId}`, {
+      method: 'PATCH',
+      token: saToken,
+      body: { role: 'ADMIN', wardCode: null, name: 'Võ Minh Quân (TP)' },
+    });
+    expect(unauthPatch.status).toBe(403);
+    expect(unauthPatch.data.error.code).toBe('REAUTH_REQUIRED');
+
+    // Lấy Re-auth Token hợp lệ cho phiên Admin
+    const reauthRes = await call<any>('/api/auth/reauth', {
+      token: saToken,
+      body: { currentPassword: superPassword },
+    });
+    expect(reauthRes.status).toBe(200);
+    const reauthHeaders = { 'X-Reauth-Token': reauthRes.data.reauthToken as string };
+
     // Sửa thông tin & đổi quyền sang ADMIN
     const updated = await call<any>(`/api/admin/users/${officerId}`, {
       method: 'PATCH',
       token: saToken,
+      headers: reauthHeaders,
       body: { role: 'ADMIN', wardCode: null, name: 'Võ Minh Quân (TP)' },
     });
     expect(updated.status).toBe(200);
@@ -379,6 +397,7 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     // Reset mật khẩu
     const resetRes = await call(`/api/admin/users/${officerId}/reset-password`, {
       token: saToken,
+      headers: reauthHeaders,
       body: { newPassword: 'ResetPassword@2026!' },
     });
     expect(resetRes.status).toBe(200);
@@ -387,6 +406,7 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     const locked = await call<any>(`/api/admin/users/${officerId}`, {
       method: 'PATCH',
       token: saToken,
+      headers: reauthHeaders,
       body: { isActive: false },
     });
     expect(locked.status).toBe(200);
@@ -398,15 +418,16 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     expect(lockedLogin.status).toBe(403);
 
     // Chặn tự xóa chính Super Admin đang đăng nhập
-    const selfDel = await call<any>(`/api/admin/users/${saId}`, { method: 'DELETE', token: saToken });
+    const selfDel = await call<any>(`/api/admin/users/${saId}`, { method: 'DELETE', token: saToken, headers: reauthHeaders });
     expect(selfDel.status).toBe(400);
     expect(selfDel.data.error.code).toBe('cannot_delete_self');
 
     // Xóa tài khoản test thành công & tinh chỉnh ngưỡng AI động
-    expect((await call(`/api/admin/users/${officerId}`, { method: 'DELETE', token: saToken })).status).toBe(200);
+    expect((await call(`/api/admin/users/${officerId}`, { method: 'DELETE', token: saToken, headers: reauthHeaders })).status).toBe(200);
     const patchedCfg = await call<any>('/api/admin/ai-config', {
       method: 'PATCH',
       token: saToken,
+      headers: reauthHeaders,
       body: { screenshotThreshold: 50, sceneMatchThreshold: 65, resolutionThreshold: 75 },
     });
     expect(patchedCfg.status).toBe(200);
@@ -465,12 +486,11 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
         photo: croppedSubImage,
       },
     });
-    expect(cropAttempt.status).toBe(201);
-    expect(cropAttempt.data.outcome).toBe('quarantined');
-    expect(cropAttempt.data.report.quarantine.reason).toBe('duplicate_image');
-    expect(cropAttempt.data.report.quarantine.relatedReportId).toBe(masterReportId);
+    expect(cropAttempt.status).toBe(422);
+    expect(cropAttempt.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
+    expect(cropAttempt.data.error.details.relatedReportId).toBe(masterReportId);
 
-    // 3C. Kẻ xấu gửi Ảnh Chụp Màn Hình Điện Thoại -> bị Rust 3-Tier Forensics chặn ngay vào Cách ly!
+    // 3C. Kẻ xấu gửi Ảnh Chụp Màn Hình Điện Thoại -> bị Tầng 2 Gatekeeper chặn ngay (HTTP 422)!
     const screenshotImg = makeMobileScreenshot();
     const screenAttempt = await call<any>('/api/reports', {
       token: citizen2,
@@ -485,9 +505,13 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
         photo: screenshotImg,
       },
     });
-    expect(screenAttempt.status).toBe(201);
-    expect(screenAttempt.data.outcome).toBe('quarantined');
-    expect(screenAttempt.data.report.quarantine.reason).toBe('low_authenticity');
+    expect(screenAttempt.status).toBe(422);
+    expect(screenAttempt.data.error.code).toBe('SCREENSHOT_DETECTED');
+
+    // Xác nhận cả 2 báo cáo giả đều KHÔNG lọt lên bản đồ công khai
+    const publicAfterFakes = await call<any[]>('/api/reports?scope=city');
+    expect(publicAfterFakes.status).toBe(200);
+    expect(publicAfterFakes.data.some((r) => r.title.includes('Ảnh cắt từ góc nhỏ') || r.title.includes('Ảnh chụp màn hình'))).toBe(false);
 
     // 3D. Nghiệm thu Trước & Sau Xử Lý:
     // - Nếu gửi ảnh SAU vẫn còn nguyên đống rác (dù tối hơn 80%) -> BỊ TỪ CHỐI!

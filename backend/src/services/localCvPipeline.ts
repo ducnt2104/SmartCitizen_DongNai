@@ -10,6 +10,7 @@
 import { performance } from 'node:perf_hooks';
 import sharp from 'sharp';
 import { hammingDistance } from '../shared/dhash';
+import { predictWithLocalOnnxModel } from './ai/localOnnxRunner';
 
 sharp.cache(false);
 sharp.concurrency(2);
@@ -60,24 +61,36 @@ function computeDHashFromGray(gray: Uint8Array, strideW: number, x0: number, y0:
   return nibbles.join('');
 }
 
-function computeAverageHashFromGray(gray: Uint8Array, strideW: number, w: number, h: number): string {
-  const sample = new Float32Array(64);
-  let sum = 0;
-  for (let gy = 0; gy < 8; gy++) {
-    const sy = Math.min(h - 1, Math.floor(((gy + 0.5) * h) / 8));
-    for (let gx = 0; gx < 8; gx++) {
-      const sx = Math.min(w - 1, Math.floor(((gx + 0.5) * w) / 8));
-      const v = gray[sy * strideW + sx];
-      sample[gy * 8 + gx] = v;
-      sum += v;
+export function computePHashFromGray(gray: Uint8Array, width: number, height: number): string {
+  const N = 32;
+  const sample = new Float64Array(N * N);
+  for (let y = 0; y < N; y++) {
+    const sy = Math.min(height - 1, Math.floor(((y + 0.5) * height) / N));
+    for (let x = 0; x < N; x++) {
+      const sx = Math.min(width - 1, Math.floor(((x + 0.5) * width) / N));
+      sample[y * N + x] = gray[sy * width + sx];
     }
   }
-  const mean = sum / 64;
+  const coeffs = new Float64Array(64);
+  for (let u = 0; u < 8; u++) {
+    for (let v = 0; v < 8; v++) {
+      let sum = 0;
+      for (let y = 0; y < N; y++) {
+        const cy = Math.cos(((2 * y + 1) * u * Math.PI) / (2 * N));
+        for (let x = 0; x < N; x++) {
+          sum += sample[y * N + x] * cy * Math.cos(((2 * x + 1) * v * Math.PI) / (2 * N));
+        }
+      }
+      coeffs[u * 8 + v] = sum;
+    }
+  }
+  const ac = Array.from(coeffs.slice(1)).sort((a, b) => a - b);
+  const median = ac[Math.floor(ac.length / 2)] ?? 0;
   const nibbles: string[] = [];
   let acc = 0;
   let bits = 0;
   for (let i = 0; i < 64; i++) {
-    acc = (acc << 1) | (sample[i] >= mean ? 1 : 0);
+    acc = (acc << 1) | (i > 0 && coeffs[i] > median ? 1 : 0);
     bits += 1;
     if (bits === 4) {
       nibbles.push(acc.toString(16));
@@ -86,6 +99,72 @@ function computeAverageHashFromGray(gray: Uint8Array, strideW: number, w: number
     }
   }
   return nibbles.join('');
+}
+
+function computeSsimAndEdgeDiffServer(
+  beforeGray: Uint8Array,
+  afterGray: Uint8Array,
+  size: number,
+): { ssim: number; upperSsim: number; edgeDiffRatio: number } {
+  const C1 = (0.01 * 255) ** 2;
+  const C2 = (0.03 * 255) ** 2;
+  let ssimSum = 0;
+  let upperSum = 0;
+  let blocks = 0;
+  let upperBlocks = 0;
+  const upperCut = Math.floor(size * 0.52);
+
+  for (let by = 0; by + 8 <= size; by += 8) {
+    for (let bx = 0; bx + 8 <= size; bx += 8) {
+      let sA = 0;
+      let sB = 0;
+      let qA = 0;
+      let qB = 0;
+      let mAB = 0;
+      for (let dy = 0; dy < 8; dy++) {
+        const row = (by + dy) * size + bx;
+        for (let dx = 0; dx < 8; dx++) {
+          const a = beforeGray[row + dx];
+          const b = afterGray[row + dx];
+          sA += a;
+          sB += b;
+          qA += a * a;
+          qB += b * b;
+          mAB += a * b;
+        }
+      }
+      const muA = sA / 64;
+      const muB = sB / 64;
+      const vA = Math.max(0, qA / 64 - muA * muA);
+      const vB = Math.max(0, qB / 64 - muB * muB);
+      const cAB = mAB / 64 - muA * muB;
+      const ssim = ((2 * muA * muB + C1) * (2 * cAB + C2)) / ((muA * muA + muB * muB + C1) * (vA + vB + C2));
+      ssimSum += ssim;
+      blocks += 1;
+      if (by + 8 <= upperCut) {
+        upperSum += ssim;
+        upperBlocks += 1;
+      }
+    }
+  }
+
+  let edgeDiff = 0;
+  let edgeEnergy = 0;
+  for (let y = Math.floor(size * 0.25); y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const i = y * size + x;
+      const gB = Math.abs(beforeGray[i + 1] - beforeGray[i - 1]) + Math.abs(beforeGray[i + size] - beforeGray[i - size]);
+      const gA = Math.abs(afterGray[i + 1] - afterGray[i - 1]) + Math.abs(afterGray[i + size] - afterGray[i - size]);
+      edgeDiff += Math.abs(gB - gA);
+      edgeEnergy += Math.max(gB, gA, 1);
+    }
+  }
+
+  return {
+    ssim: Math.max(0, Math.min(1, ssimSum / Math.max(1, blocks))),
+    upperSsim: Math.max(0, Math.min(1, upperSum / Math.max(1, upperBlocks))),
+    edgeDiffRatio: Math.max(0, Math.min(1, edgeDiff / Math.max(1, edgeEnergy))),
+  };
 }
 
 /** Trích xuất tối đa 48 điểm góc mạnh nhất (Shi-Tomasi/Sobel response) kèm descriptor nhị phân 64-bit (8 bytes/điểm). */
@@ -217,22 +296,38 @@ export async function runSharpAuthenticityCheck(
   let lapSq = 0;
   let lapN = 0;
   let moireAltCount = 0;
+  let edgePixels = 0;
+  let bimodalSharpEdges = 0;
+  const histBins = new Float64Array(16);
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {
       const i = y * W + x;
+      histBins[Math.min(15, gray[i] >> 4)] += 1;
       const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - W] - gray[i + W];
       lapSum += lap;
       lapSq += lap * lap;
       lapN += 1;
-      // Phát hiện dao động sọc răng cưa tần số cao đặc trưng khi chụp lại màn hình LCD/OLED
       const d1 = gray[i] - gray[i - 1];
       const d2 = gray[i + 1] - gray[i];
       if (d1 * d2 < -225) moireAltCount += 1;
+      const grad = Math.max(Math.abs(gray[i + 1] - gray[i - 1]), Math.abs(gray[i + W] - gray[i - W]));
+      if (grad >= 20) {
+        edgePixels += 1;
+        if (grad >= 48 && Math.abs(d1) >= 40) bimodalSharpEdges += 1;
+      }
     }
   }
   const meanLap = lapSum / Math.max(1, lapN);
   const blurVar = lapSq / Math.max(1, lapN) - meanLap * meanLap;
   const moireRatio = moireAltCount / Math.max(1, lapN);
+  const sharpEdgeRatio = edgePixels > 0 ? bimodalSharpEdges / edgePixels : 0;
+
+  let entropy = 0;
+  for (let b = 0; b < 16; b++) {
+    const p = histBins[b] / Math.max(1, lapN);
+    if (p > 0) entropy -= p * Math.log2(p);
+  }
+  const entropyNorm = Math.min(1, entropy / 4);
 
   let flatBlocks = 0;
   let totalBlocks = 0;
@@ -268,6 +363,26 @@ export async function runSharpAuthenticityCheck(
   const aspect = origW / Math.max(1, origH);
   const matchesPhoneScreenRatio = COMMON_SCREEN_RATIOS.some((r) => Math.abs(aspect - r) < 0.018);
 
+  const features16 = new Float32Array(16);
+  features16[0] = hasCameraExif ? 1 : 0;
+  features16[1] = screenshotSoftware ? 1 : 0;
+  features16[2] = matchesPhoneScreenRatio ? 1 : 0;
+  features16[3] = !hasCameraExif && meta.format === 'png' ? 1 : 0;
+  features16[4] = matchesPhoneScreenRatio && topBandVar < 35 ? 1 : 0;
+  features16[5] = flatRatio > 0.5 ? 0.6 : 0;
+  features16[6] = flatRatio;
+  features16[7] = sharpEdgeRatio;
+  features16[8] = Math.min(1, moireRatio * 3.5);
+  features16[9] = Math.min(1, moireRatio * 2.5);
+  features16[10] = entropyNorm;
+  features16[11] = Math.min(1, blurVar / 500);
+  features16[12] = Math.max(0, 1 - flatRatio);
+  features16[13] = 0.25;
+  features16[14] = 0.15;
+  features16[15] = Math.min(1, (1 - flatRatio) * entropyNorm);
+
+  const onnxPred = predictWithLocalOnnxModel(features16);
+
   let score = hasCameraExif ? 92 : 85;
   const flags: string[] = [];
 
@@ -282,9 +397,18 @@ export async function runSharpAuthenticityCheck(
     score -= 32;
     flags.push('mobile_screenshot_layout');
   }
-  if (moireRatio > 0.14) {
+  if (sharpEdgeRatio > 0.45 && !hasCameraExif) {
+    score -= 26;
+    flags.push('sharp_ui_edges');
+  }
+  if (moireRatio > 0.14 || onnxPred.isScreenPhotoProb >= 0.72) {
     score -= 28;
     flags.push('screen_moire_pattern');
+  }
+  const hasScreenshotVisualEvidence = flatRatio >= 0.45 || sharpEdgeRatio >= 0.35 || matchesPhoneScreenRatio;
+  if (onnxPred.onnxModelLoaded && onnxPred.isScreenshotProb >= 0.72 && !hasCameraExif && hasScreenshotVisualEvidence) {
+    score -= 30;
+    flags.push('onnx_screenshot_detected');
   }
   if (blurVar < 22) {
     score -= 24;
@@ -298,13 +422,15 @@ export async function runSharpAuthenticityCheck(
   return {
     is_authentic: isAuthentic,
     authenticity_score: finalScore,
-    is_screenshot_prob: Math.round(Math.max(0, Math.min(1, (100 - finalScore) / 100)) * 100) / 100,
-    is_screen_photo_prob: Math.round(Math.min(1, moireRatio * 4) * 100) / 100,
+    is_screenshot_prob: onnxPred.onnxModelLoaded
+      ? Math.max(onnxPred.isScreenshotProb, Math.round(Math.max(0, Math.min(1, (100 - finalScore) / 100)) * 100) / 100)
+      : Math.round(Math.max(0, Math.min(1, (100 - finalScore) / 100)) * 100) / 100,
+    is_screen_photo_prob: Math.max(onnxPred.isScreenPhotoProb, Math.round(Math.min(1, moireRatio * 4) * 100) / 100),
     flags,
     reason: isAuthentic
-      ? 'Ảnh đạt chuẩn hiện trường thực tế.'
+      ? 'Ảnh đạt chuẩn hiện trường thực tế (Sharp + ONNX).'
       : 'Phát hiện dấu hiệu ảnh chụp màn hình hoặc chất lượng chưa đạt chuẩn.',
-    onnx_model_loaded: false,
+    onnx_model_loaded: onnxPred.onnxModelLoaded,
     latency_ms: latencyMs,
     engine: 'fallback',
   };
@@ -328,7 +454,7 @@ export async function runSharpDuplicateCheck(params: {
   );
 
   const dhashHex = computeDHashFromGray(gray, SIZE, 0, 0, SIZE, SIZE) || params.fallbackDHash;
-  const phashHex = computeAverageHashFromGray(gray, SIZE, SIZE, SIZE);
+  const phashHex = computePHashFromGray(gray, SIZE, SIZE);
   const cMargin = Math.floor(SIZE * 0.2);
   const cSpan = SIZE - cMargin * 2;
   const centerDhashHex = computeDHashFromGray(gray, SIZE, cMargin, cMargin, cSpan, cSpan);
@@ -496,9 +622,12 @@ export async function runSharpBeforeAfterVerify(params: {
   }
   const meanRoiDiff = roiDiffSum / Math.max(1, roiPixels);
   const roughnessDropRatio = bRoughness > 0 ? Math.max(0, (bRoughness - aRoughness) / bRoughness) : 0;
+  const ssimStats = computeSsimAndEdgeDiffServer(bGray, aGray, SIZE);
 
   let sceneMatchScore = Math.round(
-    Math.max(0, 100 - topHd * 1.65) * 0.65 + Math.min(100, 50 + inliers * 3.2) * 0.35,
+    Math.max(0, 100 - topHd * 1.55) * 0.35 +
+      ssimStats.upperSsim * 100 * 0.35 +
+      Math.min(100, 50 + inliers * 3.2) * 0.3,
   );
   if (gpsDistM !== null) {
     if (gpsDistM <= 65) sceneMatchScore = Math.min(98, sceneMatchScore + 8);
@@ -507,7 +636,13 @@ export async function runSharpBeforeAfterVerify(params: {
   sceneMatchScore = Math.max(10, Math.min(98, sceneMatchScore));
 
   let resolutionScore = Math.round(
-    Math.min(96, 56 + Math.min(28, meanRoiDiff * 0.85) + Math.min(14, roughnessDropRatio * 45)),
+    Math.min(
+      96,
+      46 +
+        Math.min(26, meanRoiDiff * 0.85) +
+        Math.min(14, roughnessDropRatio * 45) +
+        Math.min(18, ssimStats.edgeDiffRatio * 36),
+    ),
   );
   if (fullHd > 46 && inliers < 3 && (gpsDistM === null || gpsDistM > 150)) {
     sceneMatchScore = Math.min(sceneMatchScore, 38);

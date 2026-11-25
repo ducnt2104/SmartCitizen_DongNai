@@ -23,12 +23,15 @@ async function main(): Promise<void> {
     );
     console.log(`[server] Trạng thái DB khởi điểm: mode=${boot.repos.mode}, state=${boot.dbState ?? 'connecting'}`);
     console.log(
-      `[server] OTP: Email=${otp.activeEmailProvider ?? 'CHƯA CẤU HÌNH'} | SMS=${sms.realSmsConfigured ? sms.activeSmsProvider : sms.allowDemoOtp ? 'demo(ALLOW_DEMO_OTP)' : 'CHƯA CẤU HÌNH'}`,
+      `[server] OTP: Email=${otp.activeEmailProvider ?? 'CHƯA CẤU HÌNH'} | SMS=${sms.realSmsConfigured ? sms.activeSmsProvider : 'CHƯA CẤU HÌNH'}`,
     );
     if (env.jwtSecretEphemeral) {
       console.warn('[server] JWT_SECRET chưa đặt — dùng khóa tạm thời cho phiên dev.');
     }
   });
+  // Giữ kết nối HTTP Keep-Alive lâu hơn timeout mặc định proxy (60s) để tránh lỗi 502 và giảm chi phí TLS handshake
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   // 4. Khởi chạy song song KeyPool, CV Engine và Kết nối + Đồng bộ 2 chiều MongoDB Atlas ở hậu cảnh
   void Promise.allSettled([
@@ -50,9 +53,11 @@ async function main(): Promise<void> {
       );
     }),
   ]);
+  services.aggregator.startScheduler();
 
   const shutdown = (signal: string): void => {
     console.log(`[server] nhận ${signal}, đang tắt an toàn...`);
+    services.aggregator.stopScheduler();
     server.close(() => {
       Promise.allSettled([services.cvEngine.stop(), bootCtrl.stop()]).finally(() => process.exit(0));
     });

@@ -31,7 +31,19 @@ export interface EnvValidationIssue {
 }
 
 const nodeEnvSchema = z.enum(['development', 'production', 'test']);
-const otpProviderSchema = z.enum(['auto', 'resend', 'brevo', 'webhook', 'smtp', 'twilio', 'esms']);
+const otpProviderSchema = z.enum([
+  'auto',
+  'resend',
+  'brevo',
+  'webhook',
+  'smtp',
+  'twilio',
+  'esms',
+  'speedsms',
+  'vonage',
+  'firebase',
+  'android_gateway',
+]);
 
 type NodeEnv = z.infer<typeof nodeEnvSchema>;
 export type OtpProviderConfig = z.infer<typeof otpProviderSchema>;
@@ -273,7 +285,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
       key: 'OTP_PROVIDER',
       status: 'INVALID',
       detail: `Giá trị "${rawOtpProvider}" không hợp lệ.`,
-      hint: 'Chỉ chấp nhận: auto | resend | brevo | webhook | smtp | twilio | esms.',
+      hint: 'Chỉ chấp nhận: auto | resend | brevo | webhook | smtp | twilio | esms | speedsms | vonage | firebase | android_gateway.',
     });
   }
 
@@ -331,6 +343,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   const jwtSecret = rawJwtSecret.length >= 16 ? rawJwtSecret : crypto.randomBytes(32).toString('hex');
   const jwtSecretEphemeral = rawJwtSecret.length < 16;
   const otpPepper = readTrimmed(source, 'OTP_PEPPER') || jwtSecret;
+  const cronSecret = readTrimmed(source, 'CRON_SECRET') || jwtSecret;
 
   return {
     isProd,
@@ -357,6 +370,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     jwtSecret,
     jwtSecretEphemeral,
     otpPepper,
+    cronSecret,
     allowedOrigins: origins,
     isOriginAllowed: originMatcher(origins),
     otpProvider,

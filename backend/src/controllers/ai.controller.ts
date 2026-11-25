@@ -39,7 +39,7 @@ export function aiController(s: Services) {
         rateLimitKey,
         trustScore: req.user?.trustScore,
         reportsRepo: s.repos.reports,
-        allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.image?.dataUrl),
+        allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.image?.dataUrl) && (b.image?.dataUrl?.length ?? 0) < 900,
       });
       res.json(result);
     },
@@ -56,6 +56,19 @@ export function aiController(s: Services) {
       const afterMime = afterPhoto.dataUrl ? parsePhotoDataUrl(afterPhoto.dataUrl).mime : 'image/webp';
       const loadedBefore = await loadStoredPhotoForVerification(before);
 
+      let explicitAfterCoords = false;
+      let afterLat = r.lat;
+      let afterLng = r.lng;
+      if (typeof b.lat === 'number' && typeof b.lng === 'number') {
+        afterLat = b.lat;
+        afterLng = b.lng;
+        explicitAfterCoords = true;
+      } else if (b.exif?.gps) {
+        afterLat = b.exif.gps.lat;
+        afterLng = b.exif.gps.lng;
+        explicitAfterCoords = true;
+      }
+
       const out = loadedBefore.isSvg
         ? s.gemini.fallbackVerify({
             reportId: r.id,
@@ -68,6 +81,14 @@ export function aiController(s: Services) {
             category: r.category,
             title: r.title,
             afterEdge: b.edge,
+            afterExif: b.exif,
+            reportCreatedAt: r.createdAt,
+            beforeLat: r.lat,
+            beforeLng: r.lng,
+            afterLat,
+            afterLng,
+            explicitAfterCoords,
+            allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl) && (b.afterPhoto?.dataUrl?.length ?? 0) < 900,
           })
         : await s.gemini.verifyResolution({
             reportId: r.id,
@@ -81,9 +102,13 @@ export function aiController(s: Services) {
             title: r.title,
             beforeLat: r.lat,
             beforeLng: r.lng,
-            afterLat: r.lat,
-            afterLng: r.lng,
+            afterLat,
+            afterLng,
+            explicitAfterCoords,
             afterEdge: b.edge,
+            afterExif: b.exif,
+            reportCreatedAt: r.createdAt,
+            allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl) && (b.afterPhoto?.dataUrl?.length ?? 0) < 900,
           });
       res.json(out);
     },

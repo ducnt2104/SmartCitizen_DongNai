@@ -3,6 +3,7 @@ export const vi = {
   // ── Điều hướng chung ──
   'nav.home': 'Trang chủ',
   'nav.map': 'Bản đồ',
+  'nav.alerts': 'Cảnh báo',
   'nav.report': 'Báo cáo',
   'nav.mine': 'Của tôi',
   'nav.assistant': 'Trợ lý AI',
@@ -196,6 +197,7 @@ export const vi = {
 
   // ── Phân tích tự động ──
   'ai.fallbackLabel': 'Xử lý trực tiếp trên hệ thống',
+  'ai.localAiLabel': 'Phân tích nhanh bởi Local AI Engine',
   'ai.rustLabel': 'Đã kiểm định chất lượng ảnh hiện trường',
   'ai.ollamaLabel': 'Đã phân tích nội dung tự động',
   'ai.geminiLabel': 'Đã phân tích hình ảnh tự động',
@@ -386,7 +388,7 @@ export const vi = {
   'auth.modePassword': 'Mật khẩu',
   'auth.identifier': 'Email (khuyến nghị) hoặc Số điện thoại',
   'auth.identifierPlaceholder': 'congdan@email.com hoặc 09xx xxx xxx',
-  'auth.otpUnconfiguredTitle': 'Kênh gửi mã qua Email đang tạm bảo trì',
+  'auth.otpUnconfiguredTitle': 'Kênh gửi mã qua Email chưa được cấu hình',
   'auth.otpUnconfiguredHint': 'Vui lòng chuyển sang nhận mã xác thực qua Số điện thoại hoặc đăng nhập bằng mật khẩu đã thiết lập.',
   'auth.otpSentToast': 'Đã gửi mã OTP 6 số tới {target}',
   'auth.otpSentDetail': 'Mã 6 số đã được gửi tới {target} (hiệu lực 5 phút, sử dụng 01 lần). Kiểm tra cả hộp thư Spam nếu chưa thấy.',
@@ -527,10 +529,12 @@ export const vi = {
   'ioc.tab.high': '🔥 Ưu tiên Cao — Đã gom nhóm',
   'ioc.tab.open': '📋 Đang tiếp nhận & Xử lý',
   'ioc.tab.quarantine': '🛡️ Cách ly Spam / Gian lận',
+  'ioc.tab.moderation': '🔍 Kiểm duyệt ảnh AI',
   'ioc.empty.emergency': 'Không có sự cố khẩn cấp',
   'ioc.empty.high': 'Chưa có hồ sơ gom nhóm',
   'ioc.empty.open': 'Không có hồ sơ đang xử lý',
   'ioc.empty.quarantine': 'Hàng đợi Cách ly trống',
+  'ioc.empty.moderation': 'Không có hồ sơ chờ kiểm duyệt',
   'ioc.emptyText': 'Hộp thư sạch. Dữ liệu cập nhật tự động.',
   'ioc.searchPlaceholder': 'Tìm mã, tiêu đề, địa chỉ…  ( / )',
   'ioc.allCategories': 'Mọi loại',

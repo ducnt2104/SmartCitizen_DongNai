@@ -3,7 +3,7 @@ import { resolveRouteSeo } from '../utils/usePageSeo';
 
 describe('Technical SEO route metadata', () => {
   it('marks public routes indexable with unique Vietnamese titles and descriptions', () => {
-    const publicPaths = ['/', '/report', '/map', '/mine'];
+    const publicPaths = ['/', '/report', '/map', '/mine', '/gioi-thieu'];
     const titles = new Set<string>();
     const descriptions = new Set<string>();
 
@@ -25,6 +25,10 @@ describe('Technical SEO route metadata', () => {
     const homeEn = resolveRouteSeo('/', 'en');
     expect(homeEn.robots).toContain('index, follow');
     expect(homeEn.title).toContain('SmartCitizen Dong Nai');
+
+    const reportDetailSeo = resolveRouteSeo('/phan-anh/DN-TB-2611-001', 'vi');
+    expect(reportDetailSeo.robots).toContain('index, follow');
+    expect(reportDetailSeo.canonicalPath).toBe('/phan-anh/DN-TB-2611-001');
   });
 
   it('marks internal, auth, and private routes as noindex, nofollow', () => {

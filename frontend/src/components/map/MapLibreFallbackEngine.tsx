@@ -238,6 +238,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   crosshairActiveRef.current = p.crosshairActive;
   const onMapClickRef = useRef(p.onMapClick);
   onMapClickRef.current = p.onMapClick;
+  const onWardClickRef = useRef(p.onWardClick);
+  onWardClickRef.current = p.onWardClick;
+  const alertsRef = useRef(p.alerts);
+  alertsRef.current = p.alerts;
+  const selectAlertRef = useRef(p.onSelectAlert);
+  selectAlertRef.current = p.onSelectAlert;
 
   const surfaceRef = useRef(p.surface);
   const langRef = useRef(lang);
@@ -449,17 +455,31 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       if (target?.closest('.sc-map-pin, .sc-cluster, .maplibregl-ctrl, .maplibregl-marker')) {
         return;
       }
+      const alertLayerIds = ['sc-alerts-pins', 'sc-alerts-outline', 'sc-alerts-fill'].filter((id) => Boolean(map.getLayer(id)));
+      const alertHit = alertLayerIds.length > 0 ? map.queryRenderedFeatures(ev.point, { layers: alertLayerIds })[0] : undefined;
+      if (alertHit && alertHit.properties?.alertId && selectAlertRef.current) {
+        const matchedAlert = alertsRef.current?.find((a) => a.id === String(alertHit.properties?.alertId));
+        if (matchedAlert) {
+          selectAlertRef.current(matchedAlert);
+          return;
+        }
+      }
       const local = queryLocalAddressHint(map, ev.point, langRef.current, 10);
       if (local.poi) {
         onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng, local.poi);
         return;
       }
-      const adminLayerIds = ['sc-admin-hub-labels', 'sc-admin-all-ward-labels'].filter((id) => Boolean(map.getLayer(id)));
+      const adminLayerIds = ['sc-admin-hub-labels', 'sc-admin-all-ward-labels', 'sc-admin-all-ward-dots'].filter((id) => Boolean(map.getLayer(id)));
       const adminHit = adminLayerIds.length > 0 ? map.queryRenderedFeatures(ev.point, { layers: adminLayerIds })[0] : undefined;
       if (adminHit && adminHit.geometry.type === 'Point') {
         const [lng, lat] = adminHit.geometry.coordinates;
         const wardLabel = typeof adminHit.properties?.name === 'string' ? adminHit.properties.name : undefined;
+        const wc = typeof adminHit.properties?.wardCode === 'string' ? adminHit.properties.wardCode : '';
         map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 360 });
+        if (wc && onWardClickRef.current) {
+          onWardClickRef.current(wc);
+          return;
+        }
         onMapClickRef.current?.(lat, lng, wardLabel);
         return;
       }
@@ -895,10 +915,113 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           },
         });
       }
+      } catch {
+      // Sẽ tự động chạy lại ngay khi style.load tăng styleReadySeq
+    }
+
+    // Lớp Cảnh báo thiên tai / Ngập lụt / Thi công + Bản nháp vẽ tuyến Admin/Cứu hộ
+    try {
+      const alertFeatures: GeoJSON.Feature[] = [];
+      for (const al of p.alerts ?? []) {
+        const color = al.severity === 3 ? '#E11D48' : al.severity === 2 ? '#EA580C' : '#D97706';
+        if (al.geometryType === 'polyline' && al.polyline && al.polyline.length >= 2) {
+          alertFeatures.push({
+            type: 'Feature',
+            properties: { kind: 'alert_line', alertId: al.id, color, title: al.title },
+            geometry: {
+              type: 'LineString',
+              coordinates: al.polyline.map(([lat, lng]) => [lng, lat]),
+            },
+          });
+        } else {
+          const circleFeat = createGeoJsonCircle(al.lng, al.lat, al.radiusM ?? 400, 40);
+          alertFeatures.push({
+            type: 'Feature',
+            properties: { kind: 'alert_zone', alertId: al.id, color, title: al.title },
+            geometry: circleFeat.geometry,
+          });
+        }
+        alertFeatures.push({
+          type: 'Feature',
+          properties: { kind: 'alert_pin', alertId: al.id, color, title: al.title },
+          geometry: { type: 'Point', coordinates: [al.lng, al.lat] },
+        });
+      }
+      if (p.draftPolyline && p.draftPolyline.length >= 2) {
+        alertFeatures.push({
+          type: 'Feature',
+          properties: { kind: 'alert_line', alertId: '__draft', color: '#0B57D0' },
+          geometry: {
+            type: 'LineString',
+            coordinates: p.draftPolyline.map(([lat, lng]) => [lng, lat]),
+          },
+        });
+      }
+      if (p.draftCircle) {
+        const draftFeat = createGeoJsonCircle(p.draftCircle.lng, p.draftCircle.lat, p.draftCircle.radiusM, 40);
+        alertFeatures.push({
+          type: 'Feature',
+          properties: { kind: 'alert_zone', alertId: '__draft', color: '#0B57D0' },
+          geometry: draftFeat.geometry,
+        });
+      }
+      const alertsData: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: alertFeatures };
+      const existingAlertsSrc = map.getSource('sc-alerts') as maplibregl.GeoJSONSource | undefined;
+      if (existingAlertsSrc) {
+        existingAlertsSrc.setData(alertsData);
+      } else {
+        map.addSource('sc-alerts', { type: 'geojson', data: alertsData });
+        map.addLayer({
+          id: 'sc-alerts-fill',
+          type: 'fill',
+          source: 'sc-alerts',
+          filter: ['==', ['get', 'kind'], 'alert_zone'],
+          paint: {
+            'fill-color': ['coalesce', ['get', 'color'], '#EA580C'],
+            'fill-opacity': 0.22,
+          },
+        });
+        map.addLayer({
+          id: 'sc-alerts-outline',
+          type: 'line',
+          source: 'sc-alerts',
+          filter: ['in', ['get', 'kind'], ['literal', ['alert_zone', 'alert_line']]],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ['coalesce', ['get', 'color'], '#EA580C'],
+            'line-width': ['case', ['==', ['get', 'kind'], 'alert_line'], 5, 2],
+            'line-opacity': 0.9,
+          },
+        });
+        map.addLayer({
+          id: 'sc-alerts-pins',
+          type: 'circle',
+          source: 'sc-alerts',
+          filter: ['==', ['get', 'kind'], 'alert_pin'],
+          paint: {
+            'circle-radius': 8,
+            'circle-color': ['coalesce', ['get', 'color'], '#EA580C'],
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+          },
+        });
+      }
     } catch {
       // Sẽ tự động chạy lại ngay khi style.load tăng styleReadySeq
     }
-  }, [styleReadySeq, p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay, p.mode, p.reports]);
+  }, [
+    styleReadySeq,
+    p.userPos,
+    p.accuracyM,
+    p.radiusM,
+    p.showArterials,
+    p.routeOverlay,
+    p.mode,
+    p.reports,
+    p.alerts,
+    p.draftPolyline,
+    p.draftCircle,
+  ]);
 
   // Fit toàn cảnh tuyến đường CHỈ khi `fitRouteSeq` tăng (hoặc khi preview chưa bật autoFollow lần đầu),
   // TUYỆT ĐỐI KHÔNG phụ thuộc `preserveViewport` để không bao giờ giật ngược tay khi người dùng kéo bản đồ!

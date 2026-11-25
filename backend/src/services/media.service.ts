@@ -8,6 +8,7 @@ import { env } from '../config/env';
 import { MediaAsset } from '../models/Media';
 import { normalizeCoordinates } from '../shared/coordinates';
 import { badRequest } from '../utils/errors';
+import { isAllowedImageMagicBytes } from '../utils/magicBytes';
 
 // Bảo vệ ngưỡng RAM 512MB trên Render Free Tier: tắt libvips internal cache & giới hạn luồng
 sharp.cache(false);
@@ -228,7 +229,7 @@ export function parseExifFromSharpBuffer(exifBuf: Buffer | undefined, rawImageBu
   return empty;
 }
 
-const ALLOWED_SHARP_FORMATS = new Set(['jpeg', 'png', 'webp', 'heif', 'avif', 'gif', 'tiff']);
+const ALLOWED_SHARP_FORMATS = new Set(['jpeg', 'png', 'webp']);
 
 export async function validateAndInspectImage(
   buffer: Buffer,
@@ -239,6 +240,12 @@ export async function validateAndInspectImage(
   }
   if (buffer.byteLength > MAX_IMAGE_BYTES) {
     throw badRequest('Dung lượng ảnh vượt quá giới hạn 5MB.', 'file_too_large');
+  }
+  if (!isAllowedImageMagicBytes(buffer)) {
+    throw badRequest(
+      'Chữ ký tệp (Magic Bytes) không khớp ảnh JPEG, PNG hoặc WebP hợp lệ.',
+      'invalid_image_magic_bytes',
+    );
   }
 
   let meta: sharp.Metadata;

@@ -166,9 +166,10 @@ export function buildApiKeysRouter(s: Services): Router {
     }),
   );
 
-  // DELETE /api/admin/api-keys/:id — Xóa key khỏi MongoDB & KeyPool
+  // DELETE /api/admin/api-keys/:id — Xóa key khỏi MongoDB & KeyPool (yêu cầu Re-auth)
   router.delete(
     '/:id',
+    auth.requireReauth,
     h(async (req: Request, res: Response) => {
       const id = String(req.params.id);
       const actor = req.user!;

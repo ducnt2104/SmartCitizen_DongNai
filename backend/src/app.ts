@@ -1,4 +1,3 @@
-import compression from 'compression';
 import cors from 'cors';
 import express, { type Express } from 'express';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -9,17 +8,56 @@ import { env } from './config/env';
 import { limits } from './middleware/rateLimit';
 import { errorHandler, sanitizeInput } from './middleware/validate';
 import { buildRouter } from './routes';
+import { canSee } from './services/access';
 import type { Services } from './services/container';
+import type { Category } from './shared/types';
+import { WARD_BY_CODE } from './shared/dongNaiWards';
+
+const CATEGORY_VI: Record<Category, string> = {
+  rac_thai: 'Rác thải & Môi trường',
+  den_duong: 'Đèn chiếu sáng & Điện',
+  ngap_nuoc: 'Ngập nước & Thoát nước',
+  mat_duong: 'Hư hỏng mặt đường',
+  khac: 'Sự cố đô thị khác',
+};
+import { smartCompressionMiddleware } from './utils/compression';
 import {
   buildRobotsTxt,
   buildSitemapXml,
   injectHtmlSeo,
+  isCrawlerUserAgent,
   KNOWN_SPA_ROUTES,
   NOINDEX_SPA_ROUTES,
   normalizeAppPathname,
+  type BotSsrReportContext,
+  type SitemapRoute,
 } from './utils/seo';
 
-const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+const LEGACY_JSON_IMAGE_ROUTE_RE =
+  /^\/api\/(?:reports(?:\/[^/]+\/attach-photo)?|volunteer\/(?:proxy-report|tasks\/[^/]+\/verify)|rescue\/missions\/[^/]+\/(?:status|complete)|admin\/reports\/[^/]+\/resolve|ai\/(?:analyze-image|verify-resolution))$/;
+
+function isTrustedCorsOrigin(origin: string, host: string | undefined): boolean {
+  const sameHost = Boolean(
+    host && (origin === `https://${host}` || origin === `http://${host}`),
+  );
+  if (sameHost) return true;
+
+  const normalized = origin.replace(/\/+$/, '').toLowerCase();
+  if (normalized === 'https://smartcitizen-dongnai.onrender.com') return true;
+  if (env.siteUrl && normalized === env.siteUrl.toLowerCase()) return true;
+
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized);
+  if (isLocal) return !env.isProd;
+
+  // Chỉ cho phép các origin khai báo tường minh (không mở wildcard *.onrender.com cho bên thứ ba)
+  return env.allowedOrigins.some((allowed) => {
+    const clean = allowed.trim().replace(/\/+$/, '').toLowerCase();
+    if (!clean || clean.includes('*')) return false;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(clean) && env.isProd) return false;
+    return clean === normalized;
+  });
+}
 
 export function createApp(
   s: Services,
@@ -31,6 +69,12 @@ export function createApp(
 
   app.use(
     helmet({
+      frameguard: { action: 'deny' },
+      noSniff: true,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      hsts: env.isProd
+        ? { maxAge: 31_536_000, includeSubDomains: true, preload: true }
+        : false,
       contentSecurityPolicy: {
         useDefaults: true,
         directives: {
@@ -84,6 +128,9 @@ export function createApp(
           'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
           'frame-src': ["'self'", 'https://*.google.com', 'https://*.firebaseapp.com'],
+          'object-src': ["'none'"],
+          'base-uri': ["'self'"],
+          'frame-ancestors': ["'none'"],
         },
       },
       crossOriginEmbedderPolicy: false,
@@ -93,38 +140,36 @@ export function createApp(
     cors((req, cb) => {
       const origin = req.header('Origin');
       const host = req.get('host');
-      const sameHost = Boolean(
-        origin &&
-          host &&
-          (origin === `https://${host}` || origin === `http://${host}`),
-      );
-      const isLocalDev = Boolean(origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin));
-      if (!origin || sameHost || isLocalDev || env.isOriginAllowed(origin)) {
+      if (!origin || isTrustedCorsOrigin(origin, host)) {
         cb(null, {
           origin: true,
           credentials: true,
           methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Fp'],
+          allowedHeaders: [
+            'Content-Type',
+            'Authorization',
+            'X-Device-Fp',
+            'X-PoW-Solution',
+            'X-Reauth-Token',
+            'X-Reauth-Password',
+          ],
         });
         return;
       }
       cb(new Error(`Origin không được phép: ${origin}`));
     }),
   );
-  // SSE & ảnh WebP đã nén sẵn không được nén lại để tiết kiệm CPU Render
-  app.use(
-    compression({
-      level: 6,
-      threshold: 512,
-      filter: (req, res) => {
-        if (req.path === '/api/ai/chat' || req.path.startsWith('/api/media/')) return false;
-        const ct = String(res.getHeader('Content-Type') ?? '');
-        if (ct.startsWith('image/')) return false;
-        return compression.filter(req, res);
-      },
-    }),
-  );
-  app.use(express.json({ limit: '4mb' }));
+  // Nén Brotli (`br`) & Gzip đa chuẩn, bỏ qua SSE và ảnh WebP đã nén
+  app.use(smartCompressionMiddleware());
+  const strictJsonParser = express.json({ limit: '100kb' });
+  const legacyImageJsonParser = express.json({ limit: '2mb' });
+  app.use((req, res, next) => {
+    if (LEGACY_JSON_IMAGE_ROUTE_RE.test(req.path)) {
+      legacyImageJsonParser(req, res, next);
+      return;
+    }
+    strictJsonParser(req, res, next);
+  });
   app.use(limits.global);
   app.use(sanitizeInput);
   app.use(mongoSanitize({ replaceWith: '_' }));
@@ -142,9 +187,32 @@ export function createApp(
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.status(200).type('text/plain; charset=utf-8').send(buildRobotsTxt(env.siteUrl));
   });
-  app.get('/sitemap.xml', (_req, res) => {
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.status(200).type('application/xml; charset=utf-8').send(buildSitemapXml(env.siteUrl, sitemapLastMod));
+  app.get('/sitemap.xml', async (_req, res) => {
+    try {
+      let cached = s.cache.getReportCached('sitemap_xml');
+      if (!cached) {
+        const publicReports = await s.repos.reports
+          .list({
+            statuses: ['received', 'verifying', 'processing', 'resolved'],
+            limit: 1000,
+            projection: 'summary',
+          })
+          .catch(() => []);
+        const dynamicRoutes: SitemapRoute[] = publicReports.map((r) => ({
+          path: `/phan-anh/${encodeURIComponent(r.code)}`,
+          changefreq: r.status === 'resolved' ? 'monthly' : 'daily',
+          priority: r.isEmergency ? '0.8' : '0.7',
+          lastmod: r.updatedAt?.slice(0, 10) || sitemapLastMod,
+        }));
+        const xml = buildSitemapXml(env.siteUrl, sitemapLastMod, dynamicRoutes);
+        cached = s.cache.setReportCached('sitemap_xml', xml, 60_000);
+      }
+      res.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+      res.status(200).type('application/xml; charset=utf-8').send(String(cached.body));
+    } catch {
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.status(200).type('application/xml; charset=utf-8').send(buildSitemapXml(env.siteUrl, sitemapLastMod));
+    }
   });
 
   // Phục vụ frontend đã build (single-service trên Render); nếu chưa build thì chỉ chạy API.
@@ -217,7 +285,7 @@ export function createApp(
     );
 
     // Tuyệt đối KHÔNG trả index.html cho request .js/.css/.svg/.json/.woff2 hoặc google*.html bị thiếu (tránh lỗi MIME/soft-404)
-    app.get(/^(?!\/api|\/healthz|\/robots\.txt$|\/sitemap\.xml$|\/google[a-z0-9_-]+\.html$).*/i, (req, res) => {
+    app.get(/^(?!\/api|\/healthz|\/robots\.txt$|\/sitemap\.xml$|\/google[a-z0-9_-]+\.html$).*/i, async (req, res) => {
       if (req.path.startsWith('/assets/') || STATIC_ASSET_EXT_RE.test(req.path)) {
         res.setHeader('Cache-Control', 'no-store');
         res.status(404).type('text/plain').send('Asset not found');
@@ -225,12 +293,47 @@ export function createApp(
       }
 
       const normalizedPath = normalizeAppPathname(req.path);
-      const isKnownRoute = KNOWN_SPA_ROUTES.has(normalizedPath);
+      const caseMatch = /^\/phan-anh\/([A-Za-z0-9-]+)$/i.exec(normalizedPath);
+      let reportSummary: BotSsrReportContext | undefined;
+      let isKnownRoute = KNOWN_SPA_ROUTES.has(normalizedPath);
+      if (caseMatch) {
+        const found = await s.repos.reports.getByCode(caseMatch[1]).catch(() => null);
+        if (found && canSee(null, found)) {
+          isKnownRoute = true;
+          reportSummary = {
+            code: found.code,
+            title: found.title,
+            description: found.description,
+            wardName: WARD_BY_CODE[found.wardCode]?.name ?? found.wardCode,
+            categoryLabel: CATEGORY_VI[found.category] ?? found.category,
+            status: found.status,
+            createdAt: found.createdAt,
+          };
+        }
+      }
+
       const isNoIndex = !isKnownRoute || NOINDEX_SPA_ROUTES.has(normalizedPath);
       if (isNoIndex) {
         res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       }
 
+      const userAgent = req.get('user-agent') ?? '';
+      const isBot = isCrawlerUserAgent(userAgent);
+      let botStats: { total: number; resolved: number } | undefined;
+      if (isBot && !isNoIndex) {
+        const cachedStats = s.cache.getReportCached('bot_ssr_stats');
+        if (cachedStats) {
+          botStats = cachedStats.body as { total: number; resolved: number };
+        } else {
+          const st = await s.reports.stats('city').catch(() => null);
+          if (st) {
+            botStats = { total: st.total, resolved: st.resolved };
+            s.cache.setReportCached('bot_ssr_stats', botStats, 30_000);
+          }
+        }
+      }
+
+      res.setHeader('Vary', 'User-Agent');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
@@ -240,6 +343,9 @@ export function createApp(
         googleSiteVerification: env.googleSiteVerification,
         pathname: normalizedPath,
         forceNoIndex: isNoIndex,
+        userAgent,
+        stats: botStats,
+        reportSummary,
       });
 
       res.status(isKnownRoute ? 200 : 404).type('text/html; charset=utf-8').send(html);

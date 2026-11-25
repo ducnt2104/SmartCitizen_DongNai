@@ -4,12 +4,14 @@ import { HttpError } from '../utils/errors';
 
 export type OtpChannel = 'email' | 'sms';
 
+export type OtpPurpose = 'login' | 'reset_password' | 'change_email' | 'change_phone';
+
 export interface OtpSendPayload {
   to: string;
   code: string;
   channel: OtpChannel;
   ttlMinutes: number;
-  purpose: 'login' | 'reset_password';
+  purpose: OtpPurpose;
 }
 
 export interface OtpTransport {
@@ -19,7 +21,14 @@ export interface OtpTransport {
 }
 
 function buildEmailHtml(code: string, ttlMinutes: number, purpose: OtpSendPayload['purpose']): string {
-  const title = purpose === 'reset_password' ? 'Khôi phục mật khẩu tài khoản' : 'Mã xác thực đăng nhập';
+  const title =
+    purpose === 'reset_password'
+      ? 'Khôi phục mật khẩu tài khoản'
+      : purpose === 'change_email'
+        ? 'Xác thực thay đổi Email'
+        : purpose === 'change_phone'
+          ? 'Xác thực thay đổi Số điện thoại'
+          : 'Mã xác thực đăng nhập';
   return `<!doctype html>
 <html lang="vi">
 <body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
@@ -340,9 +349,13 @@ export class OtpDeliveryService {
     if (!transport) {
       const hint =
         payload.channel === 'email'
-          ? 'Kênh gửi mã xác thực qua Email hiện đang tạm bảo trì. Vui lòng chuyển sang nhận mã qua Số điện thoại hoặc đăng nhập bằng mật khẩu.'
-          : 'Kênh gửi tin nhắn SMS hiện đang tạm bảo trì. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.';
-      throw new HttpError(503, hint, 'otp_provider_not_configured');
+          ? 'Hệ thống chưa kích hoạt kênh gửi mã xác thực qua Email. Vui lòng chuyển sang nhận mã qua Số điện thoại hoặc đăng nhập bằng mật khẩu.'
+          : 'Hệ thống chưa kích hoạt cổng gửi tin nhắn SMS. Vui lòng kiểm tra cấu hình nhà cung cấp SMS trên máy chủ.';
+      throw new HttpError(
+        503,
+        hint,
+        payload.channel === 'email' ? 'otp_provider_not_configured' : 'SMS_PROVIDER_NOT_CONFIGURED',
+      );
     }
     try {
       await transport.send(payload);

@@ -42,7 +42,15 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const [sla, setSla] = useState(r.priority === 'emergency' ? 2 : r.priority === 'high' ? 24 : 72);
   const [transferWard, setTransferWard] = useState(r.wardCode);
   const [transferNote, setTransferNote] = useState('');
-  const [after, setAfter] = useState<{ previewUrl: string; displayBlob: Blob; aiBlob: Blob; dHash: string } | null>(null);
+  const [after, setAfter] = useState<{
+    previewUrl: string;
+    displayBlob: Blob;
+    aiBlob: Blob;
+    dHash: string;
+    exif?: unknown;
+    edge?: unknown;
+    gps?: { lat: number; lng: number } | null;
+  } | null>(null);
   const [override, setOverride] = useState(false);
   const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -81,7 +89,15 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
     setBusy('photo');
     try {
       const p = await edge.processImage(f);
-      setAfter({ previewUrl: p.previewUrl, displayBlob: p.displayBlob, aiBlob: p.aiBlob, dHash: p.dHash });
+      setAfter({
+        previewUrl: p.previewUrl,
+        displayBlob: p.displayBlob,
+        aiBlob: p.aiBlob,
+        dHash: p.dHash,
+        exif: p.exif,
+        edge: p.stats,
+        gps: p.exifGps ? { lat: p.exifGps.lat, lng: p.exifGps.lng } : null,
+      });
       setAiMsg(null);
     } catch (e) {
       toast('error', t('report.photoFail'), e instanceof Error ? e.message : undefined);
@@ -98,8 +114,23 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
       const fd = new FormData();
       fd.append('displayImage', after.displayBlob, 'display.webp');
       fd.append('aiImage', after.aiBlob, 'ai.webp');
-      fd.append('metadata', JSON.stringify({ dHash: after.dHash, note: '', override }));
-      const res = await apiMultipart<{ report: ClientReport; accepted: boolean }>(`/api/admin/reports/${r.id}/resolve`, { body: fd });
+      fd.append(
+        'metadata',
+        JSON.stringify({
+          dHash: after.dHash,
+          note: '',
+          override,
+          exif: after.exif,
+          edge: after.edge,
+          lat: after.gps?.lat ?? livePos?.lat,
+          lng: after.gps?.lng ?? livePos?.lng,
+        }),
+      );
+      const res = await apiMultipart<{
+        report: ClientReport;
+        accepted: boolean;
+        resolutionStatus?: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
+      }>(`/api/admin/reports/${r.id}/resolve`, { body: fd });
       await db.reports.put({ ...res.report, syncState: 'synced' });
       invalidateSwrPrefix('q:');
       invalidateSwrPrefix('ov:');
@@ -107,6 +138,9 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
       if (res.accepted) {
         toast('success', t('ioc.resolved'), t('ioc.resolvedText', { n: res.report.clusterCount }));
         setAfter(null);
+      } else if (res.resolutionStatus === 'PENDING_MODERATION') {
+        toast('info', 'Đã đưa vào Hàng đợi Kiểm duyệt', res.report.resolution?.summary);
+        setAiMsg({ ok: true, text: res.report.resolution?.summary ?? 'Chờ Admin duyệt ảnh hoàn thành.' });
       } else {
         setAiMsg({ ok: false, text: res.report.resolution?.summary ?? '' });
       }
@@ -138,6 +172,8 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
                 key={p.id}
                 src={i === 0 ? p.url : (p.thumbnailUrl ?? p.url)}
                 alt={`${t('detail.angle')} ${i + 1}`}
+                width={i === 0 ? 320 : 160}
+                height={i === 0 ? 240 : 160}
                 loading="lazy"
                 decoding="async"
                 className={`aspect-square rounded border border-ioc-line object-cover ${i === 0 ? 'col-span-2 row-span-2 aspect-auto h-full w-full' : ''}`}
@@ -314,7 +350,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
 
             <fieldset className="space-y-2 rounded border border-ioc-line p-2" disabled={busy === 'resolve'}>
               <legend className="px-1 text-[11px] font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.acceptance')}</legend>
-              {after ? <img src={after.previewUrl} alt={t('detail.after')} decoding="async" className="aspect-video w-full rounded border border-ioc-line object-cover" /> : <p className="text-xs text-ioc-dim">{t('ioc.acceptanceHint')}</p>}
+              {after ? <img src={after.previewUrl} alt={t('detail.after')} width={480} height={270} decoding="async" className="aspect-video w-full rounded border border-ioc-line object-cover" /> : <p className="text-xs text-ioc-dim">{t('ioc.acceptanceHint')}</p>}
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" className="ioc-btn" onClick={() => fileRef.current?.click()}>{busy === 'photo' ? <Spinner /> : <Upload className="h-4 w-4" aria-hidden />}{t('ioc.uploadAfter')}</button>
                 <button type="button" className="ioc-btn ioc-btn-green" disabled={!after} onClick={() => void resolve()}>{busy === 'resolve' ? <Spinner /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}{t('ioc.verifyClose')}</button>

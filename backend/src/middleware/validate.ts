@@ -3,12 +3,20 @@ import { ZodError, type ZodTypeAny, type z } from 'zod';
 import { HttpError, badRequest } from '../utils/errors';
 import { hasMongoOperators, stripMongoOperators } from '../utils/sanitize';
 
-/** Chống NoSQL Injection: loại key `$...` / chứa `.` khỏi body, query, params ở mọi cấp. */
+/** Chống NoSQL Injection & XSS: loại key `$...` / chứa `.` và làm sạch HTML nguy hiểm khỏi body, query, params. */
 export const sanitizeInput: RequestHandler = (req, _res, next) => {
-  if (hasMongoOperators(req.body) || hasMongoOperators(req.query)) {
+  if (hasMongoOperators(req.body) || hasMongoOperators(req.query) || hasMongoOperators(req.params)) {
     return next(badRequest('Dữ liệu chứa ký tự không được phép ($ hoặc .) trong tên trường.', 'forbidden_characters'));
   }
-  req.body = stripMongoOperators(req.body);
+  if (req.body && typeof req.body === 'object') {
+    req.body = stripMongoOperators(req.body);
+  }
+  if (req.query && typeof req.query === 'object') {
+    req.query = stripMongoOperators(req.query) as Request['query'];
+  }
+  if (req.params && typeof req.params === 'object') {
+    req.params = stripMongoOperators(req.params) as Request['params'];
+  }
   next();
 };
 
@@ -43,7 +51,9 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
       console.error(`[http-error ${err.status}] code=${err.code} msg=${err.message}`, err.details ?? '');
     }
     const safeMsg =
-      err.code === 'otp_provider_not_configured' || err.code === 'sms_provider_not_configured'
+      err.code === 'otp_provider_not_configured' ||
+      err.code === 'sms_provider_not_configured' ||
+      err.code === 'SMS_PROVIDER_NOT_CONFIGURED'
         ? err.message
         : sanitizeClientErrorMessage(err.message, err.status);
     const safeDetails = err.status >= 500 ? undefined : err.details;

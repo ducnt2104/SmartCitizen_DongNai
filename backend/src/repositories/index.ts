@@ -462,25 +462,46 @@ export function createNonBlockingServerRepositories(options?: CreateRepositories
         ),
     },
     sessions: {
+      get: (id) => readResilient((m) => m.sessions.get(id), () => localRepos.sessions.get(id)),
       getByRefreshHash: (refreshHash) =>
         readResilient((m) => m.sessions.getByRefreshHash(refreshHash), () => localRepos.sessions.getByRefreshHash(refreshHash)),
+      listActive: (filter) =>
+        readResilient((m) => m.sessions.listActive(filter), () => localRepos.sessions.listActive(filter)),
       save: (rec) =>
         writeResilient(
           (m) => m.sessions.save(rec),
           () => hydrateCollectionItem('sessions', rec.id, rec),
           () => localRepos.sessions.save(rec),
         ),
-      revoke: (id, replacedBySessionId) =>
+      touch: (id, lastActiveAt, ip) =>
         writeResilient(
-          (m) => m.sessions.revoke(id, replacedBySessionId),
+          (m) => m.sessions.touch(id, lastActiveAt, ip),
           null,
-          () => localRepos.sessions.revoke(id, replacedBySessionId),
+          () => localRepos.sessions.touch(id, lastActiveAt, ip),
         ),
-      revokeAllForUser: (userId) =>
+      revoke: (id, replacedBySessionId, reason) =>
         writeResilient(
-          (m) => m.sessions.revokeAllForUser(userId),
+          (m) => m.sessions.revoke(id, replacedBySessionId, reason),
           null,
-          () => localRepos.sessions.revokeAllForUser(userId),
+          () => localRepos.sessions.revoke(id, replacedBySessionId, reason),
+        ),
+      revokeAllForUser: (userId, reason) =>
+        writeResilient(
+          (m) => m.sessions.revokeAllForUser(userId, reason),
+          null,
+          () => localRepos.sessions.revokeAllForUser(userId, reason),
+        ),
+      revokeAllExcept: (userId, exceptSessionId, reason) =>
+        writeResilient(
+          (m) => m.sessions.revokeAllExcept(userId, exceptSessionId, reason),
+          null,
+          () => localRepos.sessions.revokeAllExcept(userId, exceptSessionId, reason),
+        ),
+      revokeAllSystem: (exceptSessionId, reason) =>
+        writeResilient(
+          (m) => m.sessions.revokeAllSystem(exceptSessionId, reason),
+          null,
+          () => localRepos.sessions.revokeAllSystem(exceptSessionId, reason),
         ),
     },
     ping: async () => {
