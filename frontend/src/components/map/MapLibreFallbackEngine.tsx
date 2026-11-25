@@ -5,10 +5,12 @@ import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
 import { useI18n } from '../../i18n';
 import { QUICK_PLACES } from '../../lib/geoClient';
 import {
+  buildDongNaiWardsGeoJson,
   buildMapLibreStyle,
   createClusterElement,
   createGeoJsonCircle,
   createIncidentPinElement,
+  DONG_NAI_ADMIN_MASK_POLYGON,
   DONG_NAI_CAMERA_RESTRICTION,
   DONG_NAI_MAPLIBRE_BOUNDS,
   getPinState,
@@ -169,6 +171,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const vectorActiveRef = useRef(false);
   const vectorLoadedRef = useRef(false);
   const vectorFailedRef = useRef(false);
+  const styleParsedRef = useRef(false);
   const vectorWatchdogRef = useRef<number | null>(null);
   const lastCmdSeqRef = useRef(0);
   const lastFitRouteSeqRef = useRef(0);
@@ -188,6 +191,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     vectorActiveRef.current = false;
     vectorLoadedRef.current = false;
     if (surfaceRef.current === 'roadmap' || surfaceRef.current === 'dark') {
+      styleParsedRef.current = false;
       map.setStyle(buildMapLibreStyle(surfaceRef.current));
     }
   };
@@ -196,6 +200,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     clearVectorWatchdog();
     vectorActiveRef.current = true;
     vectorLoadedRef.current = false;
+    styleParsedRef.current = false;
     map.setStyle(vecStyle);
     vectorWatchdogRef.current = window.setTimeout(() => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
@@ -272,6 +277,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     };
 
     map.on('load', () => {
+      styleParsedRef.current = true;
       if (p.fitPointsOnMount && p.reports.length > 0) {
         const bounds = new maplibregl.LngLatBounds();
         for (const r of p.reports) bounds.extend([r.lng, r.lat]);
@@ -285,6 +291,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     });
 
     map.on('style.load', () => {
+      styleParsedRef.current = true;
       setStyleReadySeq((n) => n + 1);
     });
 
@@ -299,10 +306,15 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         vectorLoadedRef.current = true;
         clearVectorWatchdog();
       }
+      if (styleParsedRef.current && !map.getSource('sc-admin-wards')) {
+        setStyleReadySeq((n) => n + 1);
+      }
     });
 
-    map.on('styledata', () => {
-      if (map.isStyleLoaded()) setStyleReadySeq((n) => n + 1);
+    map.on('idle', () => {
+      if (styleParsedRef.current && !map.getSource('sc-admin-wards')) {
+        setStyleReadySeq((n) => n + 1);
+      }
     });
 
     map.on('error', (ev) => {
@@ -354,6 +366,14 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
       const target = ev.originalEvent?.target as HTMLElement | null;
       if (target?.closest('.sc-map-pin, .sc-cluster, .maplibregl-ctrl, .maplibregl-marker')) {
+        return;
+      }
+      const adminLayerIds = ['sc-admin-hub-labels', 'sc-admin-all-ward-labels'].filter((id) => Boolean(map.getLayer(id)));
+      const adminHit = adminLayerIds.length > 0 ? map.queryRenderedFeatures(ev.point, { layers: adminLayerIds })[0] : undefined;
+      if (adminHit && adminHit.geometry.type === 'Point') {
+        const [lng, lat] = adminHit.geometry.coordinates;
+        map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 360 });
+        onMapClickRef.current?.(lat, lng);
         return;
       }
       onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng);
@@ -417,6 +437,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         clearVectorWatchdog();
         vectorActiveRef.current = false;
         vectorLoadedRef.current = false;
+        styleParsedRef.current = false;
         map.setStyle(buildMapLibreStyle(targetSurface));
       }
       void loadDetailedVectorStyle(targetSurface, lang, ctrl.signal).then((vecStyle) => {
@@ -434,6 +455,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       clearVectorWatchdog();
       vectorActiveRef.current = false;
       vectorLoadedRef.current = false;
+      styleParsedRef.current = false;
       map.setStyle(buildMapLibreStyle(p.surface));
     }
   }, [p.surface, lang]);
@@ -500,9 +522,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   // 4) Vẽ lớp phủ GeoJSON (Tuyến đường xanh dương đậm có viền sáng, vòng tròn sai số GPS, trục chính)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || styleReadySeq === 0) return;
+    if (!map || styleReadySeq === 0 || !styleParsedRef.current) return;
     try {
-      if (!map.getStyle() || !map.isStyleLoaded()) return;
+      if (!map.getStyle()) return;
     } catch {
       return;
     }
@@ -549,8 +571,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           filter: ['==', ['get', 'kind'], 'arterial'],
           paint: {
             'line-color': '#F59E0B',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 2.8, 18, 4],
-            'line-opacity': 0.68,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 13, 2.4, 15, 3],
+            'line-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.65, 13, 0.4, 14.5, 0],
             'line-dasharray': [4, 2],
           },
         });
@@ -569,6 +591,105 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           filter: ['==', ['get', 'kind'], 'rescue_route'],
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: { 'line-color': p.routeOverlay?.strokeColor ?? '#1A73E8', 'line-width': 6.5, 'line-opacity': 0.98 },
+        });
+      }
+
+      // Lớp địa giới và 95 Đơn vị hành chính mới (33 Phường, 62 Xã) đặt trực tiếp lên bản đồ thay cho nhãn cũ của OSM
+      if (!map.getSource('sc-city-boundary')) {
+        map.addSource('sc-city-boundary', {
+          type: 'geojson',
+          data: DONG_NAI_ADMIN_MASK_POLYGON,
+        });
+        map.addLayer({
+          id: 'sc-city-boundary-line',
+          type: 'line',
+          source: 'sc-city-boundary',
+          paint: {
+            'line-color': p.surface === 'roadmap' ? '#1A73E8' : '#60A5FA',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.6, 12, 2.6],
+            'line-opacity': 0.55,
+            'line-dasharray': [3, 2],
+          },
+        });
+      }
+
+      if (!map.getSource('sc-admin-wards') && map.getStyle()?.glyphs) {
+        map.addSource('sc-admin-wards', {
+          type: 'geojson',
+          data: buildDongNaiWardsGeoJson(),
+        });
+        const isRoadmap = p.surface === 'roadmap';
+        const phuongColor = isRoadmap ? '#0B57D0' : '#93C5FD';
+        const xaColor = isRoadmap ? '#334155' : '#E2E8F0';
+        const haloColor = isRoadmap ? 'rgba(255, 255, 255, 0.96)' : 'rgba(15, 23, 42, 0.88)';
+
+        map.addLayer({
+          id: 'sc-admin-hub-labels',
+          type: 'symbol',
+          source: 'sc-admin-wards',
+          minzoom: 7.0,
+          maxzoom: 10.2,
+          filter: ['==', ['get', 'isHub'], true],
+          layout: {
+            'text-field': ['get', 'name'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.5, 10.0, 12.5],
+            'text-max-width': 10,
+            'text-padding': 5,
+            'text-variable-anchor': ['center', 'top', 'bottom'],
+          },
+          paint: {
+            'text-color': phuongColor,
+            'text-halo-color': haloColor,
+            'text-halo-width': 2.2,
+          },
+        });
+
+        map.addLayer({
+          id: 'sc-admin-all-ward-dots',
+          type: 'circle',
+          source: 'sc-admin-wards',
+          minzoom: 10.2,
+          maxzoom: 15.8,
+          paint: {
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 4, 3.2],
+            'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#0B57D0', '#0F766E'],
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 1.5,
+            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.9, 15.8, 0],
+            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.95, 15.8, 0],
+          },
+        });
+
+        map.addLayer({
+          id: 'sc-admin-all-ward-labels',
+          type: 'symbol',
+          source: 'sc-admin-wards',
+          minzoom: 10.2,
+          maxzoom: 16.2,
+          layout: {
+            'text-field': ['get', 'name'],
+            'text-font': ['Noto Sans Bold'],
+            'text-size': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10.2,
+              ['case', ['==', ['get', 'kind'], 'Phường'], 11.5, 10.2],
+              13.5,
+              ['case', ['==', ['get', 'kind'], 'Phường'], 13.5, 12],
+            ],
+            'text-offset': [0, 0.85],
+            'text-anchor': 'top',
+            'text-max-width': 10,
+            'text-padding': 3,
+          },
+          paint: {
+            'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
+            'text-halo-color': haloColor,
+            'text-halo-width': 2,
+            'text-opacity': ['interpolate', ['linear'], ['zoom'], 15.2, 0.96, 16.2, 0],
+          },
         });
       }
 

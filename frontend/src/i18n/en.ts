@@ -129,12 +129,12 @@ export const en: Record<keyof typeof vi, string> = {
   'report.mapAria': 'Crosshair incident location picker map',
   'report.searchPlacePlaceholder': 'Search address, alley, street, or 95 Wards/Communes…',
   'report.gpsAccuracyBadge': 'Accuracy ±{m}m',
-  'report.dragHint': 'Pan the map to position the center crosshair accurately. Dashed amber lines mark arterial roads.',
+  'report.dragHint': 'Pan the map or tap any street to position the center crosshair accurately.',
   'report.addressLoading': 'Looking up address…',
   'report.ward': 'Ward / Commune',
   'report.wardSelect': 'Receiving Ward / Commune (95 Units of Dong Nai City)',
   'report.wardAutoSuggest': 'Auto-suggested from GPS coordinates — Please verify and confirm the exact Ward/Commune.',
-  'report.aliasNormalized': 'Normalized legacy address "{old}" → {unit} (effective 30/04/2026).',
+  'report.aliasNormalized': 'Current administrative unit: {unit} ({old}).',
   'report.exifFound': 'Read GPS coordinates from original photo (EXIF) — you can still pan the crosshair to fine-tune.',
   'report.arterial': 'On arterial road {name} — hazardous incidents trigger Level-1 Emergency dispatch',
   'report.outOfBounds': 'Location is outside Dong Nai City boundaries.',
@@ -223,7 +223,7 @@ export const en: Record<keyof typeof vi, string> = {
 
   // ── Map ──
   'map.title': 'Dong Nai City GIS Map',
-  'map.subtitle95': 'Covering all 95 Units (33 Wards, 62 Communes) — effective 30/04/2026',
+  'map.subtitle95': '95 Current Administrative Units (33 Wards, 62 Communes)',
   'map.aria': 'Incident map',
   'map.mode': 'Map mode',
   'map.pins': 'Pins',

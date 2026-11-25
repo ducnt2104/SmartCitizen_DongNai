@@ -25,12 +25,12 @@ type Row = readonly [
 /** 33 PHƯỜNG (23 phường từ 01/07/2025 + 10 phường nâng cấp 30/04/2026) */
 const PHUONG_ROWS: readonly Row[] = [
   // ── Đô thị Trung tâm (10 phường) ──
-  ['TB', 'Trấn Biên', 'P', 'trung_tam', 'Trung tâm', 10.9492, 106.8225, false, ['Bửu Long', 'Quang Vinh', 'Trung Dũng', 'Quyết Thắng', 'Phường Quyết Thắng', 'Thống Nhất (Biên Hòa)', 'Hiệp Hòa', 'An Bình', 'TP. Biên Hòa']],
-  ['BH', 'Biên Hòa', 'P', 'trung_tam', 'Trung tâm', 10.9355, 106.8035, false, ['Tân Hạnh', 'Hóa An', 'Bửu Hòa', 'Tân Vạn']],
-  ['TDA', 'Trảng Dài', 'P', 'trung_tam', 'Công nghiệp', 10.9920, 106.8617, false, ['Thiện Tân', 'Phường Trảng Dài']],
-  ['THP', 'Tam Hiệp', 'P', 'trung_tam', 'Trung tâm', 10.9472, 106.8553, false, ['Tân Hiệp (Biên Hòa)', 'Tân Mai', 'Bình Đa']],
-  ['LBI', 'Long Bình', 'P', 'trung_tam', 'Công nghiệp', 10.9383, 106.9036, false, ['Hố Nai cũ', 'Tân Biên', 'Phường Long Bình']],
-  ['HNI', 'Hố Nai', 'P', 'trung_tam', 'Công nghiệp', 10.9685, 106.8895, false, ['Tân Hòa', 'Hố Nai 3']],
+  ['TB', 'Trấn Biên', 'P', 'trung_tam', 'Trung tâm', 10.9465, 106.8243, false, ['Bửu Long', 'Quang Vinh', 'Trung Dũng', 'Quyết Thắng', 'Phường Quyết Thắng', 'Thống Nhất (Biên Hòa)', 'Thống Nhất', 'Tân Phong', 'Tân Tiến', 'Hiệp Hòa', 'An Bình', 'Trấn Biên', 'TP. Biên Hòa']],
+  ['BH', 'Biên Hòa', 'P', 'trung_tam', 'Trung tâm', 10.9287, 106.8204, false, ['Tân Hạnh', 'Hóa An', 'Bửu Hòa', 'Tân Vạn', 'Biên Hòa']],
+  ['TDA', 'Trảng Dài', 'P', 'trung_tam', 'Công nghiệp', 10.9920, 106.8617, false, ['Thiện Tân', 'Phường Trảng Dài', 'Trảng Dài']],
+  ['THP', 'Tam Hiệp', 'P', 'trung_tam', 'Trung tâm', 10.9472, 106.8553, false, ['Tân Hiệp (Biên Hòa)', 'Tân Hiệp', 'Tân Mai', 'Bình Đa', 'Tam Hòa']],
+  ['LBI', 'Long Bình', 'P', 'trung_tam', 'Công nghiệp', 10.9383, 106.9036, false, ['Hố Nai cũ', 'Tân Biên', 'Phường Long Bình', 'Long Bình']],
+  ['HNI', 'Hố Nai', 'P', 'trung_tam', 'Công nghiệp', 10.9723, 106.8793, false, ['Tân Hòa', 'Hố Nai 3', 'Hố Nai']],
   ['LHU', 'Long Hưng', 'P', 'trung_tam', 'Công nghiệp', 10.9035, 106.8565, false, ['An Hòa', 'Long Bình Tân', 'Xã Long Hưng']],
   ['PTA', 'Phước Tân', 'P', 'trung_tam', 'Công nghiệp', 10.8852, 106.9036, false, ['Phường Phước Tân']],
   ['TPC', 'Tam Phước', 'P', 'trung_tam', 'Công nghiệp', 10.8586, 106.9250, false, ['Phường Tam Phước']],
@@ -283,10 +283,13 @@ export function searchWards(query: string, limit = 15): Ward[] {
 }
 
 /**
- * Đối chiếu tên đơn vị hành chính từ chuỗi địa chỉ Nominatim/OSM (hỗ trợ cả địa chỉ 3 cấp cũ
- * trước 01/07/2025 lẫn 10 xã nâng cấp phường ngày 30/04/2026) về đúng 1 trong 95 Phường/Xã.
+ * Đối chiếu tên đơn vị hành chính từ chuỗi địa chỉ geocoder về đúng 1 trong 95 Phường/Xã mới,
+ * ưu tiên theo khoảng cách tới tọa độ `(lat, lng)` nếu có để tránh trùng tên đường hoặc tên xã/phường cũ khác vùng.
  */
-export function matchWardByAddressText(addressText: string): { ward: Ward; matchedAlias: string } | null {
+export function matchWardByAddressText(
+  addressText: string,
+  nearCoords?: { lat: number; lng: number },
+): { ward: Ward; matchedAlias: string } | null {
   const norm = normalizeVi(addressText);
   if (!norm) return null;
 
@@ -295,47 +298,69 @@ export function matchWardByAddressText(addressText: string): { ward: Ward; match
     return ` ${haystack} `.includes(` ${needle} `);
   };
 
-  // Phân tầng độ đặc hiệu cho địa chỉ Việt Nam:
-  //  - Tầng A (+200): Bí danh ghép cả cấp xã/phường/thị trấn + cấp huyện/TP cũ (vd: "Thị trấn Tân Phú, Huyện Đồng Phú", "Phường Tân Phú, Thành phố Đồng Xoài")
-  //  - Tầng B (+100): Tên chính thức ("Xã Tà Lài", "Phường Trấn Biên") hoặc bí danh cấp xã/phường/thị trấn đơn lẻ
-  //  - Tầng C (+0):   Bí danh cấp huyện/thị xã/thành phố cũ đơn lẻ ("Huyện Tân Phú", "Thị xã Phước Long") — chỉ dùng khi không khớp Tầng A/B
   const isBareDistrict = (aNorm: string): boolean =>
     /^(huyen|thi xa|tp|thanh pho)\s/.test(aNorm);
   const isCompositeAlias = (aNorm: string): boolean =>
     /^(phuong|xa|thi tran)\s.+\s(huyen|thi xa|tp|thanh pho)\s/.test(aNorm);
 
-  let bestMatch: { ward: Ward; label: string; score: number } | null = null;
+  const candidates: Array<{ ward: Ward; label: string; score: number; distKm: number }> = [];
   for (const entry of SEARCH_INDEX) {
+    const distKm = nearCoords
+      ? dist(nearCoords.lat, nearCoords.lng, entry.ward.centerLat, entry.ward.centerLng) / 1000
+      : 0;
+
     if (hasPhrase(norm, entry.nameNorm)) {
-      const score = 100 + entry.nameNorm.length + 4;
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = { ward: entry.ward, label: entry.ward.name, score };
-      }
+      candidates.push({ ward: entry.ward, label: entry.ward.name, score: 100 + entry.nameNorm.length + 4, distKm });
     }
     entry.ward.legacyAliases.forEach((rawAlias, idx) => {
       const aNorm = entry.aliasNorms[idx];
       if (!hasPhrase(norm, aNorm)) return;
       const tierBonus = isCompositeAlias(aNorm) ? 200 : isBareDistrict(aNorm) ? 0 : 100;
-      const score = tierBonus + aNorm.length;
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = { ward: entry.ward, label: rawAlias, score };
-      }
+      candidates.push({ ward: entry.ward, label: rawAlias, score: tierBonus + aNorm.length, distKm });
     });
   }
-  if (bestMatch) {
-    return { ward: bestMatch.ward, matchedAlias: bestMatch.label };
+
+  if (candidates.length > 0) {
+    const pool =
+      nearCoords && candidates.some((c) => c.distKm <= 35)
+        ? candidates.filter((c) => c.distKm <= 35)
+        : candidates;
+    pool.sort((a, b) => (b.score - b.distKm * 0.8) - (a.score - a.distKm * 0.8));
+    return { ward: pool[0].ward, matchedAlias: pool[0].label };
   }
 
-  // Ưu tiên 3: khớp tên ngắn ("tran bien", "ta lai", "bu gia map"...) kèm tiền tố xã/phường/thị trấn
+  // Ưu tiên 3: khớp tên ngắn kèm tiền tố xã/phường/thị trấn, tránh trùng tên đường/cầu/chợ khi không có tiền tố hành chính
+  const step3Pool: Array<{ ward: Ward; label: string; score: number; distKm: number }> = [];
   for (const entry of SEARCH_INDEX) {
-    if (
+    const distKm = nearCoords
+      ? dist(nearCoords.lat, nearCoords.lng, entry.ward.centerLat, entry.ward.centerLng) / 1000
+      : 0;
+    const explicitAdmin =
       hasPhrase(norm, `xa ${entry.shortNorm}`) ||
       hasPhrase(norm, `phuong ${entry.shortNorm}`) ||
-      hasPhrase(norm, `thi tran ${entry.shortNorm}`) ||
-      hasPhrase(norm, entry.shortNorm)
-    ) {
-      return { ward: entry.ward, matchedAlias: entry.ward.shortName };
+      hasPhrase(norm, `thi tran ${entry.shortNorm}`);
+    const streetOnly =
+      !explicitAdmin &&
+      (hasPhrase(norm, `duong ${entry.shortNorm}`) ||
+        hasPhrase(norm, `hem ${entry.shortNorm}`) ||
+        hasPhrase(norm, `cau ${entry.shortNorm}`) ||
+        hasPhrase(norm, `cho ${entry.shortNorm}`));
+    if (explicitAdmin || (!streetOnly && hasPhrase(norm, entry.shortNorm))) {
+      step3Pool.push({
+        ward: entry.ward,
+        label: entry.ward.shortName,
+        score: (explicitAdmin ? 50 : 10) + entry.shortNorm.length,
+        distKm,
+      });
     }
+  }
+  if (step3Pool.length > 0) {
+    const pool =
+      nearCoords && step3Pool.some((c) => c.distKm <= 35)
+        ? step3Pool.filter((c) => c.distKm <= 35)
+        : step3Pool;
+    pool.sort((a, b) => (b.score - b.distKm * 0.8) - (a.score - a.distKm * 0.8));
+    return { ward: pool[0].ward, matchedAlias: pool[0].label };
   }
   return null;
 }

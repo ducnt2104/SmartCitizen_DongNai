@@ -28,7 +28,12 @@ function formatDetailedDongNaiAddress(params: {
   const neighborhood = cleanPart(parts.neighborhood);
 
   const arterial = matchArterial(lat, lng, 120);
-  const effectiveRoad = road || (arterial ? `Đường ${arterial.name}` : '');
+  const arterialRoadLabel = arterial
+    ? /^(quốc lộ|đt|tỉnh lộ|cao tốc|đường)/i.test(arterial.name)
+      ? arterial.name
+      : `Đường ${arterial.name}`
+    : '';
+  const effectiveRoad = road || arterialRoadLabel;
 
   let streetSegment = [house, effectiveRoad].filter(Boolean).join(' ').trim();
   if (poi && (!streetSegment || !streetSegment.toLowerCase().includes(poi.toLowerCase()))) {
@@ -46,7 +51,7 @@ function formatDetailedDongNaiAddress(params: {
     return baseResolved;
   }
 
-  const aliasHit = parts.rawAdminText ? matchWardByAddressText(parts.rawAdminText) : null;
+  const aliasHit = parts.rawAdminText ? matchWardByAddressText(parts.rawAdminText, { lat, lng }) : null;
   const ward = aliasHit?.ward ?? nearestWard(lat, lng);
   const wardNameLower = ward.name.toLowerCase();
   const shortWardLower = ward.shortName.toLowerCase();

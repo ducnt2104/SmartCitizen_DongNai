@@ -127,12 +127,12 @@ export const vi = {
   'report.mapAria': 'Bản đồ tâm ngắm chọn vị trí sự cố',
   'report.searchPlacePlaceholder': 'Tìm số nhà, tên đường, con hẻm hoặc 95 Phường/Xã…',
   'report.gpsAccuracyBadge': 'Sai số ±{m}m',
-  'report.dragHint': 'Kéo bản đồ để đặt tâm ngắm chính xác từng mét. Đường nét đứt vàng là trục đường huyết mạch.',
+  'report.dragHint': 'Kéo bản đồ hoặc chạm lên tuyến đường để đặt tâm ngắm đúng từng mét.',
   'report.addressLoading': 'Đang tra địa chỉ…',
   'report.ward': 'Phường/Xã',
   'report.wardSelect': 'Phường/Xã tiếp nhận (95 ĐVHC Thành phố Đồng Nai)',
   'report.wardAutoSuggest': 'Đề xuất tự động từ tọa độ GPS — Vui lòng kiểm tra và xác nhận đúng Phường/Xã.',
-  'report.aliasNormalized': 'Đã chuẩn hóa địa danh cũ "{old}" → {unit} (hiệu lực 30/04/2026).',
+  'report.aliasNormalized': 'Đơn vị hành chính hiện hành: {unit} ({old}).',
   'report.exifFound': 'Đã đọc tọa độ GPS từ ảnh gốc (EXIF) — bạn vẫn có thể kéo tâm ngắm để tinh chỉnh.',
   'report.arterial': 'Nằm trên trục huyết mạch {name} — sự cố nguy hiểm sẽ được xử lý Khẩn cấp cấp độ 1',
   'report.outOfBounds': 'Vị trí nằm ngoài địa bàn Thành phố Đồng Nai.',
@@ -221,7 +221,7 @@ export const vi = {
 
   // ── Bản đồ ──
   'map.title': 'Bản đồ GIS Thành phố Đồng Nai',
-  'map.subtitle95': 'Phủ đều 95 ĐVHC (33 Phường, 62 Xã) — hiệu lực từ 30/04/2026',
+  'map.subtitle95': 'Bản đồ 95 Đơn vị Hành chính mới (33 Phường, 62 Xã)',
   'map.aria': 'Bản đồ các phản ánh',
   'map.mode': 'Chế độ bản đồ',
   'map.pins': 'Điểm ghim',
