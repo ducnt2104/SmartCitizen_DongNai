@@ -193,17 +193,6 @@ export function CitizenLogin({ onDone, compact = false }: { onDone: (s: AuthSess
         </div>
       )}
 
-      {/* Trạng thái kênh OTP khả dụng */}
-      {otpStatus && !providerUnconfigured && mode !== 'password' && (
-        <p className="rounded-xl bg-brand-soft px-3 py-2 text-xs font-semibold text-brand">
-          {otpStatus.emailConfigured && otpStatus.smsConfigured
-            ? t('auth.channelBoth')
-            : otpStatus.emailConfigured
-              ? t('auth.channelEmailOnly')
-              : t('auth.channelSmsOnly')}
-        </p>
-      )}
-
       {mode === 'password' && (
         <form onSubmit={(e) => { e.preventDefault(); void loginWithPassword(); }} className="space-y-3">
           <div>

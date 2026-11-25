@@ -142,7 +142,6 @@ export default function AuthPage() {
               </button>
             </form>
             {err && <p role="alert" className="mt-3 rounded border border-red-500/50 bg-red-500/10 p-2 text-sm text-ioc-red">{err}</p>}
-            <p className="mt-3 text-[11px] leading-relaxed text-ioc-dim">{t('auth.staffNote')}</p>
           </div>
           <p className="mt-auto pt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </div>
