@@ -779,19 +779,26 @@ export default function AlertsPage() {
         const tempSpan = Math.max(1, weekMax - weekMin);
         const uvLabel = !forecast
           ? ''
-          : forecast.uvIndex >= 8
-            ? 'Rất cao'
-            : forecast.uvIndex >= 6
-              ? 'Cao'
-              : forecast.uvIndex >= 3
-                ? 'Trung bình'
-                : 'Thấp';
+          : forecast.uvIndex >= 11
+            ? 'Cực nguy hiểm'
+            : forecast.uvIndex >= 8
+              ? 'Rất cao'
+              : forecast.uvIndex >= 6
+                ? 'Cao'
+                : forecast.uvIndex >= 3
+                  ? 'Trung bình'
+                  : 'Thấp';
+        const uvDisplay = !forecast
+          ? '--'
+          : forecast.uvIndex > 0 && forecast.uvIndex < 1
+            ? forecast.uvIndex.toFixed(1)
+            : String(Math.round(forecast.uvIndex * 10) / 10);
         const floodRisk = !forecast
           ? 'Đang kiểm tra'
-          : forecast.rainNow >= 5 || forecast.rainProbNow >= 70 || alerts.filter((a) => a.category === 'disaster').length >= 2
-            ? 'Cao — Đề phòng ngập'
-            : forecast.rainProbNow >= 45 || alerts.some((a) => a.category === 'disaster')
-              ? 'Trung bình'
+          : forecast.rainNext3hMm > 20 || forecast.rainNow > 10
+            ? 'Cao – Đề phòng ngập'
+            : forecast.rainNext3hMm >= 5 || forecast.rainNow >= 2
+              ? 'Trung bình – Lưu ý'
               : 'Thấp';
 
         return (
@@ -1022,6 +1029,9 @@ export default function AlertsPage() {
                         <p className="mono mt-1 text-lg font-extrabold text-white">
                           {forecast.rainProbNow}% <span className="text-xs font-semibold text-white/85">({forecast.rainNow}mm)</span>
                         </p>
+                        {forecast.rainProbNow === 0 && forecast.rainProbMaxToday > 0 && (
+                          <p className="mt-0.5 text-[11px] font-medium text-white/80">Cả ngày: {forecast.rainProbMaxToday}%</p>
+                        )}
                       </div>
                       <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
@@ -1036,8 +1046,9 @@ export default function AlertsPage() {
                           <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
                         </p>
                         <p className="mono mt-1 text-lg font-extrabold text-white">
-                          {forecast.uvIndex} <span className="text-xs font-semibold text-white/90">{uvLabel}</span>
+                          {uvDisplay} <span className="text-xs font-semibold text-white/90">{uvLabel}</span>
                         </p>
+                        <p className="mt-0.5 text-[11px] font-medium text-white/80">Đỉnh ngày: {forecast.uvMaxToday}</p>
                       </div>
                       <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
@@ -1052,6 +1063,9 @@ export default function AlertsPage() {
                           <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
                         </p>
                         <p className="mt-1 text-xs font-extrabold text-white sm:text-sm">{floodRisk}</p>
+                        <p className="mt-0.5 text-[11px] font-medium text-white/80">
+                          3h tới: {forecast.rainNext3hMm}mm · Ngày: {forecast.rainSumTodayMm}mm
+                        </p>
                       </div>
                     </div>
                   </div>

@@ -43,8 +43,12 @@ export interface DongNaiWeather {
   pressureHpa: number;
   rainNow: number;
   rainProbNow: number;
+  rainProbMaxToday: number;
+  rainNext3hMm: number;
+  rainSumTodayMm: number;
   cloudCover: number;
   uvIndex: number;
+  uvMaxToday: number;
   isDay: boolean;
   kind: WeatherKind;
   conditionVi: string;
@@ -158,9 +162,9 @@ async function fetchOpenMeteoPayload(
 ): Promise<{ payload: OpenMeteoPayload; via: 'direct' | 'proxy' }> {
   const directUrl =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
-    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,surface_pressure' +
-    '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,weather_code,uv_index,is_day' +
-    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max,sunrise,sunset' +
+    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m' +
+    '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max' +
     '&timezone=auto&forecast_days=7';
 
   try {
@@ -201,9 +205,19 @@ export async function fetchDongNaiWeather(
     const h = data.hourly!;
     const d = data.daily!;
 
-    // Khớp đúng giờ địa phương tại tọa độ đang xem dựa theo `current.time` của Open-Meteo (không lệch múi giờ)
-    const curHourPrefix = typeof cur.time === 'string' ? cur.time.slice(0, 13) : '';
-    let startIdx = curHourPrefix ? h.time!.findIndex((t) => t.slice(0, 13) >= curHourPrefix) : 0;
+    // Khớp đúng chỉ số khung giờ hiện tại (`YYYY-MM-DDTHH:00`) từ `data.current.time`
+    const curHourIso =
+      typeof cur.time === 'string' && cur.time.length >= 13 ? `${cur.time.slice(0, 13)}:00` : '';
+    let startIdx = curHourIso ? h.time!.findIndex((t) => t === curHourIso) : -1;
+    if (startIdx < 0 && curHourIso) {
+      // Nếu không khớp chính xác, chọn phần tử gần nhất không vượt quá giờ hiện tại
+      for (let i = h.time!.length - 1; i >= 0; i--) {
+        if (h.time![i] <= curHourIso) {
+          startIdx = i;
+          break;
+        }
+      }
+    }
     if (startIdx < 0) startIdx = 0;
 
     const hourly: HourlyPoint[] = h.time!.slice(startIdx, startIdx + 24).map((t, idx) => {
@@ -239,7 +253,15 @@ export async function fetchDongNaiWeather(
 
     const isDay = (cur.is_day ?? 1) === 1;
     const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
-    const uvNow = round1(h.uv_index?.[startIdx] ?? daily[0]?.uvMax ?? 0);
+    const uvNow = round1(h.uv_index?.[startIdx] ?? 0);
+    const uvMaxToday = round1(d.uv_index_max?.[0] ?? uvNow);
+    const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
+    const rainProbNow = Math.round(h.precipitation_probability?.[startIdx] ?? 0);
+    const rainProbMaxToday = Math.round(d.precipitation_probability_max?.[0] ?? rainProbNow);
+    const rainNext3hMm = round1(
+      [0, 1, 2].reduce((sum, offset) => sum + (h.precipitation?.[startIdx + offset] ?? 0), 0),
+    );
+    const rainSumTodayMm = round1(d.precipitation_sum?.[0] ?? rainNext3hMm);
     const currentTemp = round1(cur.temperature_2m ?? hourly[0]?.temp ?? 0);
 
     return {
@@ -256,10 +278,14 @@ export async function fetchDongNaiWeather(
       windSpeed: Math.round(cur.wind_speed_10m ?? 0),
       windGusts: Math.round(cur.wind_gusts_10m ?? cur.wind_speed_10m ?? 0),
       pressureHpa: Math.round(cur.surface_pressure ?? 1013),
-      rainNow: round1(cur.precipitation ?? cur.rain ?? 0),
-      rainProbNow: hourly[0]?.rainProb ?? 0,
+      rainNow,
+      rainProbNow,
+      rainProbMaxToday,
+      rainNext3hMm,
+      rainSumTodayMm,
       cloudCover: Math.round(cur.cloud_cover ?? 0),
-      uvIndex: isDay ? uvNow : 0,
+      uvIndex: uvNow,
+      uvMaxToday,
       isDay,
       kind: curMapped.kind,
       conditionVi: curMapped.vi,
