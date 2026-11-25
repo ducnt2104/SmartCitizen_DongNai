@@ -246,6 +246,8 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
   const selectWardScope = (nextScope: string): void => {
     set({ scope: nextScope });
     if (nextScope === 'city') {
+      inspectAbortRef.current?.abort();
+      setInspectedSpot(null);
       pushCamera({ kind: 'fitCity' });
       setQuery('');
     } else {
@@ -449,7 +451,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
                           <span className="font-semibold text-ink">{s.label}</span>
                           {s.upgradedOn2026 && (
                             <span className="ml-1.5 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-bold text-brand">
-                              30/04/2026
+                              Phường mới
                             </span>
                           )}
                           <span className="block truncate text-[11px] text-muted">{s.sublabel}</span>
@@ -635,7 +637,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <p className="text-sm font-extrabold text-ink">{inspectedSpot.label}</p>
-                  {inspectedSpot.wardName && (
+                  {inspectedSpot.wardName && inspectedSpot.wardName !== inspectedSpot.label && (
                     <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-bold text-brand">
                       {inspectedSpot.wardName}
                     </span>

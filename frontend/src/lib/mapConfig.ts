@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
-import type { StyleSpecification } from 'maplibre-gl';
+import type { LayerSpecification, StyleSpecification } from 'maplibre-gl';
 import { DONG_NAI_CITY_BOUNDS, DONG_NAI_CITY_CENTER } from '@shared/constants';
+import { DONG_NAI_WARDS } from '@shared/dongNaiWards';
 import type { Category, Priority, ReportStatus } from '@shared/types';
 
 export type MapMode = 'pins' | 'heat';
@@ -270,8 +271,149 @@ export function googleMapsDirectionsUrl(
 
 export const OPENFREEMAP_VECTOR_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 export const OPENFREEMAP_DARK_STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
+export const DONG_NAI_GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
+
+/** Đa giác ranh giới bao Thành phố Đồng Nai (loại trừ vùng TP.HCM ở góc Tây Nam) dùng ẩn nhãn ĐVHC cũ của OSM và vẽ khung hành chính mới. */
+export const DONG_NAI_ADMIN_MASK_POLYGON: GeoJSON.Feature<GeoJSON.Polygon> = {
+  type: 'Feature',
+  properties: { name: 'Thành phố Đồng Nai' },
+  geometry: {
+    type: 'Polygon',
+    coordinates: [
+      [
+        [106.74, 10.5],
+        [107.68, 10.5],
+        [107.68, 12.28],
+        [106.42, 12.28],
+        [106.42, 11.12],
+        [106.74, 11.12],
+        [106.74, 10.5],
+      ],
+    ],
+  },
+};
+
+const REGIONAL_HUB_CODES = new Set([
+  'DN-TB',
+  'DN-BH',
+  'DN-LTH',
+  'DN-NTR',
+  'DN-TBO',
+  'DN-LKH',
+  'DN-XLO',
+  'DN-TRA',
+  'DN-TPU',
+  'DN-BP',
+  'DN-CTH',
+  'DN-LNI',
+  'DN-PLO',
+  'DN-BDA',
+]);
+
+/** GeoJSON 95 Phường/Xã mới (33 Phường, 62 Xã) đặt đúng tại vị trí cập nhật để hiển thị trực tiếp lên bản đồ. */
+export function buildDongNaiWardsGeoJson(): GeoJSON.FeatureCollection<GeoJSON.Point> {
+  return {
+    type: 'FeatureCollection',
+    features: DONG_NAI_WARDS.map((w) => ({
+      type: 'Feature',
+      properties: {
+        wardCode: w.wardCode,
+        name: w.name,
+        shortName: w.shortName,
+        kind: w.kind,
+        zone: w.zone,
+        region: w.region,
+        isHub: REGIONAL_HUB_CODES.has(w.wardCode),
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [w.centerLng, w.centerLat],
+      },
+    })),
+  };
+}
+
+const LEGACY_OSM_PLACE_LAYERS = new Set([
+  'label_state',
+  'label_city',
+  'label_city_capital',
+  'label_town',
+  'label_village',
+  'label_other',
+]);
 
 const cachedVectorStylePromises: Partial<Record<'roadmap' | 'dark', Promise<StyleSpecification | null>>> = {};
+
+function excludeDongNaiLegacyFilter(existing: unknown): unknown {
+  const outsideMask: unknown = ['!', ['within', DONG_NAI_ADMIN_MASK_POLYGON]];
+  return existing ? ['all', existing, outsideMask] : outsideMask;
+}
+
+function tuneRoadmapLayer(layer: LayerSpecification): Record<string, unknown> {
+  const next = { ...layer } as Record<string, unknown>;
+  const paint = (layer.paint as Record<string, unknown> | undefined) ?? {};
+
+  if (layer.id === 'background' && layer.type === 'background') {
+    next.paint = { ...paint, 'background-color': '#F1F4F9' };
+  } else if (layer.id === 'landuse_residential' && layer.type === 'fill') {
+    delete next.maxzoom;
+    next.paint = { ...paint, 'fill-color': '#F3F5F8', 'fill-opacity': 0.9 };
+  } else if (layer.id === 'landuse_hospital' && layer.type === 'fill') {
+    next.paint = { ...paint, 'fill-color': '#FCE7EC' };
+  } else if (layer.id === 'landuse_school' && layer.type === 'fill') {
+    next.paint = { ...paint, 'fill-color': '#FEF3C7' };
+  } else if ((layer.id === 'water' || layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'fill') {
+    next.paint = { ...paint, 'fill-color': '#9CC8FA' };
+  } else if ((layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'line') {
+    next.paint = { ...paint, 'line-color': '#9CC8FA' };
+  } else if ((layer.id === 'park' || layer.id === 'landcover_grass') && layer.type === 'fill') {
+    next.paint = { ...paint, 'fill-color': '#C8F0D2' };
+  } else if (layer.id === 'building' && layer.type === 'fill') {
+    delete next.maxzoom;
+    next.minzoom = 13;
+    next.paint = { ...paint, 'fill-color': '#E7EBF0', 'fill-outline-color': '#CFD7DF' };
+  } else if (layer.id === 'building-3d' && layer.type === 'fill-extrusion') {
+    next.paint = { ...paint, 'fill-extrusion-color': '#E2E7ED', 'fill-extrusion-opacity': 0.42 };
+  } else if (layer.id === 'road_path_pedestrian') {
+    next.minzoom = 13;
+  } else if (layer.id === 'road_motorway' || layer.id === 'bridge_motorway' || layer.id === 'tunnel_motorway') {
+    next.paint = { ...paint, 'line-color': '#FBBF24' };
+  } else if (layer.id === 'road_motorway_casing' || layer.id === 'bridge_motorway_casing') {
+    next.paint = { ...paint, 'line-color': '#D97706' };
+  } else if (layer.id === 'road_trunk_primary' || layer.id === 'bridge_trunk_primary' || layer.id === 'tunnel_trunk_primary') {
+    next.paint = { ...paint, 'line-color': '#FDE047' };
+  } else if (layer.id === 'road_trunk_primary_casing' || layer.id === 'bridge_trunk_primary_casing') {
+    next.paint = { ...paint, 'line-color': '#CA8A04' };
+  } else if (
+    layer.id === 'road_secondary_tertiary' ||
+    layer.id === 'bridge_secondary_tertiary' ||
+    layer.id === 'road_minor' ||
+    layer.id === 'bridge_street' ||
+    layer.id === 'road_service_track'
+  ) {
+    next.paint = { ...paint, 'line-color': '#FFFFFF' };
+  } else if (
+    layer.id === 'road_secondary_tertiary_casing' ||
+    layer.id === 'bridge_secondary_tertiary_casing' ||
+    layer.id === 'road_minor_casing' ||
+    layer.id === 'road_service_track_casing'
+  ) {
+    next.paint = { ...paint, 'line-color': '#CBD5E1' };
+  } else if (layer.id === 'highway-name-major') {
+    next.minzoom = 11;
+  } else if (layer.id === 'highway-name-minor') {
+    next.minzoom = 12.6;
+  } else if (layer.id === 'highway-name-path') {
+    next.minzoom = 13.5;
+  } else if (layer.id === 'poi_r1') {
+    next.minzoom = 12.8;
+  } else if (layer.id === 'poi_r7') {
+    next.minzoom = 13.8;
+  } else if (layer.id === 'poi_r20') {
+    next.minzoom = 14.8;
+  }
+  return next;
+}
 
 function cloneAndLocalizeVectorStyle(
   base: StyleSpecification,
@@ -288,64 +430,74 @@ function cloneAndLocalizeVectorStyle(
     delete cleanSources.ne2_shaded;
   }
 
-  return {
-    ...base,
-    sources: cleanSources as StyleSpecification['sources'],
-    layers: base.layers
-      .filter((layer) => !(surface === 'roadmap' && layer.id === 'natural_earth'))
-      .map((layer) => {
-        const next = { ...layer } as Record<string, unknown>;
-        if (surface === 'roadmap') {
-          if (layer.id === 'background' && layer.type === 'background') {
-            next.paint = { ...(layer.paint as Record<string, unknown>), 'background-color': '#F1F4F8' };
-          } else if ((layer.id === 'water' || layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'fill') {
-            next.paint = { ...(layer.paint as Record<string, unknown>), 'fill-color': '#9DD0FE' };
-          } else if ((layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'line') {
-            next.paint = { ...(layer.paint as Record<string, unknown>), 'line-color': '#9DD0FE' };
-          } else if ((layer.id === 'park' || layer.id === 'landcover_grass') && layer.type === 'fill') {
-            next.paint = { ...(layer.paint as Record<string, unknown>), 'fill-color': '#CFEFD2' };
-          } else if (layer.id === 'highway-name-major') {
-            next.minzoom = 11.5;
-          } else if (layer.id === 'highway-name-minor') {
-            next.minzoom = 13.4;
-          } else if (layer.id === 'highway-name-path') {
-            next.minzoom = 14.2;
-          } else if (layer.id === 'poi_r1') {
-            next.minzoom = 13.6;
-          } else if (layer.id === 'poi_r7') {
-            next.minzoom = 14.6;
-          } else if (layer.id === 'poi_r20') {
-            next.minzoom = 15.6;
-          } else if (layer.id === 'label_village') {
-            next.minzoom = 8;
-          } else if (layer.id === 'label_other') {
-            next.minzoom = 7.5;
-          }
-        }
+  const mappedLayers: LayerSpecification[] = [];
+  let housenumberInserted = false;
 
-        if (layer.type !== 'symbol') return next as unknown as typeof layer;
-        const layout = layer.layout as Record<string, unknown> | undefined;
-        const paint = (layer.paint as Record<string, unknown> | undefined) ?? {};
-        if (!layout || !('text-field' in layout) || layer.id.includes('shield')) {
-          return next as unknown as typeof layer;
-        }
-        if (JSON.stringify(layout['text-field']).includes('"ref"')) {
-          return next as unknown as typeof layer;
-        }
+  for (const layer of base.layers) {
+    if (surface === 'roadmap' && (layer.id === 'natural_earth' || layer.id === 'boundary_3')) {
+      continue;
+    }
 
-        next.layout = {
-          ...layout,
-          'text-field': nameExpr,
-        };
+    const next = surface === 'roadmap' ? tuneRoadmapLayer(layer) : ({ ...layer } as Record<string, unknown>);
+
+    // Ẩn nhãn ĐVHC cũ của OSM (Tỉnh Bình Phước, TP. Biên Hòa, Thị trấn..., phường/xã cũ) bên trong Đồng Nai
+    // để thay thế bằng lớp 95 Phường/Xã hiện hành định vị chính xác.
+    if (LEGACY_OSM_PLACE_LAYERS.has(layer.id)) {
+      next.filter = excludeDongNaiLegacyFilter(next.filter);
+    }
+
+    if (layer.type === 'symbol') {
+      const layout = layer.layout as Record<string, unknown> | undefined;
+      const paint = (next.paint as Record<string, unknown> | undefined) ?? {};
+      if (layout && 'text-field' in layout && !layer.id.includes('shield') && !JSON.stringify(layout['text-field']).includes('"ref"')) {
+        next.layout = { ...layout, 'text-field': nameExpr };
         if (surface === 'roadmap' && 'text-halo-color' in paint) {
           next.paint = {
             ...paint,
             'text-halo-color': 'rgba(255, 255, 255, 0.96)',
-            'text-halo-width': Math.max(Number(paint['text-halo-width'] ?? 1.2), 1.6),
+            'text-halo-width': Math.max(Number(paint['text-halo-width'] ?? 1.2), 1.8),
           };
         }
-        return next as unknown as typeof layer;
-      }),
+      }
+    }
+
+    mappedLayers.push(next as unknown as LayerSpecification);
+
+    // Chèn lớp số nhà thật từ openmaptiles (`housenumber`) ngay sau lớp tòa nhà 3D
+    if (
+      surface === 'roadmap' &&
+      !housenumberInserted &&
+      'openmaptiles' in cleanSources &&
+      layer.id === 'building-3d'
+    ) {
+      housenumberInserted = true;
+      mappedLayers.push({
+        id: 'sc-housenumber',
+        type: 'symbol',
+        source: 'openmaptiles',
+        'source-layer': 'housenumber',
+        minzoom: 15.2,
+        layout: {
+          'text-field': ['to-string', ['get', 'housenumber']],
+          'text-font': ['Noto Sans Regular'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 15.2, 9, 19, 11.5],
+          'text-allow-overlap': false,
+          'text-padding': 4,
+        },
+        paint: {
+          'text-color': '#475569',
+          'text-halo-color': 'rgba(255, 255, 255, 0.96)',
+          'text-halo-width': 1.5,
+        },
+      } as unknown as LayerSpecification);
+    }
+  }
+
+  return {
+    ...base,
+    glyphs: base.glyphs ?? DONG_NAI_GLYPHS_URL,
+    sources: cleanSources as StyleSpecification['sources'],
+    layers: mappedLayers,
   };
 }
 
@@ -404,6 +556,7 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
   if (surface === 'hybrid') {
     return {
       version: 8,
+      glyphs: DONG_NAI_GLYPHS_URL,
       sources: {
         'esri-sat': {
           type: 'raster',
@@ -434,7 +587,8 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
       layers: [
         { id: 'esri-sat-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 22 },
         { id: 'esri-transport-layer', type: 'raster', source: 'esri-transport', minzoom: 0, maxzoom: 22 },
-        { id: 'esri-places-layer', type: 'raster', source: 'esri-places', minzoom: 0, maxzoom: 22 },
+        // Ẩn lớp nhãn raster ĐVHC cũ của Esri (`esri-places`), thay bằng lớp 95 Phường/Xã mới từ vector GeoJSON
+        { id: 'esri-places-layer', type: 'raster', source: 'esri-places', minzoom: 0, maxzoom: 22, paint: { 'raster-opacity': 0 } },
       ],
     };
   }
@@ -442,6 +596,7 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
   if (surface === 'dark') {
     return {
       version: 8,
+      glyphs: DONG_NAI_GLYPHS_URL,
       sources: {
         'esri-dark': {
           type: 'raster',
@@ -471,6 +626,7 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
 
   return {
     version: 8,
+    glyphs: DONG_NAI_GLYPHS_URL,
     sources: {
       'esri-street': {
         type: 'raster',

@@ -250,16 +250,6 @@ export function PrecisionLocationPicker({
     [onPinChange],
   );
 
-  const handlePinDragEnd = useCallback(
-    (lat: number, lng: number) => {
-      const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
-      if (!norm.ok) return;
-      onPinChange({ lat: norm.lat, lng: norm.lng });
-      pushCamera({ kind: 'flyTo', lat: norm.lat, lng: norm.lng });
-    },
-    [onPinChange, pushCamera],
-  );
-
   const activeWardCode =
     manualWardCode || geo?.ward.wardCode || (pin ? nearestWard(pin.lat, pin.lng).wardCode : '');
   const activeWard = activeWardCode ? WARD_BY_CODE[activeWardCode] : undefined;
@@ -411,15 +401,6 @@ export function PrecisionLocationPicker({
         userPos={fix ? { lat: fix.lat, lng: fix.lng } : null}
         accuracyM={fix?.accuracy ?? null}
         crosshairPin={{ onChange: handleCrosshairMove }}
-        draggablePin={
-          pin
-            ? {
-                lat: pin.lat,
-                lng: pin.lng,
-                onDragEnd: handlePinDragEnd,
-              }
-            : null
-        }
         showArterials
         showFitCityButton
         onLocate={() => void triggerLocate()}
@@ -479,12 +460,6 @@ export function PrecisionLocationPicker({
         {geo?.needsConfirmation && !manualWardCode && (
           <p className="rounded-xl bg-warn-soft px-3 py-2 text-xs font-semibold text-warn">
             {t('report.wardAutoSuggest')}
-          </p>
-        )}
-
-        {geo?.matchedAlias && (
-          <p className="rounded-xl bg-brand-soft px-3 py-1.5 text-xs text-brand">
-            {t('report.aliasNormalized', { old: geo.matchedAlias, unit: geo.ward.name })}
           </p>
         )}
 

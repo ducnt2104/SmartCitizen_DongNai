@@ -1,10 +1,95 @@
 import { DONG_NAI_BBOX } from '@shared/constants';
 import { normalizeCoordinates, TRAN_BIEN_FALLBACK_COORDS } from '@shared/coordinates';
-import { searchWards, WARD_BY_CODE } from '@shared/dongNaiWards';
+import { DONG_NAI_WARDS, normalizeVi, searchWards, WARD_BY_CODE } from '@shared/dongNaiWards';
 import { haversineMeters, inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
 import type { ReverseGeocodeResult } from '@shared/types';
 import { api } from './api';
 import { DONG_NAI_GOOGLE_BOUNDS, isGoogleMapsHealthy } from './mapConfig';
+
+const LEGACY_ADMIN_SEGMENT_NORMS: ReadonlySet<string> = (() => {
+  const s = new Set<string>([
+    'dong nai',
+    'thanh pho dong nai',
+    'tp dong nai',
+    'tinh dong nai',
+    'binh phuoc',
+    'tinh binh phuoc',
+    'viet nam',
+    'vietnam',
+    'bien hoa',
+    'tp bien hoa',
+    'thanh pho bien hoa',
+    'long khanh',
+    'tp long khanh',
+    'thanh pho long khanh',
+    'dong xoai',
+    'tp dong xoai',
+    'thanh pho dong xoai',
+    'huyen trang bom',
+    'huyen long thanh',
+    'huyen nhon trach',
+    'huyen vinh cuu',
+    'huyen thong nhat',
+    'huyen cam my',
+    'huyen xuan loc',
+    'huyen dinh quan',
+    'huyen tan phu',
+    'thi xa chon thanh',
+    'thi xa binh long',
+    'thi xa phuoc long',
+    'huyen hon quan',
+    'huyen loc ninh',
+    'huyen bu dop',
+    'huyen bu gia map',
+    'huyen phu rieng',
+    'huyen dong phu',
+    'huyen bu dang',
+  ]);
+  for (const w of DONG_NAI_WARDS) {
+    s.add(normalizeVi(w.name));
+    s.add(normalizeVi(w.shortName));
+    for (const alias of w.legacyAliases) {
+      const a = normalizeVi(alias);
+      if (a) s.add(a);
+      s.add(`phuong ${a}`);
+      s.add(`xa ${a}`);
+      s.add(`thi tran ${a}`);
+    }
+  }
+  return s;
+})();
+
+function isLegacyOrRedundantAdminSegment(seg: string, wardName?: string | null): boolean {
+  const clean = seg.trim();
+  if (!clean) return true;
+  if (/^\d{5,6}$/.test(clean)) return true;
+  if (/^(?:huyện|thị xã|thị trấn|tỉnh|tp\.?|thành phố)\s+/i.test(clean)) return true;
+  const n = normalizeVi(clean);
+  if (!n) return true;
+  if (wardName && (n === normalizeVi(wardName) || n === normalizeVi(wardName.replace(/^(phường|xã)\s+/i, '')))) {
+    return true;
+  }
+  return LEGACY_ADMIN_SEGMENT_NORMS.has(n);
+}
+
+function formatModernSublabel(
+  trailingParts: string[],
+  mainLabel: string,
+  wardCode?: string | null,
+): string {
+  const wardLabel = wardCode ? WARD_BY_CODE[wardCode]?.name : undefined;
+  const mainNorm = normalizeVi(mainLabel);
+  const kept = trailingParts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .filter((p) => {
+      const pn = normalizeVi(p);
+      if (!pn || pn === mainNorm) return false;
+      return !isLegacyOrRedundantAdminSegment(p, wardLabel);
+    });
+  const contextPart = kept.slice(0, 1).join(', ');
+  return [contextPart, wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · ');
+}
 
 export interface GpsFix {
   lat: number;
@@ -98,7 +183,7 @@ export async function getGps(): Promise<GpsFix> {
       );
     });
 
-  const t1 = await attempt({ enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 }, 1);
+  const t1 = await attempt({ enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }, 1);
   if (t1.fix) return t1.fix;
   if (t1.err?.kind === 'denied') throw t1.err;
 
@@ -275,7 +360,7 @@ async function arcgisReverseGeocode(
   }
 }
 
-/** Reverse Geocode qua Photon OSM (chi tiết tên đường, số nhà, POI). */
+/** Reverse Geocode qua Photon OSM (lấy nhiều feature gần nhất để trích xuất đủ POI + số nhà + tên đường + locality). */
 async function photonReverseGeocode(
   lat: number,
   lng: number,
@@ -283,32 +368,55 @@ async function photonReverseGeocode(
 ): Promise<ReverseGeocodeResult | null> {
   if (signal?.aborted) return null;
   try {
-    const url = `https://photon.komoot.io/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lon=${encodeURIComponent(lng.toFixed(6))}&limit=1`;
+    const url = `https://photon.komoot.io/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lon=${encodeURIComponent(lng.toFixed(6))}&limit=3`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
     if (!res.ok) return null;
     const json = (await res.json()) as {
       features?: Array<{
         properties?: {
+          osm_key?: string;
           housenumber?: string;
           street?: string;
           name?: string;
+          locality?: string;
           district?: string;
           suburb?: string;
+          county?: string;
           city?: string;
           state?: string;
         };
       }>;
     };
-    const pr = json.features?.[0]?.properties;
-    if (!pr) return null;
+    const feats = json.features ?? [];
+    if (feats.length === 0) return null;
 
-    const streetLine = [pr.housenumber, pr.street].filter(Boolean).join(' ').trim();
-    const poi = (pr.name ?? '').trim();
+    let housenumber = '';
+    let street = '';
+    let poi = '';
+    const rawParts: string[] = [];
+
+    for (const f of feats) {
+      const pr = f.properties;
+      if (!pr) continue;
+      if (!housenumber && pr.housenumber) housenumber = pr.housenumber.trim();
+      if (!street) {
+        if (pr.street?.trim()) street = pr.street.trim();
+        else if (pr.osm_key === 'highway' && pr.name?.trim()) street = pr.name.trim();
+      }
+      if (!poi && pr.osm_key !== 'highway' && pr.osm_key !== 'boundary' && pr.name?.trim()) {
+        poi = pr.name.trim();
+      }
+      for (const adminField of [pr.locality, pr.district, pr.suburb, pr.county, pr.city, pr.state]) {
+        if (adminField?.trim()) rawParts.push(adminField.trim());
+      }
+    }
+
+    const streetLine = [housenumber, street].filter(Boolean).join(' ').trim();
     const headPart =
       poi && streetLine && !streetLine.toLowerCase().includes(poi.toLowerCase())
         ? `${poi}, ${streetLine}`
         : streetLine || poi;
-    const rawText = [poi, streetLine, pr.district, pr.suburb, pr.city, pr.state].filter(Boolean).join(', ');
+    const rawText = [poi, streetLine, ...rawParts].filter(Boolean).join(', ');
     const normalized = resolveAdminUnit({ lat, lng, street: streetLine || poi, rawAddressText: rawText });
 
     if (normalized.inBounds && normalized.wardName && headPart) {
@@ -384,7 +492,7 @@ async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<Plac
   try {
     const extent = `${DONG_NAI_BBOX.lngMin},${DONG_NAI_BBOX.latMin},${DONG_NAI_BBOX.lngMax},${DONG_NAI_BBOX.latMax}`;
     const singleLine = q.toLowerCase().includes('đồng nai') || q.toLowerCase().includes('dong nai') ? q : `${q}, Đồng Nai`;
-    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&SingleLine=${encodeURIComponent(singleLine)}&countryCode=VNM&searchExtent=${extent}&maxLocations=6&langCode=vi`;
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&SingleLine=${encodeURIComponent(singleLine)}&countryCode=VNM&searchExtent=${extent}&locationType=rooftop&maxLocations=6&langCode=vi`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
     if (!res.ok) return [];
     const json = (await res.json()) as {
@@ -397,6 +505,7 @@ async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<Plac
     const out: PlaceSuggestion[] = [];
     const seen = new Set<string>();
     for (const c of json.candidates ?? []) {
+      if (typeof c.score === 'number' && c.score < 58) continue;
       const lat = c.location?.y;
       const lng = c.location?.x;
       if (typeof lat !== 'number' || typeof lng !== 'number' || !inDongNaiBBox(lat, lng)) continue;
@@ -407,11 +516,11 @@ async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<Plac
       seen.add(key);
       const resolved = resolveAdminUnit({ lat, lng, rawAddressText: addr });
       const parts = addr.split(',').map((s) => s.trim());
-      const wardLabel = resolved.wardCode ? WARD_BY_CODE[resolved.wardCode]?.name : undefined;
+      const mainLabel = parts[0] || addr;
       out.push({
         id: `arc:${out.length}:${lat.toFixed(5)}:${lng.toFixed(5)}`,
-        label: parts[0] || addr,
-        sublabel: [parts.slice(1, 3).join(', '), wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · '),
+        label: mainLabel,
+        sublabel: formatModernSublabel(parts.slice(1), mainLabel, resolved.wardCode),
         kind: 'place',
         lat,
         lng,
@@ -426,13 +535,24 @@ async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<Plac
 
 async function searchPhotonPlaces(q: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   try {
-    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lat=11.05&lon=106.95`;
+    const bbox = `${DONG_NAI_BBOX.lngMin},${DONG_NAI_BBOX.latMin},${DONG_NAI_BBOX.lngMax},${DONG_NAI_BBOX.latMax}`;
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&bbox=${bbox}&lat=11.05&lon=106.95`;
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
     if (!res.ok) return [];
     const json = (await res.json()) as {
       features?: Array<{
         geometry?: { coordinates?: [number, number] };
-        properties?: { osm_id?: number; name?: string; street?: string; district?: string; city?: string; state?: string };
+        properties?: {
+          osm_id?: number;
+          name?: string;
+          housenumber?: string;
+          street?: string;
+          locality?: string;
+          district?: string;
+          county?: string;
+          city?: string;
+          state?: string;
+        };
       }>;
     };
     const out: PlaceSuggestion[] = [];
@@ -442,13 +562,14 @@ async function searchPhotonPlaces(q: string, signal?: AbortSignal): Promise<Plac
       const [lng, lat] = coords;
       if (!inDongNaiBBox(lat, lng)) continue;
       const pr = f.properties ?? {};
-      const raw = [pr.name, pr.street, pr.district, pr.city, pr.state].filter(Boolean).join(', ');
-      const resolved = resolveAdminUnit({ lat, lng, street: pr.street, rawAddressText: raw });
-      const wardLabel = resolved.wardCode ? WARD_BY_CODE[resolved.wardCode]?.name : undefined;
+      const streetLine = [pr.housenumber, pr.street].filter(Boolean).join(' ').trim();
+      const raw = [pr.name, streetLine, pr.locality, pr.district, pr.county, pr.city, pr.state].filter(Boolean).join(', ');
+      const resolved = resolveAdminUnit({ lat, lng, street: streetLine || pr.name, rawAddressText: raw });
+      const mainLabel = pr.name?.trim() || streetLine || raw;
       out.push({
         id: `photon:${pr.osm_id ?? out.length}:${lat.toFixed(5)}`,
-        label: pr.name?.trim() || pr.street?.trim() || raw,
-        sublabel: [pr.street && pr.street !== pr.name ? pr.street : '', wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · '),
+        label: mainLabel,
+        sublabel: formatModernSublabel(streetLine && streetLine !== mainLabel ? [streetLine] : [], mainLabel, resolved.wardCode),
         kind: 'place',
         lat,
         lng,
@@ -462,9 +583,9 @@ async function searchPhotonPlaces(q: string, signal?: AbortSignal): Promise<Plac
 }
 
 /**
- * Tìm kiếm thông minh Địa chỉ / Con hẻm / 95 Phường Xã ưu tiên trong Bounding Box Thành phố Đồng Nai:
- *  - Khớp tức thì 0ms với 95 Phường/Xã (không dấu + bí danh cũ trước 01/07/2025 & 30/04/2026).
- *  - Khi trực tuyến: gọi Google Places Autocomplete (nếu có key), ArcGIS Geocoder, Photon, và OSM Nominatim.
+ * Tìm kiếm thông minh Địa chỉ / Con hẻm / 95 Phường Xã mới nhất trong Thành phố Đồng Nai:
+ *  - Khớp tức thì 0ms với 95 Phường/Xã hiện hành (hiển thị tên đơn vị mới).
+ *  - Khi trực tuyến: gọi song song ArcGIS Rooftop + Photon BBox + Google Places + Nominatim.
  */
 export async function searchPlacesDongNai(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   const q = query.trim();
@@ -473,10 +594,7 @@ export async function searchPlacesDongNai(query: string, signal?: AbortSignal): 
   const wardMatches: PlaceSuggestion[] = searchWards(q, 5).map((w) => ({
     id: `ward:${w.wardCode}`,
     label: w.name,
-    sublabel:
-      w.legacyAliases.length > 0
-        ? `TP. Đồng Nai · Gồm: ${w.legacyAliases.slice(0, 3).join(', ')}`
-        : `${w.zone} · Thành phố Đồng Nai`,
+    sublabel: `${w.kind} · Khu vực ${w.zone} · TP. Đồng Nai`,
     kind: 'ward',
     lat: w.centerLat,
     lng: w.centerLng,
@@ -567,11 +685,10 @@ export async function searchPlacesDongNai(query: string, signal?: AbortSignal): 
       const resolved = resolveAdminUnit({ lat, lng, rawAddressText: r.display_name });
       const parts = r.display_name.split(',').map((s) => s.trim());
       const mainLabel = r.name?.trim() || parts[0] || r.display_name;
-      const wardLabel = resolved.wardCode ? WARD_BY_CODE[resolved.wardCode]?.name : undefined;
       osmPlaces.push({
         id: `osm:${r.place_id}`,
         label: mainLabel,
-        sublabel: [parts[1], wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · '),
+        sublabel: formatModernSublabel(parts.slice(1), mainLabel, resolved.wardCode),
         kind: 'place',
         lat,
         lng,

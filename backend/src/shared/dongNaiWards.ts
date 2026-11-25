@@ -25,47 +25,47 @@ type Row = readonly [
 /** 33 PHƯỜNG (23 phường từ 01/07/2025 + 10 phường nâng cấp 30/04/2026) */
 const PHUONG_ROWS: readonly Row[] = [
   // ── Đô thị Trung tâm (10 phường) ──
-  ['TB', 'Trấn Biên', 'P', 'trung_tam', 'Trung tâm', 10.9465, 106.8243, false, ['Bửu Long', 'Quang Vinh', 'Trung Dũng', 'Quyết Thắng', 'Phường Quyết Thắng', 'Thống Nhất (Biên Hòa)', 'Hiệp Hòa', 'An Bình', 'TP. Biên Hòa']],
-  ['BH', 'Biên Hòa', 'P', 'trung_tam', 'Trung tâm', 10.948, 106.798, false, ['Tân Hạnh', 'Hóa An', 'Bửu Hòa', 'Tân Vạn']],
-  ['TDA', 'Trảng Dài', 'P', 'trung_tam', 'Công nghiệp', 10.985, 106.865, false, ['Thiện Tân', 'Phường Trảng Dài']],
-  ['THP', 'Tam Hiệp', 'P', 'trung_tam', 'Trung tâm', 10.9495, 106.856, false, ['Tân Hiệp (Biên Hòa)', 'Tân Mai', 'Bình Đa']],
-  ['LBI', 'Long Bình', 'P', 'trung_tam', 'Công nghiệp', 10.916, 106.878, false, ['Hố Nai cũ', 'Tân Biên', 'Phường Long Bình']],
-  ['HNI', 'Hố Nai', 'P', 'trung_tam', 'Công nghiệp', 10.958, 106.912, false, ['Tân Hòa', 'Hố Nai 3']],
-  ['LHU', 'Long Hưng', 'P', 'trung_tam', 'Công nghiệp', 10.892, 106.852, false, ['An Hòa', 'Long Bình Tân', 'Xã Long Hưng']],
-  ['PTA', 'Phước Tân', 'P', 'trung_tam', 'Công nghiệp', 10.88, 106.905, false, ['Phường Phước Tân']],
-  ['TPC', 'Tam Phước', 'P', 'trung_tam', 'Công nghiệp', 10.865, 106.935, false, ['Phường Tam Phước']],
-  ['TTR', 'Tân Triều', 'P', 'trung_tam', 'Trung tâm', 10.986, 106.805, false, ['Thạnh Phú', 'Tân Bình (Vĩnh Cửu)', 'Bình Lợi', 'Xã Tân Triều']],
+  ['TB', 'Trấn Biên', 'P', 'trung_tam', 'Trung tâm', 10.9465, 106.8243, false, ['Bửu Long', 'Quang Vinh', 'Trung Dũng', 'Quyết Thắng', 'Phường Quyết Thắng', 'Thống Nhất (Biên Hòa)', 'Thống Nhất', 'Tân Phong', 'Tân Tiến', 'Hiệp Hòa', 'An Bình', 'Trấn Biên', 'TP. Biên Hòa']],
+  ['BH', 'Biên Hòa', 'P', 'trung_tam', 'Trung tâm', 10.9287, 106.8204, false, ['Tân Hạnh', 'Hóa An', 'Bửu Hòa', 'Tân Vạn', 'Biên Hòa']],
+  ['TDA', 'Trảng Dài', 'P', 'trung_tam', 'Công nghiệp', 10.9920, 106.8617, false, ['Thiện Tân', 'Phường Trảng Dài', 'Trảng Dài']],
+  ['THP', 'Tam Hiệp', 'P', 'trung_tam', 'Trung tâm', 10.9472, 106.8553, false, ['Tân Hiệp (Biên Hòa)', 'Tân Hiệp', 'Tân Mai', 'Bình Đa', 'Tam Hòa']],
+  ['LBI', 'Long Bình', 'P', 'trung_tam', 'Công nghiệp', 10.9383, 106.9036, false, ['Hố Nai cũ', 'Tân Biên', 'Phường Long Bình', 'Long Bình']],
+  ['HNI', 'Hố Nai', 'P', 'trung_tam', 'Công nghiệp', 10.9723, 106.8793, false, ['Tân Hòa', 'Hố Nai 3', 'Hố Nai']],
+  ['LHU', 'Long Hưng', 'P', 'trung_tam', 'Công nghiệp', 10.9035, 106.8565, false, ['An Hòa', 'Long Bình Tân', 'Xã Long Hưng']],
+  ['PTA', 'Phước Tân', 'P', 'trung_tam', 'Công nghiệp', 10.8852, 106.9036, false, ['Phường Phước Tân']],
+  ['TPC', 'Tam Phước', 'P', 'trung_tam', 'Công nghiệp', 10.8586, 106.9250, false, ['Phường Tam Phước']],
+  ['TTR', 'Tân Triều', 'P', 'trung_tam', 'Trung tâm', 10.9980, 106.8185, false, ['Thạnh Phú', 'Tân Bình (Vĩnh Cửu)', 'Bình Lợi', 'Xã Tân Triều']],
 
   // ── Nam — Sân bay & Cảng (2 phường lên ngày 30/04/2026) ──
-  ['LTH', 'Long Thành', 'P', 'nam_san_bay_cang', 'Công nghiệp', 10.79, 106.95, true, ['Xã Long Thành', 'Thị trấn Long Thành', 'Huyện Long Thành', 'Lộc An', 'Bình Sơn', 'Long An', 'Sân bay Long Thành']],
-  ['NTR', 'Nhơn Trạch', 'P', 'nam_san_bay_cang', 'Công nghiệp', 10.732, 106.906, true, ['Xã Nhơn Trạch', 'Huyện Nhơn Trạch', 'Thị trấn Hiệp Phước', 'Long Tân', 'Phú Thạnh', 'Phú Hội', 'Phước Thiền']],
+  ['LTH', 'Long Thành', 'P', 'nam_san_bay_cang', 'Công nghiệp', 10.7782, 106.9462, true, ['Xã Long Thành', 'Thị trấn Long Thành', 'Huyện Long Thành', 'Lộc An', 'Bình Sơn', 'Long An', 'Sân bay Long Thành']],
+  ['NTR', 'Nhơn Trạch', 'P', 'nam_san_bay_cang', 'Công nghiệp', 10.7458, 106.9474, true, ['Xã Nhơn Trạch', 'Huyện Nhơn Trạch', 'Thị trấn Hiệp Phước', 'Long Tân', 'Phú Thạnh', 'Phú Hội', 'Phước Thiền']],
 
   // ── Đông — Trảng Bom, Long Khánh, Xuân Lộc (8 phường; 3 phường lên 30/04/2026) ──
-  ['TBO', 'Trảng Bom', 'P', 'dong_xuan_loc', 'Công nghiệp', 10.954, 107.01, true, ['Xã Trảng Bom', 'Thị trấn Trảng Bom', 'Huyện Trảng Bom', 'Quảng Tiến', 'Sông Trầu', 'Giang Điền']],
-  ['DGI', 'Dầu Giây', 'P', 'dong_xuan_loc', 'Liên vùng', 10.938, 107.14, true, ['Xã Dầu Giây', 'Thị trấn Dầu Giây', 'Hưng Lộc', 'Bàu Hàm 2', 'Lộ 25']],
-  ['LKH', 'Long Khánh', 'P', 'dong_xuan_loc', 'Liên vùng', 10.93, 107.24, false, ['TP. Long Khánh', 'Xuân An', 'Xuân Bình', 'Xuân Hòa (LK)', 'Phú Bình (LK)', 'Bàu Trâm']],
-  ['BLC', 'Bình Lộc', 'P', 'dong_xuan_loc', 'Liên vùng', 10.972, 107.225, false, ['Suối Tre', 'Xuân Thiện', 'Xã Bình Lộc']],
-  ['BVI', 'Bảo Vinh', 'P', 'dong_xuan_loc', 'Liên vùng', 10.948, 107.268, false, ['Bảo Quang', 'Phường Bảo Vinh']],
-  ['XLA', 'Xuân Lập', 'P', 'dong_xuan_loc', 'Liên vùng', 10.958, 107.212, false, ['Bàu Sen', 'Xuân Tân', 'Phường Xuân Lập']],
-  ['HGO', 'Hàng Gòn', 'P', 'dong_xuan_loc', 'Liên vùng', 10.896, 107.272, false, ['Xuân Thanh', 'Xã Hàng Gòn']],
-  ['XLO', 'Xuân Lộc', 'P', 'dong_xuan_loc', 'Liên vùng', 10.924, 107.405, true, ['Xã Xuân Lộc', 'Huyện Xuân Lộc', 'Thị trấn Gia Ray', 'Xuân Trường', 'Xuân Thọ', 'Suối Cát']],
+  ['TBO', 'Trảng Bom', 'P', 'dong_xuan_loc', 'Công nghiệp', 10.9526, 107.0104, true, ['Xã Trảng Bom', 'Thị trấn Trảng Bom', 'Huyện Trảng Bom', 'Quảng Tiến', 'Sông Trầu', 'Giang Điền']],
+  ['DGI', 'Dầu Giây', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9483, 107.1579, true, ['Xã Dầu Giây', 'Thị trấn Dầu Giây', 'Hưng Lộc', 'Bàu Hàm 2', 'Lộ 25']],
+  ['LKH', 'Long Khánh', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9336, 107.2627, false, ['TP. Long Khánh', 'Xuân An', 'Xuân Bình', 'Xuân Hòa (LK)', 'Phú Bình (LK)', 'Bàu Trâm']],
+  ['BLC', 'Bình Lộc', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9720, 107.2250, false, ['Suối Tre', 'Xuân Thiện', 'Xã Bình Lộc']],
+  ['BVI', 'Bảo Vinh', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9480, 107.2680, false, ['Bảo Quang', 'Phường Bảo Vinh']],
+  ['XLA', 'Xuân Lập', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9580, 107.2120, false, ['Bàu Sen', 'Xuân Tân', 'Phường Xuân Lập']],
+  ['HGO', 'Hàng Gòn', 'P', 'dong_xuan_loc', 'Liên vùng', 10.8960, 107.2720, false, ['Xuân Thanh', 'Xã Hàng Gòn']],
+  ['XLO', 'Xuân Lộc', 'P', 'dong_xuan_loc', 'Liên vùng', 10.9336, 107.4074, true, ['Xã Xuân Lộc', 'Huyện Xuân Lộc', 'Thị trấn Gia Ray', 'Xuân Trường', 'Xuân Thọ', 'Suối Cát']],
 
   // ── Đông Bắc — Cát Tiên, Trị An, Tân Phú (2 phường lên ngày 30/04/2026) ──
-  ['TRA', 'Trị An', 'P', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.092, 107.012, true, ['Xã Trị An', 'Thị trấn Vĩnh An', 'Huyện Vĩnh Cửu', 'Mã Đà', 'Hiếu Liêm']],
-  ['TPU', 'Tân Phú', 'P', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.275, 107.432, true, ['Xã Tân Phú', 'Thị trấn Tân Phú, Huyện Tân Phú', 'Thị trấn Tân Phú', 'Huyện Tân Phú', 'Phú Lộc', 'Trà Cổ', 'Phú Thanh', 'Phú Xuân']],
+  ['TRA', 'Trị An', 'P', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.0964, 107.0391, true, ['Xã Trị An', 'Thị trấn Vĩnh An', 'Huyện Vĩnh Cửu', 'Mã Đà', 'Hiếu Liêm']],
+  ['TPU', 'Tân Phú', 'P', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.2695, 107.4277, true, ['Xã Tân Phú', 'Thị trấn Tân Phú, Huyện Tân Phú', 'Thị trấn Tân Phú', 'Huyện Tân Phú', 'Phú Lộc', 'Trà Cổ', 'Phú Thanh', 'Phú Xuân']],
 
   // ── Bắc Đồng Nai — Đồng Xoài, Bình Phước, Chơn Thành, Bình Long, Lộc Ninh, Phước Long (11 phường; 3 phường lên 30/04/2026) ──
-  ['BP', 'Bình Phước', 'P', 'bac_dong_nai', 'Trung tâm', 11.535, 106.896, false, ['Tân Đồng', 'Tân Thiện', 'Tân Bình (Đồng Xoài)', 'Tân Xuân', 'Tiến Hưng', 'Phường Tân Phú, Thành phố Đồng Xoài', 'Tân Phú (Đồng Xoài)', 'Thành phố Đồng Xoài', 'TP. Đồng Xoài']],
-  ['DX', 'Đồng Xoài', 'P', 'bac_dong_nai', 'Trung tâm', 11.555, 106.865, false, ['Tiến Thành', 'Tân Thành (Đồng Xoài)', 'Phường Đồng Xoài']],
-  ['DPU', 'Đồng Phú', 'P', 'bac_dong_nai', 'Công nghiệp', 11.46, 106.925, true, ['Xã Đồng Phú', 'Thị trấn Tân Phú, Huyện Đồng Phú', 'Huyện Đồng Phú', 'Thị trấn Tân Phú (Đồng Phú)', 'Tân Lập', 'Tân Tiến (Đồng Phú)']],
-  ['CTH', 'Chơn Thành', 'P', 'bac_dong_nai', 'Công nghiệp', 11.425, 106.625, false, ['Thị xã Chơn Thành', 'Hưng Long', 'Thành Tâm', 'Minh Thành']],
-  ['MHU', 'Minh Hưng', 'P', 'bac_dong_nai', 'Công nghiệp', 11.472, 106.592, false, ['Minh Long', 'Phường Minh Hưng']],
-  ['TKH', 'Tân Khai', 'P', 'bac_dong_nai', 'Công nghiệp', 11.558, 106.615, true, ['Xã Tân Khai', 'Thị trấn Tân Khai', 'Huyện Hớn Quản', 'Tân Hiệp (Hớn Quản)', 'Đồng Nơ']],
-  ['BLO', 'Bình Long', 'P', 'bac_dong_nai', 'Liên vùng', 11.648, 106.605, false, ['Thị xã Bình Long', 'Hưng Chiến', 'Phú Đức']],
-  ['ALO', 'An Lộc', 'P', 'bac_dong_nai', 'Liên vùng', 11.662, 106.625, false, ['Phú Thịnh', 'Thanh Phú', 'Thanh Lương']],
-  ['LNI', 'Lộc Ninh', 'P', 'bac_dong_nai', 'Liên vùng', 11.842, 106.592, true, ['Xã Lộc Ninh', 'Thị trấn Lộc Ninh', 'Huyện Lộc Ninh', 'Lộc Thái', 'Lộc Thuận']],
-  ['PLO', 'Phước Long', 'P', 'bac_dong_nai', 'Liên vùng', 11.848, 106.992, false, ['Thị xã Phước Long', 'Thác Mơ', 'Long Thủy', 'Sơn Giang', 'Phước Tín']],
-  ['PBI', 'Phước Bình', 'P', 'bac_dong_nai', 'Liên vùng', 11.816, 106.968, false, ['Long Phước (Phước Long)', 'Bình Sơn (Phước Long)', 'Phường Phước Bình']],
+  ['BP', 'Bình Phước', 'P', 'bac_dong_nai', 'Trung tâm', 11.5350, 106.8832, false, ['Tân Đồng', 'Tân Thiện', 'Tân Bình (Đồng Xoài)', 'Tân Xuân', 'Tiến Hưng', 'Phường Tân Phú, Thành phố Đồng Xoài', 'Tân Phú (Đồng Xoài)', 'Thành phố Đồng Xoài', 'TP. Đồng Xoài']],
+  ['DX', 'Đồng Xoài', 'P', 'bac_dong_nai', 'Trung tâm', 11.5550, 106.8650, false, ['Tiến Thành', 'Tân Thành (Đồng Xoài)', 'Phường Đồng Xoài']],
+  ['DPU', 'Đồng Phú', 'P', 'bac_dong_nai', 'Công nghiệp', 11.4544, 106.8546, true, ['Xã Đồng Phú', 'Thị trấn Tân Phú, Huyện Đồng Phú', 'Huyện Đồng Phú', 'Thị trấn Tân Phú (Đồng Phú)', 'Tân Lập', 'Tân Tiến (Đồng Phú)']],
+  ['CTH', 'Chơn Thành', 'P', 'bac_dong_nai', 'Công nghiệp', 11.4282, 106.6354, false, ['Thị xã Chơn Thành', 'Hưng Long', 'Thành Tâm', 'Minh Thành']],
+  ['MHU', 'Minh Hưng', 'P', 'bac_dong_nai', 'Công nghiệp', 11.4720, 106.5920, false, ['Minh Long', 'Phường Minh Hưng']],
+  ['TKH', 'Tân Khai', 'P', 'bac_dong_nai', 'Công nghiệp', 11.5580, 106.6150, true, ['Xã Tân Khai', 'Thị trấn Tân Khai', 'Huyện Hớn Quản', 'Tân Hiệp (Hớn Quản)', 'Đồng Nơ']],
+  ['BLO', 'Bình Long', 'P', 'bac_dong_nai', 'Liên vùng', 11.6471, 106.6059, false, ['Thị xã Bình Long', 'Hưng Chiến', 'Phú Đức']],
+  ['ALO', 'An Lộc', 'P', 'bac_dong_nai', 'Liên vùng', 11.6620, 106.6250, false, ['Phú Thịnh', 'Thanh Phú', 'Thanh Lương']],
+  ['LNI', 'Lộc Ninh', 'P', 'bac_dong_nai', 'Liên vùng', 11.8448, 106.5907, true, ['Xã Lộc Ninh', 'Thị trấn Lộc Ninh', 'Huyện Lộc Ninh', 'Lộc Thái', 'Lộc Thuận']],
+  ['PLO', 'Phước Long', 'P', 'bac_dong_nai', 'Liên vùng', 11.8114, 106.9967, false, ['Thị xã Phước Long', 'Thác Mơ', 'Long Thủy', 'Sơn Giang', 'Phước Tín']],
+  ['PBI', 'Phước Bình', 'P', 'bac_dong_nai', 'Liên vùng', 11.8160, 106.9680, false, ['Long Phước (Phước Long)', 'Bình Sơn (Phước Long)', 'Phường Phước Bình']],
 ];
 
 /** 62 XÃ (72 xã theo NQ 1662 trừ 10 xã lên phường ngày 30/04/2026) */
@@ -102,7 +102,7 @@ const XA_ROWS: readonly Row[] = [
   ['TSO', 'Thanh Sơn', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.168, 107.295, false, ['Xã Thanh Sơn']],
   ['PVI', 'Phú Vinh', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.238, 107.392, false, ['Phú Lợi', 'Phú Tân']],
   ['PHO', 'Phú Hòa', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.178, 107.382, false, ['Phú Điền', 'Ngọc Định']],
-  ['TLA', 'Tà Lài', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.385, 107.362, false, ['Phú Thịnh (Tân Phú)', 'Phú Lập', 'Xã Tà Lài']],
+  ['TLA', 'Tà Lài', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.3626, 107.3655, false, ['Phú Thịnh (Tân Phú)', 'Phú Lập', 'Xã Tà Lài']],
   ['NCT', 'Nam Cát Tiên', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.438, 107.352, false, ['Núi Tượng', 'VQG Cát Tiên']],
   ['PLA', 'Phú Lâm', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.318, 107.482, false, ['Phú Bình (Tân Phú)', 'Thanh Sơn (Tân Phú)', 'Phú Sơn']],
   ['DLU', 'Đak Lua', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.448, 107.425, false, ['Đắc Lua', 'Xã Đak Lua']],
@@ -137,7 +137,7 @@ const XA_ROWS: readonly Row[] = [
   ['TSN', 'Thọ Sơn', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 11.825, 107.305, false, ['Đồng Nai (Bù Đăng)', 'Phú Sơn (Bù Đăng)']],
   ['DNH', 'Đak Nhau', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 11.915, 107.185, false, ['Đăk Nhau', 'Đường 10']],
   ['BBO', 'Bom Bo', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 11.815, 107.118, false, ['Bình Minh (Bù Đăng)', 'Sóc Bom Bo']],
-  ['BGM', 'Bù Gia Mập', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 12.142, 107.145, false, ['Huyện Bù Gia Mập', 'VQG Bù Gia Mập']],
+  ['BGM', 'Bù Gia Mập', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 12.1294, 107.1745, false, ['Huyện Bù Gia Mập', 'VQG Bù Gia Mập']],
   ['DKO', 'Đăk Ơ', 'X', 'bac_dong_nai', 'Nông thôn - Sinh thái', 12.065, 107.018, false, ['Đak Ơ', 'Xã Đăk Ơ']],
 ];
 
@@ -157,11 +157,11 @@ export const ARTERIAL_ROAD_NAMES = [
 ] as const;
 
 export const QUICK_JUMP_REGIONS: readonly QuickJumpRegion[] = [
-  { id: 'trung_tam', labelVi: 'Đô thị Trung tâm', labelEn: 'Central Urban', center: [10.9465, 106.845], zoom: 12 },
-  { id: 'nam_san_bay_cang', labelVi: 'Nam — Sân bay & Cảng', labelEn: 'South — Airport & Port', center: [10.765, 106.94], zoom: 11 },
-  { id: 'dong_xuan_loc', labelVi: 'Đông — Long Khánh & Xuân Lộc', labelEn: 'East — Long Khanh & Xuan Loc', center: [10.92, 107.25], zoom: 11 },
-  { id: 'dong_bac_cat_tien', labelVi: 'Đông Bắc — Cát Tiên & Tân Phú', labelEn: 'NE — Cat Tien & Tan Phu', center: [11.27, 107.28], zoom: 10 },
-  { id: 'bac_dong_nai', labelVi: 'Bắc Đồng Nai — Đồng Xoài & Lộc Ninh', labelEn: 'North — Dong Xoai & Loc Ninh', center: [11.72, 106.86], zoom: 10 },
+  { id: 'trung_tam', labelVi: 'Đô thị Trung tâm', labelEn: 'Central Urban', center: [10.9492, 106.845], zoom: 13 },
+  { id: 'nam_san_bay_cang', labelVi: 'Nam — Sân bay & Cảng', labelEn: 'South — Airport & Port', center: [10.7782, 106.947], zoom: 12 },
+  { id: 'dong_xuan_loc', labelVi: 'Đông — Long Khánh & Xuân Lộc', labelEn: 'East — Long Khanh & Xuan Loc', center: [10.938, 107.22], zoom: 11 },
+  { id: 'dong_bac_cat_tien', labelVi: 'Đông Bắc — Cát Tiên & Tân Phú', labelEn: 'NE — Cat Tien & Tan Phu', center: [11.24, 107.31], zoom: 10 },
+  { id: 'bac_dong_nai', labelVi: 'Bắc Đồng Nai — Đồng Xoài & Lộc Ninh', labelEn: 'North — Dong Xoai & Loc Ninh', center: [11.68, 106.85], zoom: 10 },
 ];
 
 function arterialFor(region: CityRegionId, code: string): string[] {
@@ -283,10 +283,13 @@ export function searchWards(query: string, limit = 15): Ward[] {
 }
 
 /**
- * Đối chiếu tên đơn vị hành chính từ chuỗi địa chỉ Nominatim/OSM (hỗ trợ cả địa chỉ 3 cấp cũ
- * trước 01/07/2025 lẫn 10 xã nâng cấp phường ngày 30/04/2026) về đúng 1 trong 95 Phường/Xã.
+ * Đối chiếu tên đơn vị hành chính từ chuỗi địa chỉ geocoder về đúng 1 trong 95 Phường/Xã mới,
+ * ưu tiên theo khoảng cách tới tọa độ `(lat, lng)` nếu có để tránh trùng tên đường hoặc tên xã/phường cũ khác vùng.
  */
-export function matchWardByAddressText(addressText: string): { ward: Ward; matchedAlias: string } | null {
+export function matchWardByAddressText(
+  addressText: string,
+  nearCoords?: { lat: number; lng: number },
+): { ward: Ward; matchedAlias: string } | null {
   const norm = normalizeVi(addressText);
   if (!norm) return null;
 
@@ -295,47 +298,69 @@ export function matchWardByAddressText(addressText: string): { ward: Ward; match
     return ` ${haystack} `.includes(` ${needle} `);
   };
 
-  // Phân tầng độ đặc hiệu cho địa chỉ Việt Nam:
-  //  - Tầng A (+200): Bí danh ghép cả cấp xã/phường/thị trấn + cấp huyện/TP cũ (vd: "Thị trấn Tân Phú, Huyện Đồng Phú", "Phường Tân Phú, Thành phố Đồng Xoài")
-  //  - Tầng B (+100): Tên chính thức ("Xã Tà Lài", "Phường Trấn Biên") hoặc bí danh cấp xã/phường/thị trấn đơn lẻ
-  //  - Tầng C (+0):   Bí danh cấp huyện/thị xã/thành phố cũ đơn lẻ ("Huyện Tân Phú", "Thị xã Phước Long") — chỉ dùng khi không khớp Tầng A/B
   const isBareDistrict = (aNorm: string): boolean =>
     /^(huyen|thi xa|tp|thanh pho)\s/.test(aNorm);
   const isCompositeAlias = (aNorm: string): boolean =>
     /^(phuong|xa|thi tran)\s.+\s(huyen|thi xa|tp|thanh pho)\s/.test(aNorm);
 
-  let bestMatch: { ward: Ward; label: string; score: number } | null = null;
+  const candidates: Array<{ ward: Ward; label: string; score: number; distKm: number }> = [];
   for (const entry of SEARCH_INDEX) {
+    const distKm = nearCoords
+      ? dist(nearCoords.lat, nearCoords.lng, entry.ward.centerLat, entry.ward.centerLng) / 1000
+      : 0;
+
     if (hasPhrase(norm, entry.nameNorm)) {
-      const score = 100 + entry.nameNorm.length + 4;
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = { ward: entry.ward, label: entry.ward.name, score };
-      }
+      candidates.push({ ward: entry.ward, label: entry.ward.name, score: 100 + entry.nameNorm.length + 4, distKm });
     }
     entry.ward.legacyAliases.forEach((rawAlias, idx) => {
       const aNorm = entry.aliasNorms[idx];
       if (!hasPhrase(norm, aNorm)) return;
       const tierBonus = isCompositeAlias(aNorm) ? 200 : isBareDistrict(aNorm) ? 0 : 100;
-      const score = tierBonus + aNorm.length;
-      if (!bestMatch || score > bestMatch.score) {
-        bestMatch = { ward: entry.ward, label: rawAlias, score };
-      }
+      candidates.push({ ward: entry.ward, label: rawAlias, score: tierBonus + aNorm.length, distKm });
     });
   }
-  if (bestMatch) {
-    return { ward: bestMatch.ward, matchedAlias: bestMatch.label };
+
+  if (candidates.length > 0) {
+    const pool =
+      nearCoords && candidates.some((c) => c.distKm <= 35)
+        ? candidates.filter((c) => c.distKm <= 35)
+        : candidates;
+    pool.sort((a, b) => (b.score - b.distKm * 0.8) - (a.score - a.distKm * 0.8));
+    return { ward: pool[0].ward, matchedAlias: pool[0].label };
   }
 
-  // Ưu tiên 3: khớp tên ngắn ("tran bien", "ta lai", "bu gia map"...) kèm tiền tố xã/phường/thị trấn
+  // Ưu tiên 3: khớp tên ngắn kèm tiền tố xã/phường/thị trấn, tránh trùng tên đường/cầu/chợ khi không có tiền tố hành chính
+  const step3Pool: Array<{ ward: Ward; label: string; score: number; distKm: number }> = [];
   for (const entry of SEARCH_INDEX) {
-    if (
+    const distKm = nearCoords
+      ? dist(nearCoords.lat, nearCoords.lng, entry.ward.centerLat, entry.ward.centerLng) / 1000
+      : 0;
+    const explicitAdmin =
       hasPhrase(norm, `xa ${entry.shortNorm}`) ||
       hasPhrase(norm, `phuong ${entry.shortNorm}`) ||
-      hasPhrase(norm, `thi tran ${entry.shortNorm}`) ||
-      hasPhrase(norm, entry.shortNorm)
-    ) {
-      return { ward: entry.ward, matchedAlias: entry.ward.shortName };
+      hasPhrase(norm, `thi tran ${entry.shortNorm}`);
+    const streetOnly =
+      !explicitAdmin &&
+      (hasPhrase(norm, `duong ${entry.shortNorm}`) ||
+        hasPhrase(norm, `hem ${entry.shortNorm}`) ||
+        hasPhrase(norm, `cau ${entry.shortNorm}`) ||
+        hasPhrase(norm, `cho ${entry.shortNorm}`));
+    if (explicitAdmin || (!streetOnly && hasPhrase(norm, entry.shortNorm))) {
+      step3Pool.push({
+        ward: entry.ward,
+        label: entry.ward.shortName,
+        score: (explicitAdmin ? 50 : 10) + entry.shortNorm.length,
+        distKm,
+      });
     }
+  }
+  if (step3Pool.length > 0) {
+    const pool =
+      nearCoords && step3Pool.some((c) => c.distKm <= 35)
+        ? step3Pool.filter((c) => c.distKm <= 35)
+        : step3Pool;
+    pool.sort((a, b) => (b.score - b.distKm * 0.8) - (a.score - a.distKm * 0.8));
+    return { ward: pool[0].ward, matchedAlias: pool[0].label };
   }
   return null;
 }

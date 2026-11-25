@@ -239,7 +239,7 @@ export function resolveAdminUnit(input: {
   const street = input.street?.trim() || '';
 
   if (input.rawAddressText && input.rawAddressText.trim()) {
-    const aliasHit = matchWardByAddressText(input.rawAddressText);
+    const aliasHit = matchWardByAddressText(input.rawAddressText, { lat: input.lat, lng: input.lng });
     if (aliasHit) {
       const parts = [street, aliasHit.ward.name, 'Thành phố Đồng Nai'].filter(Boolean);
       return {

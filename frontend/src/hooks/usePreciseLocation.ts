@@ -115,22 +115,80 @@ export function usePreciseLocation(): PreciseLocationState {
         );
       });
 
-    // Tầng 1: GPS vệ tinh độ chính xác cao (timeout 6s)
+    const watchRefine = (initialFix: GpsFix): Promise<GpsFix> =>
+      new Promise((resolve) => {
+        if (
+          typeof navigator === 'undefined' ||
+          !('watchPosition' in navigator.geolocation) ||
+          initialFix.accuracy <= 20
+        ) {
+          resolve(initialFix);
+          return;
+        }
+        let best = initialFix;
+        let finished = false;
+        let watchId: number | null = null;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+          }
+          resolve(best);
+        };
+        const timer = window.setTimeout(finish, 2200);
+        try {
+          watchId = navigator.geolocation.watchPosition(
+            (pos) => {
+              if (reqId !== activeReqIdRef.current) {
+                window.clearTimeout(timer);
+                finish();
+                return;
+              }
+              const norm = normalizeCoordinates(
+                { lat: pos.coords.latitude, lng: pos.coords.longitude },
+                { requireVietnam: false },
+              );
+              if (!norm.ok) return;
+              const acc = Math.max(1, Math.round(pos.coords.accuracy || 20));
+              if (acc < best.accuracy) {
+                best = { lat: norm.lat, lng: norm.lng, accuracy: acc, tier: 1 };
+              }
+              if (best.accuracy <= 15) {
+                window.clearTimeout(timer);
+                finish();
+              }
+            },
+            () => {
+              /* Giữ mẫu tốt nhất đã thu được */
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 2200 },
+          );
+        } catch {
+          window.clearTimeout(timer);
+          finish();
+        }
+      });
+
+    // Tầng 1: GPS vệ tinh độ chính xác cao (không dùng cache cũ, tinh chỉnh nhanh 2.2s nếu sai số > 20m)
     const tier1 = await runAttempt(
-      { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 },
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 },
       1,
     );
     if (reqId !== activeReqIdRef.current) return null;
 
     if (tier1.fix) {
+      const refined = await watchRefine(tier1.fix);
+      if (reqId !== activeReqIdRef.current) return null;
       if (mountedRef.current) {
-        setFix(tier1.fix);
+        setFix(refined);
         setTier(1);
-        setSamples(1);
+        setSamples(refined.accuracy < tier1.fix.accuracy ? 2 : 1);
         setStatus('ok');
         setErrorKind(null);
       }
-      return tier1.fix;
+      return refined;
     }
 
     // Nếu người dùng từ chối thẳng quyền vị trí -> dừng ngay không hỏi lại tầng 2
