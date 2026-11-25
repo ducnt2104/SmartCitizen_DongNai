@@ -14,6 +14,7 @@ import { aiController } from '../controllers/ai.controller';
 import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
 import { buildApiKeysRouter } from './apiKeys';
+import { buildAuthRouter } from './auth';
 import { buildSystemDiagnosticsRouter } from './system';
 
 export function buildRouter(
@@ -39,7 +40,8 @@ export function buildRouter(
   api.get('/geo/reverse', h(r.reverseGeocode));
   api.get('/stats', h(r.stats));
 
-  // Xác thực thật & Quản lý phiên (Citizen OTP + Password + Staff/Admin/SuperAdmin + Rescue Team JWT)
+  // Xác thực thật & Quản lý phiên (Citizen Email + Phone SMS +84 OTP + Firebase + Password + Staff + Rescue Team JWT)
+  api.use('/auth', buildAuthRouter(s));
   api.get('/auth/otp/status', h(a.otpStatus));
   api.post('/auth/otp/request', limits.otp, validateBody(schemas.otpRequest), h(a.otpRequest));
   api.post('/auth/otp/verify', limits.login, validateBody(schemas.otpVerify), h(a.otpVerify));
