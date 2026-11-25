@@ -76,23 +76,26 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
     expect(parsed.jwtSecret.length).toBeGreaterThanOrEqual(64);
   });
 
-  it('chuẩn hóa GEMINI_MODEL sang model production nhanh nhất (mặc định gemini-2.5-flash) và nhận diện đủ key pool', () => {
+  it('chuẩn hóa GEMINI_MODEL sang model hiện hành nhanh nhất (mặc định gemini-3.8-flash) và nhận diện đủ key pool', () => {
     const def = parseEnv({ NODE_ENV: 'development' });
-    expect(def.geminiModel).toBe('gemini-2.5-flash');
-    expect(def.geminiFastModel).toBe('gemini-2.5-flash');
+    expect(def.geminiModel).toBe('gemini-3.8-flash');
+    expect(def.geminiFastModel).toBe('gemini-3.8-flash');
 
-    const deprecated = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-1.5-flash' });
-    expect(deprecated.geminiModel).toBe('gemini-2.5-flash');
+    const deprecated15 = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-1.5-flash' });
+    expect(deprecated15.geminiModel).toBe('gemini-3.8-flash');
 
-    const unsupported = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-3.5-flash-lite' });
-    expect(unsupported.geminiModel).toBe('gemini-2.5-flash');
+    const deprecated25 = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-2.5-flash' });
+    expect(deprecated25.geminiModel).toBe('gemini-3.8-flash');
+
+    const unsupported = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-3.1-flash-lite-preview' });
+    expect(unsupported.geminiModel).toBe('gemini-3.8-flash');
 
     const customLite = parseEnv({
       NODE_ENV: 'development',
-      GEMINI_MODEL: 'gemini-2.5-flash-lite',
+      GEMINI_MODEL: 'gemini-3.5-flash-lite',
       GEMINI_API_KEY_1: 'AQ.Ab8RN6MockEnvStudioKey1234',
     });
-    expect(customLite.geminiModel).toBe('gemini-2.5-flash-lite');
+    expect(customLite.geminiModel).toBe('gemini-3.5-flash-lite');
     expect(customLite.allowCloudAiFallback).toBe(true);
 
     const vertexOnly = parseEnv({

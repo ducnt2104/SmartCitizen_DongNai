@@ -45,7 +45,7 @@ async function main(): Promise<void> {
       persistenceMode: 'memory',
       envSource: {
         GEMINI_API_KEYS: rawKeys.join(','),
-        GEMINI_MODEL: 'gemini-3.5-flash-lite', // Cố tình truyền model cũ/không hợp lệ để kiểm tra tự chuẩn hóa
+        GEMINI_MODEL: 'gemini-2.5-flash', // Cố tình truyền model cũ/đã ngừng hỗ trợ để kiểm tra tự chuẩn hóa
       },
       logger: {
         info: (m) => logs.info.push(m),
@@ -54,11 +54,12 @@ async function main(): Promise<void> {
       },
     });
 
-    assert.equal(normalizeGeminiModelName('gemini-3.5-flash-lite'), 'gemini-2.5-flash');
-    assert.deepEqual(buildGeminiModelChain('gemini-3.5-flash-lite'), [
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
+    assert.equal(normalizeGeminiModelName('gemini-2.5-flash'), 'gemini-3.8-flash');
+    assert.equal(normalizeGeminiModelName('gemini-3.5-flash-lite'), 'gemini-3.5-flash-lite');
+    assert.deepEqual(buildGeminiModelChain('gemini-2.5-flash'), [
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
     ]);
     assert.ok(
       logs.info.some((l) => l.includes('Loaded 5 keys (AI Studio: 2, Vertex: 3)')),
@@ -154,14 +155,14 @@ async function main(): Promise<void> {
 
     // Kiểm tra redactSecretsInText che ?key=...
     const redacted = redactSecretsInText(
-      'Fetch failed at https://aiplatform.googleapis.com/v1/models/gemini-2.5-flash?key=AQ.Ab8RN6SuperSecretToken9999',
+      'Fetch failed at https://aiplatform.googleapis.com/v1/models/gemini-3.8-flash?key=AQ.Ab8RN6SuperSecretToken9999',
     );
     assert.ok(!redacted.includes('AQ.Ab8RN6SuperSecretToken9999'));
     assert.ok(redacted.includes('..9999'));
     console.log('✅ [2/4] Lỗi 401/403 đánh dấu INVALID vĩnh viễn, log chi tiết Google API & che secret URL: PASS');
   }
 
-  // 3. Lỗi 503 Overloaded -> Cooldown 60s + Exponential Backoff + Jitter + Hạ cấp sang gemini-2.0-flash sau 3 key 503
+  // 3. Lỗi 503 Overloaded -> Cooldown 60s + Exponential Backoff + Jitter + Hạ cấp sang gemini-3.5-flash-lite sau 3 key 503
   {
     const prevFetch = globalThis.fetch;
     const callTrace: Array<{ url: string; model: string; atMs: number; keyMask: string }> = [];
@@ -176,7 +177,7 @@ async function main(): Promise<void> {
           'AIzaSyOverloadTestKey_000000005033',
           'AIzaSyFallbackSuccessKey_000005034',
         ].join(','),
-        GEMINI_MODEL: 'gemini-2.5-flash',
+        GEMINI_MODEL: 'gemini-3.8-flash',
       },
       logger: {
         info: (m) => logs.info.push(m),
@@ -191,8 +192,9 @@ async function main(): Promise<void> {
       if (!url.includes('googleapis.com')) return prevFetch(input, init);
       const headers = new Headers(init?.headers);
       const key = headers.get('x-goog-api-key') ?? '';
+      const parsedBody = init?.body ? (JSON.parse(String(init.body)) as { model?: string }) : {};
       const modelMatch = url.match(/models\/([^:]+):generateContent/);
-      const model = modelMatch?.[1] ?? 'unknown';
+      const model = parsedBody.model ?? modelMatch?.[1] ?? 'unknown';
       callTrace.push({ url, model, atMs: performance.now(), keyMask: key.slice(-4) });
 
       if (callTrace.length <= 3) {
@@ -201,19 +203,21 @@ async function main(): Promise<void> {
         });
       }
       return makeResponse(200, {
-        candidates: [
+        id: 'int_mock_503_recovered',
+        status: 'completed',
+        steps: [
           {
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    riskSummary: 'Ngập sâu trên Quốc lộ 1A gây cản trở giao thông.',
-                    equipmentAndCrew: '01 Tổ Thoát nước đô thị kèm máy bơm công suất lớn.',
-                    safetyWarning: 'Cắm cọc tiêu phản quang cảnh báo khu vực hố ga ngập.',
-                  }),
-                },
-              ],
-            },
+            type: 'model_output',
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  riskSummary: 'Ngập sâu trên Quốc lộ 1A gây cản trở giao thông.',
+                  equipmentAndCrew: '01 Tổ Thoát nước đô thị kèm máy bơm công suất lớn.',
+                  safetyWarning: 'Cắm cọc tiêu phản quang cảnh báo khu vực hố ga ngập.',
+                }),
+              },
+            ],
           },
         ],
       });
@@ -232,10 +236,10 @@ async function main(): Promise<void> {
 
       assert.equal(briefing.mode, 'gemini');
       assert.equal(callTrace.length, 4, 'Phải thử 3 key đầu bị 503 và thành công ở key #4');
-      assert.equal(callTrace[0].model, 'gemini-2.5-flash');
-      assert.equal(callTrace[1].model, 'gemini-2.5-flash');
-      assert.equal(callTrace[2].model, 'gemini-2.5-flash');
-      assert.equal(callTrace[3].model, 'gemini-2.0-flash', 'Sau 3 key liên tiếp 503 phải tự động hạ cấp sang gemini-2.0-flash');
+      assert.equal(callTrace[0].model, 'gemini-3.8-flash');
+      assert.equal(callTrace[1].model, 'gemini-3.8-flash');
+      assert.equal(callTrace[2].model, 'gemini-3.8-flash');
+      assert.equal(callTrace[3].model, 'gemini-3.5-flash-lite', 'Sau 3 key liên tiếp 503 phải tự động hạ cấp sang gemini-3.5-flash-lite');
 
       const gap12 = callTrace[1].atMs - callTrace[0].atMs;
       const gap23 = callTrace[2].atMs - callTrace[1].atMs;
@@ -250,9 +254,9 @@ async function main(): Promise<void> {
       assert.equal(snap.keys[1].status, 'COOLDOWN');
       assert.equal(snap.keys[2].status, 'COOLDOWN');
       assert.equal(snap.keys[3].status, 'HEALTHY');
-      assert.ok(logs.warn.some((l) => l.includes('Tự động hạ cấp sang gemini-2.0-flash')));
+      assert.ok(logs.warn.some((l) => l.includes('Tự động hạ cấp sang gemini-3.5-flash-lite')));
       console.log(
-        `✅ [3/4] Lỗi 503 Cooldown 60s + Exponential Backoff+Jitter (${gap12.toFixed(0)}ms -> ${gap23.toFixed(0)}ms -> ${gap34.toFixed(0)}ms) + Hạ cấp gemini-2.0-flash: PASS`,
+        `✅ [3/4] Lỗi 503 Cooldown 60s + Exponential Backoff+Jitter (${gap12.toFixed(0)}ms -> ${gap23.toFixed(0)}ms -> ${gap34.toFixed(0)}ms) + Hạ cấp gemini-3.5-flash-lite: PASS`,
       );
     } finally {
       globalThis.fetch = prevFetch;

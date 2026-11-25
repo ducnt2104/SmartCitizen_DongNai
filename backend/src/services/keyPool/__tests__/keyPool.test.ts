@@ -267,14 +267,14 @@ export async function runKeyPoolVerificationSuite(): Promise<void> {
   assert.ok(aqStudioLogs.info.some((l) => l.includes('Loaded 4 keys (AI Studio: 1, Vertex: 3)')));
   assert.ok(aqStudioLogs.warn.some((l) => l.includes('Cảnh báo phân loại Key #1')));
 
-  // 6a. HTTP 404 không được đánh dấu key INVALID; cùng 1 key tự chuyển qua gemini-2.5-flash -> gemini-2.5-flash-lite
+  // 6a. HTTP 404 không được đánh dấu key INVALID; cùng 1 key tự chuyển qua gemini-3.8-flash -> gemini-3.5-flash-lite
   const calledModels: Array<{ url: string; apiKeyHeader: string | null }> = [];
   const mock404Fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     const headers = new Headers(init?.headers);
     calledModels.push({ url, apiKeyHeader: headers.get('x-goog-api-key') });
-    if (url.includes('gemini-2.5-flash:generateContent')) {
-      return new Response(JSON.stringify({ error: { code: 404, message: 'models/gemini-2.5-flash is not found', status: 'NOT_FOUND' } }), { status: 404 });
+    if (url.includes('gemini-3.8-flash:generateContent')) {
+      return new Response(JSON.stringify({ error: { code: 404, message: 'models/gemini-3.8-flash is not found', status: 'NOT_FOUND' } }), { status: 404 });
     }
     return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }), { status: 200 });
   }) as unknown as typeof fetch;
@@ -293,12 +293,12 @@ export async function runKeyPoolVerificationSuite(): Promise<void> {
     });
   });
 
-  assert.equal(modelChainResult.modelUsed, 'gemini-2.5-flash-lite');
+  assert.equal(modelChainResult.modelUsed, 'gemini-3.5-flash-lite');
   assert.equal(modelChainResult.endpointUsed, 'vertex');
   assert.equal(calledModels.length, 2, 'Phải thử 2 model trên CÙNG Key #1');
-  assert.ok(calledModels[0].url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent?key='));
+  assert.ok(calledModels[0].url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:generateContent?key='));
   assert.equal(calledModels[0].apiKeyHeader, null);
-  assert.ok(calledModels[1].url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash-lite:generateContent?key='));
+  assert.ok(calledModels[1].url.startsWith('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key='));
 
   // Nếu cả chuỗi model đều trả 404, key vẫn PHẢI giữ trạng thái HEALTHY (không bị đánh dấu INVALID)
   const all404Pool = new KeyPoolManager({
@@ -310,13 +310,13 @@ export async function runKeyPoolVerificationSuite(): Promise<void> {
   });
   await assert.rejects(
     all404Pool.executeWithRotation(async () => {
-      throw makeHttpError(404, '404 models/gemini-2.5-flash is not found for API version v1beta');
+      throw makeHttpError(404, '404 models/gemini-3.8-flash is not found for API version v1beta');
     }),
   );
   const all404Snap = await all404Pool.listMaskedKeys();
   assert.equal(all404Snap.keys[0].status, 'HEALTHY', 'HTTP 404 tuyệt đối không được đánh dấu key INVALID');
 
-  // 6b. HTTP 503 Overloaded -> Cooldown 60s + Exponential Backoff + Hạ cấp sang gemini-2.0-flash sau 3 key 503
+  // 6b. HTTP 503 Overloaded -> Cooldown 60s + Exponential Backoff + Hạ cấp sang gemini-3.5-flash-lite sau 3 key 503
   const sleepRecorded: number[] = [];
   const overloadedPool = new KeyPoolManager({
     envSource: {
@@ -337,7 +337,7 @@ export async function runKeyPoolVerificationSuite(): Promise<void> {
     if (meta.slotNumber <= 3) throw makeHttpError(503, '503 UNAVAILABLE: Model is overloaded');
     return `OK_${meta.slotNumber}_${meta.fallbackModel}`;
   });
-  assert.equal(after503, 'OK_4_gemini-2.0-flash');
+  assert.equal(after503, 'OK_4_gemini-3.5-flash-lite');
   assert.deepEqual(sleepRecorded, [500, 1_000, 1_500], '503 phải chạy Exponential Backoff 500ms -> 1000ms -> 1500ms');
   assert.deepEqual(modelsSeen, [false, false, false, true], 'Sau 3 key liên tiếp 503 phải bật preferFallbackModel=true');
   const overloadKey1 = (await overloadedPool.listMaskedKeys()).keys[0];

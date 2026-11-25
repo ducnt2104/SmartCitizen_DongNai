@@ -260,7 +260,7 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
     const prevAllowCloud = process.env.ALLOW_CLOUD_AI_FALLBACK;
     process.env.ALLOW_CLOUD_AI_FALLBACK = 'true';
 
-    const requests: Array<{ url: string; headerKey: string | null; body: Record<string, any> }> = [];
+    const requests: Array<{ url: string; headerKey: string | null; apiRevision: string | null; body: Record<string, any> }> = [];
     let attempt = 0;
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -273,6 +273,7 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
       requests.push({
         url,
         headerKey: headers.get('x-goog-api-key'),
+        apiRevision: headers.get('api-revision'),
         body: parsedBody,
       });
       attempt += 1;
@@ -284,14 +285,14 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
           { status: 503 },
         );
       }
-      // Request 2: key #2 (AQ.*) gặp 404 trên gemini-2.5-flash -> giữ nguyên key #2, chuyển sang gemini-2.5-flash-lite
-      if (url.includes('gemini-2.5-flash') && !url.includes('gemini-2.5-flash-lite')) {
+      // Request 2: key #2 (AQ.*) gặp 404 trên gemini-3.8-flash -> giữ nguyên key #2, chuyển sang gemini-3.5-flash-lite
+      if (url.includes('gemini-3.8-flash')) {
         return new Response(
-          JSON.stringify({ error: { code: 404, message: 'models/gemini-2.5-flash is not found', status: 'NOT_FOUND' } }),
+          JSON.stringify({ error: { code: 404, message: 'models/gemini-3.8-flash is not found', status: 'NOT_FOUND' } }),
           { status: 404 },
         );
       }
-      // Request 3: key #2 (AQ.*) thành công trên gemini-2.5-flash-lite
+      // Request 3: key #2 (AQ.*) thành công trên gemini-3.5-flash-lite
       return new Response(
         JSON.stringify({
           candidates: [
@@ -320,7 +321,7 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
         persistenceMode: 'memory',
         envSource: {
           GEMINI_API_KEYS: 'AIzaSyTestStudioKey_001,AQ.Ab8RN6TestVertexKey_002',
-          GEMINI_MODEL: 'gemini-2.5-flash',
+          GEMINI_MODEL: 'gemini-3.8-flash',
         },
         retry503JitterMaxMs: 0,
         sleepFn: async (ms) => {
@@ -341,23 +342,27 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
       expect(briefing.mode).toBe('gemini');
       expect(requests.length).toBe(3);
       expect(sleepSpy).toEqual([500]);
-      // Key #1 (AIzaSy*) phải gọi AI Studio (generativelanguage.googleapis.com) với x-goog-api-key
-      expect(requests[0].url).toContain('generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+      // Key #1 (AIzaSy*) phải gọi AI Studio Interactions API (/v1beta/interactions) với x-goog-api-key + Api-Revision
+      expect(requests[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
       expect(requests[0].headerKey).toBe('AIzaSyTestStudioKey_001');
-      expect(requests[0].body.generationConfig.responseMimeType).toBe('application/json');
-      expect(requests[0].body.generationConfig.responseSchema).toBeDefined();
-      expect(requests[0].body.generationConfig.thinkingConfig).toBeUndefined();
+      expect(requests[0].apiRevision).toBe('2026-05-20');
+      expect(requests[0].body.model).toBe('gemini-3.8-flash');
+      expect(requests[0].body.store).toBe(false);
+      expect(requests[0].body.response_format.mime_type).toBe('application/json');
+      expect(requests[0].body.response_format.schema.type).toBe('object');
+      expect(requests[0].body.generation_config.thinking_level).toBe('low');
+      expect(requests[0].body.generation_config.temperature).toBeUndefined();
 
-      // Key #2 (AQ.*) định tuyến sang Vertex AI Express và gặp 404 ở 2.5-flash -> chuyển sang 2.5-flash-lite trên CÙNG Key #2
-      expect(requests[1].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent');
+      // Key #2 (AQ.*) định tuyến sang Vertex AI Express và gặp 404 ở 3.8-flash -> chuyển sang 3.5-flash-lite trên CÙNG Key #2
+      expect(requests[1].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:generateContent');
       expect(requests[1].url).toContain('key=AQ.Ab8RN6TestVertexKey_002');
-      expect(requests[2].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash-lite:generateContent');
+      expect(requests[2].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash-lite:generateContent');
 
       const snap = await pool.listMaskedKeys();
       expect(snap.keys[0].status).toBe('COOLDOWN');
       expect(snap.keys[1].status).toBe('HEALTHY');
 
-      // Kiểm chứng thêm Stage1 VisionAnalyzerService dùng key AIzaSy qua AI Studio sau khi reset cooldown
+      // Kiểm chứng thêm Stage1 VisionAnalyzerService dùng key AIzaSy qua Interactions API sau khi reset cooldown
       await pool.updateKey(snap.keys[0].id, { resetCooldown: true });
       const prevCount = requests.length;
       const visionPayload = {
@@ -382,9 +387,18 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
         if (!url.includes('googleapis.com')) return prevFetch(input, init);
         const headers = new Headers(init?.headers);
         const parsedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, any>;
-        requests.push({ url, headerKey: headers.get('x-goog-api-key'), body: parsedBody });
+        requests.push({
+          url,
+          headerKey: headers.get('x-goog-api-key'),
+          apiRevision: headers.get('api-revision'),
+          body: parsedBody,
+        });
         return new Response(
-          JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(visionPayload) }] } }] }),
+          JSON.stringify({
+            id: 'int_vision_mock_1',
+            status: 'completed',
+            steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify(visionPayload) }] }],
+          }),
           { status: 200 },
         );
       }) as typeof fetch;
@@ -418,15 +432,127 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
       });
       expect(visionOut.mode).toBe('gemini');
       expect(requests.length).toBe(prevCount + 1);
-      expect(requests[prevCount].url).toContain('generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+      expect(requests[prevCount].url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
       expect(requests[prevCount].headerKey).toBe('AIzaSyTestStudioKey_001');
-      expect(requests[prevCount].body.generationConfig.responseMimeType).toBe('application/json');
-      expect(requests[prevCount].body.generationConfig.responseSchema).toBeDefined();
-      expect(requests[prevCount].body.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+      expect(requests[prevCount].apiRevision).toBe('2026-05-20');
+      expect(requests[prevCount].body.model).toBe('gemini-3.8-flash');
+      expect(requests[prevCount].body.response_format.mime_type).toBe('application/json');
+      expect(requests[prevCount].body.response_format.schema.type).toBe('object');
+      expect(requests[prevCount].body.generation_config.thinking_level).toBe('low');
+      expect(requests[prevCount].body.generation_config.temperature).toBeUndefined();
+      expect(Array.isArray(requests[prevCount].body.input)).toBe(true);
+      expect(requests[prevCount].body.input[0]).toMatchObject({ type: 'image', mime_type: 'image/jpeg' });
     } finally {
       globalThis.fetch = prevFetch;
       if (prevAllowCloud === undefined) delete process.env.ALLOW_CLOUD_AI_FALLBACK;
       else process.env.ALLOW_CLOUD_AI_FALLBACK = prevAllowCloud;
     }
+  });
+
+  it('Interactions API chuyển đổi an toàn thinking_level, loại bỏ temperature, chuẩn hóa model 2.x->3.8 và xoay model 404 trên cùng key AI Studio', async () => {
+    const {
+      buildGeminiModelChain,
+      buildGeminiRestRequest,
+      executeGeminiWithModelFallback,
+      KeyPoolManager,
+      normalizeGeminiModelName,
+    } = await import('../src/services/keyPool');
+
+    // 1. Tự động nâng cấp các model cũ 2.x/1.5 về gemini-3.8-flash
+    expect(normalizeGeminiModelName('gemini-2.5-flash')).toBe('gemini-3.8-flash');
+    expect(normalizeGeminiModelName('gemini-2.5-flash-lite')).toBe('gemini-3.8-flash');
+    expect(normalizeGeminiModelName('gemini-2.0-flash')).toBe('gemini-3.8-flash');
+    expect(buildGeminiModelChain('gemini-2.5-flash')).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+    ]);
+
+    // 2. Clamp thinking_level='minimal' -> 'low' trên gemini-3.8-flash, giữ 'minimal' trên gemini-3.5-flash-lite, bỏ temperature
+    const req38 = buildGeminiRestRequest({
+      cleanKey: 'AIzaSyMockKey38',
+      endpoint: 'ai_studio',
+      modelId: 'gemini-3.8-flash',
+      contents: [
+        { role: 'user', parts: [{ text: 'Xin chào' }] },
+        { role: 'model', parts: [{ text: 'Chào bạn!' }] },
+        { role: 'user', parts: [{ text: 'Hướng dẫn gửi phản ánh?' }] },
+      ],
+      config: {
+        systemInstruction: 'Bạn là trợ lý.',
+        temperature: 0.3,
+        thinkingBudget: 0,
+        maxOutputTokens: 400,
+      },
+    });
+    expect(req38.url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
+    expect(req38.headers['Api-Revision']).toBe('2026-05-20');
+    expect(req38.body.generation_config).toEqual({
+      max_output_tokens: 400,
+      thinking_level: 'low',
+    });
+    expect(req38.body.input).toEqual([
+      { type: 'user_input', content: [{ type: 'text', text: 'Xin chào' }] },
+      { type: 'model_output', content: [{ type: 'text', text: 'Chào bạn!' }] },
+      { type: 'user_input', content: [{ type: 'text', text: 'Hướng dẫn gửi phản ánh?' }] },
+    ]);
+
+    const req35Lite = buildGeminiRestRequest({
+      cleanKey: 'AIzaSyMockKey35',
+      endpoint: 'ai_studio',
+      modelId: 'gemini-3.5-flash-lite',
+      contents: 'Ping',
+      config: { temperature: 0.1, thinkingBudget: 0 },
+    });
+    expect(req35Lite.body.generation_config).toEqual({
+      thinking_level: 'minimal',
+    });
+
+    // 3. Chuỗi 404 trên Interactions API: gemini-3.8-flash (404) -> gemini-3.5-flash-lite (404) -> gemini-3.1-flash-lite (200)
+    const triedModels: string[] = [];
+    const pool = new KeyPoolManager({
+      persistenceMode: 'memory',
+      envSource: { GEMINI_API_KEYS: 'AIzaSySingleHealthyStudioKey_0001' },
+      logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+
+    const out = await pool.executeWithRotation(async (apiKey, meta) =>
+      executeGeminiWithModelFallback({
+        apiKey,
+        geminiEndpoint: meta.geminiEndpoint,
+        keyFormat: meta.keyFormat,
+        models: buildGeminiModelChain(),
+        contents: 'Ping',
+        timeoutMs: 5_000,
+        label: 'Interactions404Test',
+        fetchImpl: (async (_input: string | URL | Request, init?: RequestInit) => {
+          const parsed = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
+          triedModels.push(parsed.model ?? '');
+          if (parsed.model !== 'gemini-3.1-flash-lite') {
+            return new Response(
+              JSON.stringify({ error: { code: 404, message: `models/${parsed.model} not found`, status: 'NOT_FOUND' } }),
+              { status: 404 },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              id: 'int_ok_31',
+              status: 'completed',
+              steps: [
+                { type: 'thought', summary: [{ type: 'text', text: 'thinking...' }] },
+                { type: 'model_output', content: [{ type: 'text', text: 'OK_31_LITE' }] },
+              ],
+            }),
+            { status: 200 },
+          );
+        }) as unknown as typeof fetch,
+      }),
+    );
+
+    expect(out.modelUsed).toBe('gemini-3.1-flash-lite');
+    expect(out.text).toBe('OK_31_LITE');
+    expect(triedModels).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']);
+    const snap = await pool.listMaskedKeys();
+    expect(snap.keys[0].status).toBe('HEALTHY');
   });
 });

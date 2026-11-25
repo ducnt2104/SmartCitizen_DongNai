@@ -112,7 +112,7 @@ export interface ExecuteWithRotationOptions {
   operationName?: string;
   /** Số lần lỗi 503 liên tiếp trên model chính để tự động hạ cấp sang fallbackModel (mặc định 3). */
   fallbackOn503Threshold?: number;
-  /** Model hạ cấp khi 503 liên tiếp (mặc định "gemini-2.0-flash"). */
+  /** Model hạ cấp khi 503 liên tiếp (mặc định "gemini-3.5-flash-lite"). */
   fallbackModel?: string;
 }
 
