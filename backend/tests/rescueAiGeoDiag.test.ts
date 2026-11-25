@@ -4,12 +4,6 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint, TRAN_BIEN_FALLBACK_COORDS } from '../src/shared/coordinates';
-import {
-  buildGoogleGenAiClientOptions,
-  extractJsonObject,
-  GeminiService,
-  resolveGeminiModelChain,
-} from '../src/services/gemini.service';
 
 const TINY_JPEG =
   'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
@@ -68,24 +62,40 @@ afterAll(async () => {
 });
 
 describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đội Cứu Hộ (/rescue)', () => {
-  it('chuẩn hóa model Gemini hợp lệ, nhận diện Vertex Express Key (AQ.*) và bóc sạch JSON từ markdown', () => {
-    expect(resolveGeminiModelChain('gemini-3.5-flash')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
+  it('chuẩn hóa chuỗi model Gemini 2026 ổn định, mặc định định tuyến AQ.* qua AI Studio và bóc sạch JSON từ markdown', async () => {
+    const { buildGoogleGenAiClientOptions, extractJsonObject, resolveGeminiModelChain } = await import(
+      '../src/services/gemini.service'
+    );
+    expect(resolveGeminiModelChain('gemini-3.5-flash-lite')).toEqual([
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-3.8-flash',
+    ]);
+    expect(resolveGeminiModelChain('gemini-2.5-flash')).toEqual([
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-3.8-flash',
+    ]);
+    expect(resolveGeminiModelChain('gemini-3.8-flash')).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
     ]);
     expect(resolveGeminiModelChain('')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-3.8-flash',
     ]);
 
     expect(buildGoogleGenAiClientOptions('AQ.Ab8RN6J2zkHaPWh_test')).toEqual({
       apiKey: 'AQ.Ab8RN6J2zkHaPWh_test',
-      vertexai: true,
     });
     expect(buildGoogleGenAiClientOptions('AIzaSyTestStandardKey')).toEqual({
       apiKey: 'AIzaSyTestStandardKey',
+    });
+    expect(buildGoogleGenAiClientOptions('vertex:AQ.Ab8RN6J2zkHaPWh_test')).toEqual({
+      apiKey: 'AQ.Ab8RN6J2zkHaPWh_test',
+      vertexai: true,
     });
 
     const rawFenced = 'Đây là kết quả:\n```json\n{"riskSummary":"A","equipmentAndCrew":"B","safetyWarning":"C"}\n```';
@@ -97,6 +107,7 @@ describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đ�
   });
 
   it('Deterministic AI Brain chấm điểm SOS (priorityScore/severityLabel), sinh Tactical Briefing 3 dòng và tách điểm Trước/Sau', async () => {
+    const { GeminiService } = await import('../src/services/gemini.service');
     const ai = new GeminiService();
     const sos = ai.fallbackVision({
       imageBase64: '',

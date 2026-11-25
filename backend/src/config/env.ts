@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import {
+  DEFAULT_GEMINI_MODEL,
+  normalizeGeminiModelName,
+} from '../services/keyPool/geminiRouting';
 
 // Nạp .env từ cả thư mục gốc monorepo lẫn backend/.env (chỉ nạp ngoài môi trường unit test Vitest để cô lập DB test)
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
@@ -148,12 +152,44 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   );
 
   const geminiApiKey = readTrimmed(source, 'GEMINI_API_KEY') ?? '';
-  const rawGeminiModel = readTrimmed(source, 'GEMINI_MODEL') || 'gemini-2.5-flash';
-  // Tự động chuẩn hóa nếu môi trường đang cấu hình model không tồn tại (vd: gemini-3.5-flash trên Render)
-  const geminiModel = /^gemini-3\.5/i.test(rawGeminiModel) ? 'gemini-2.5-flash' : rawGeminiModel;
+  const rawGeminiModel =
+    readTrimmed(source, 'GEMINI_FAST_MODEL') ||
+    readTrimmed(source, 'GEMINI_MODEL') ||
+    DEFAULT_GEMINI_MODEL;
+  // Tự động chuẩn hóa các model cũ đã ngừng hỗ trợ (1.5/2.0/2.5) sang model 2026 ổn định (mặc định gemini-3.5-flash-lite)
+  const geminiModel = normalizeGeminiModelName(rawGeminiModel);
+  const geminiFastModel = geminiModel;
+  const duplicateRadiusMeters = parseIntEnv(
+    source,
+    'DUPLICATE_RADIUS_METERS',
+    150,
+    { min: 10, max: 5000, hint: 'Số nguyên dương 10–5000m (mặc định: 150).' },
+    issues,
+  );
+  const dHashHammingThreshold = parseIntEnv(
+    source,
+    'DHASH_HAMMING_THRESHOLD',
+    6,
+    { min: 1, max: 32, hint: 'Số nguyên dương 1–32 bit (mặc định: 6).' },
+    issues,
+  );
+  const autoApproveMinScore = parseIntEnv(
+    source,
+    'AUTO_APPROVE_MIN_SCORE',
+    80,
+    { min: 50, max: 100, hint: 'Số nguyên dương 50–100 (mặc định: 80).' },
+    issues,
+  );
   const hasAnyCloudAiKey = Boolean(
     geminiApiKey ||
       readTrimmed(source, 'GEMINI_API_KEYS') ||
+      readTrimmed(source, 'VERTEX_API_KEYS') ||
+      readTrimmed(source, 'VERTEX_API_KEY') ||
+      Object.keys(source).some(
+        (k) =>
+          /^(?:GEMINI|VERTEX|OPENROUTER|GROQ)_API_KEY_\d+$/.test(k) &&
+          Boolean(readTrimmed(source, k)),
+      ) ||
       readTrimmed(source, 'OPENROUTER_API_KEYS') ||
       readTrimmed(source, 'OPENROUTER_API_KEY') ||
       readTrimmed(source, 'GROQ_API_KEYS') ||
@@ -297,6 +333,10 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     port,
     geminiApiKey,
     geminiModel,
+    geminiFastModel,
+    duplicateRadiusMeters,
+    dHashHammingThreshold,
+    autoApproveMinScore,
     allowCloudAiFallback,
     cvEngineUrl,
     autoSpawnCvEngine,

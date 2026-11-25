@@ -1,5 +1,5 @@
 import type { ClientReport, ScopeStats, UserProfile } from '@shared/types';
-import { api, ApiError, NetworkError } from '../lib/api';
+import { api, apiMultipart, ApiError, NetworkError } from '../lib/api';
 import { authStore } from '../lib/authStore';
 import { db, putSetting, type OutboxItem, type OutboxKind } from './localDb';
 
@@ -87,11 +87,32 @@ function endpointFor(item: OutboxItem): { path: string } {
 
 async function sendOne(item: OutboxItem): Promise<void> {
   const { path } = endpointFor(item);
-  const res = await api<{ outcome?: string; messageCode?: string; report?: ClientReport } | ClientReport>(path, {
-    method: 'POST',
-    body: item.kind === 'confirm' ? undefined : item.payload,
-    timeoutMs: 45_000,
-  }).then((r) => r);
+  const pObj =
+    item.payload && typeof item.payload === 'object'
+      ? (item.payload as { displayBlob?: unknown; aiBlob?: unknown; [k: string]: unknown })
+      : null;
+
+  const res =
+    pObj && pObj.displayBlob instanceof Blob
+      ? await (() => {
+          const fd = new FormData();
+          fd.append('displayImage', pObj.displayBlob, 'display.webp');
+          if (pObj.aiBlob instanceof Blob) fd.append('aiImage', pObj.aiBlob, 'ai.webp');
+          const { displayBlob: _db, aiBlob: _ab, ...meta } = pObj;
+          void _db;
+          void _ab;
+          fd.append('metadata', JSON.stringify(meta));
+          return apiMultipart<{ outcome?: string; messageCode?: string; report?: ClientReport } | ClientReport>(path, {
+            method: 'POST',
+            body: fd,
+            timeoutMs: 45_000,
+          });
+        })()
+      : await api<{ outcome?: string; messageCode?: string; report?: ClientReport } | ClientReport>(path, {
+          method: 'POST',
+          body: item.kind === 'confirm' ? undefined : item.payload,
+          timeoutMs: 45_000,
+        });
   const isCreate = item.kind === 'create_report' || item.kind === 'proxy_report';
   const report = (isCreate ? (res as { report: ClientReport }).report : (res as ClientReport));
   await db.transaction('rw', db.reports, db.outboxQueue, async () => {

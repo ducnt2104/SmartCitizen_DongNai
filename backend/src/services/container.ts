@@ -1,13 +1,16 @@
 import { env } from '../config/env';
 import type { Repositories } from '../repositories/types';
+import { Stage2PostProcessorService } from './ai';
 import { AuditService } from './audit.service';
 import { AuthService } from './auth.service';
+import { CacheService, cacheService } from './cache.service';
 import { ChatService } from './chat.service';
 import { CvEngineService } from './cvEngine.service';
 import { GeminiService } from './gemini.service';
 import { GeoService } from './geo.service';
 import { KeyPoolManager } from './keyPool';
 import { LocalRagService } from './localRag.service';
+import { MediaService, mediaService } from './media.service';
 import { OtpDeliveryService } from './otpDelivery.service';
 import { FirebasePhoneVerifier, PhoneOtpService } from './otp';
 import { ReportService } from './report.service';
@@ -18,6 +21,9 @@ export interface Services {
   repos: Repositories;
   audit: AuditService;
   trust: TrustService;
+  cache: CacheService;
+  media: MediaService;
+  stage2: Stage2PostProcessorService;
   otpDelivery: OtpDeliveryService;
   phoneOtp: PhoneOtpService;
   firebaseVerifier: FirebasePhoneVerifier;
@@ -35,6 +41,9 @@ export interface Services {
 export function createServices(repos: Repositories): Services {
   const audit = new AuditService(repos.audit);
   const trust = new TrustService(repos.users);
+  const cache = cacheService;
+  cache.invalidateReports();
+  const stage2 = new Stage2PostProcessorService(trust, repos.evaluations, cache);
   const keyPool = new KeyPoolManager({
     dataDir: process.env.DATA_DIR ? process.env.DATA_DIR : env.dataDir,
     encryptionSecret: process.env.KEY_ENCRYPTION_SECRET?.trim() || env.jwtSecret,
@@ -53,6 +62,9 @@ export function createServices(repos: Repositories): Services {
     repos,
     audit,
     trust,
+    cache,
+    media: mediaService,
+    stage2,
     otpDelivery,
     phoneOtp,
     firebaseVerifier,
@@ -62,8 +74,8 @@ export function createServices(repos: Repositories): Services {
     rag,
     gemini,
     auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit, phoneOtp),
-    reports: new ReportService(repos, gemini, trust, audit, cvEngine),
-    staff: new StaffService(repos, gemini, trust, audit),
+    reports: new ReportService(repos, gemini, trust, audit, cvEngine, cache, mediaService, stage2),
+    staff: new StaffService(repos, gemini, trust, audit, cache, mediaService),
     chat: new ChatService(repos, rag),
   };
 }

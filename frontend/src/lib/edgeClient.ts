@@ -1,4 +1,7 @@
 import type { EdgeRequest, EdgeResponse } from '../workers/edgeProcessor.worker';
+import { processImageInWorker, type ProcessedImageResult } from './imageProcessor';
+
+export type { ProcessedImageResult };
 
 type Distribute<T> = T extends unknown ? Omit<T, 'id'> : never;
 type Payload = Distribute<EdgeRequest>;
@@ -50,7 +53,7 @@ function call<T extends EdgeResponse['type']>(msg: Payload, expect: T): Promise<
 }
 
 export const edge = {
-  processImage: (blob: Blob) => call({ type: 'process', blob }, 'processed'),
+  processImage: (blob: Blob): Promise<ProcessedImageResult> => processImageInWorker(blob),
   geoScan: (p: Omit<Extract<EdgeRequest, { type: 'geo' }>, 'id' | 'type'>) => call({ type: 'geo', ...p }, 'geo'),
   hammingMatch: (hash: string, known: Array<{ id: string; hash: string }>) => call({ type: 'hamming', hash, known }, 'hamming'),
   terminate: (): void => {

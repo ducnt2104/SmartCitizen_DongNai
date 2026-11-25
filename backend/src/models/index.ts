@@ -36,11 +36,15 @@ const reportSchema = mk({
 
 // Spatial, Compound IOC & Idempotent Sync Indexes trên 95 Phường/Xã
 reportSchema.index({ location: '2dsphere' });
+reportSchema.index({ status: 1, createdAt: -1 });
+reportSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 reportSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
 reportSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });
 reportSchema.index({ imageHash: 1, createdAt: -1 });
+reportSchema.index({ dHash: 1, createdAt: -1 });
+reportSchema.index({ 'photos.dHash': 1, createdAt: -1 });
 reportSchema.index({ assignedRescueId: 1, status: 1, updatedAt: -1 });
 
 /** Người dùng & Phân quyền RBAC 4 vai trò chuẩn (`ADMIN`, `OFFICER`, `RESCUE`, `CITIZEN`). */
@@ -248,6 +252,7 @@ export {
   type AuditLogDocument,
 } from './AuditLog';
 export { ApiKey, apiKeySchema, type IApiKey, type ApiKeyDocument } from './ApiKey';
+export { MediaAsset, mediaAssetSchema, type IMediaAsset, type MediaAssetDocument } from './Media';
 export {
   DONG_NAI_GEO_BOUNDS,
   SYNC_STATUSES,

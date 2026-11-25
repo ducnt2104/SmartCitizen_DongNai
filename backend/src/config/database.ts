@@ -242,8 +242,8 @@ export function buildMongoConnectOptions(uri?: string): ConnectOptions {
   return {
     ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
     maxPoolSize: 20,
-    minPoolSize: 5,
-    serverSelectionTimeoutMS: explicitServerSel ?? 10_000,
+    minPoolSize: 2,
+    serverSelectionTimeoutMS: explicitServerSel ?? 5_000,
     connectTimeoutMS: 10_000,
     socketTimeoutMS: 45_000,
     maxIdleTimeMS: 60_000,
@@ -397,6 +397,84 @@ export function registerGracefulShutdown(): void {
   process.on('SIGTERM', () => handleSignal('SIGTERM'));
 }
 
+function isIndexConflictError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const rec = err as { code?: unknown; codeName?: unknown; message?: unknown };
+  const code = typeof rec.code === 'number' ? rec.code : Number(rec.code);
+  const codeName = typeof rec.codeName === 'string' ? rec.codeName : '';
+  const msg = err instanceof Error ? err.message : String(rec.message ?? err);
+  return (
+    code === 85 ||
+    code === 86 ||
+    codeName === 'IndexOptionsConflict' ||
+    codeName === 'IndexKeySpecsConflict' ||
+    /IndexOptionsConflict|IndexKeySpecsConflict|equivalent index already exists|same name as the requested index|already exists with different options/i.test(
+      msg,
+    )
+  );
+}
+
+async function createModelIndexesSafely(m: {
+  collection: {
+    collectionName: string;
+    indexes: () => Promise<Array<Record<string, unknown>>>;
+    dropIndex: (name: string) => Promise<unknown>;
+  };
+  schema: { indexes: () => Array<[Record<string, unknown>, Record<string, unknown>]> };
+  createIndexes: () => Promise<unknown>;
+}): Promise<void> {
+  try {
+    await m.createIndexes();
+  } catch (err) {
+    if (!isIndexConflictError(err)) {
+      console.warn(
+        `[mongodb] Cảnh báo khi đồng bộ index cho ${m.collection.collectionName}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+
+    // Xử lý an toàn xung đột options trên index TTL (vd: otp_tokens.expiresAt_1 có expireAfterSeconds cũ trên Atlas)
+    try {
+      const existingIndexes = await m.collection.indexes();
+      const db = mongoose.connection.db;
+      let resolvedAny = false;
+
+      for (const [keySpec, schemaOpts] of m.schema.indexes()) {
+        if (typeof schemaOpts.expireAfterSeconds !== 'number') continue;
+        const targetKeyJson = JSON.stringify(keySpec);
+        const existing = existingIndexes.find((idx) => JSON.stringify(idx.key) === targetKeyJson);
+        if (!existing || existing.expireAfterSeconds === schemaOpts.expireAfterSeconds) continue;
+
+        const indexName = String(existing.name ?? '');
+        let updated = false;
+        if (db && indexName) {
+          try {
+            await db.command({
+              collMod: m.collection.collectionName,
+              index: { name: indexName, expireAfterSeconds: schemaOpts.expireAfterSeconds },
+            });
+            updated = true;
+          } catch {
+            // Fallback drop & recreate nếu DB user không có quyền collMod
+          }
+        }
+        if (!updated && indexName && indexName !== '_id_') {
+          await m.collection.dropIndex(indexName);
+        }
+        resolvedAny = true;
+      }
+
+      if (resolvedAny) {
+        await m.createIndexes();
+      }
+    } catch {
+      // Nếu index tương đương đã tồn tại trên MongoDB, bỏ qua im lặng tránh spam warning khi khởi động
+    }
+  }
+}
+
 /**
  * Đồng bộ toàn bộ hệ thống Indexes (2dsphere, Compound IOC, Unique Sparse syncId, TTL dọn rác)
  * cho tất cả Mongoose Models đã đăng ký.
@@ -421,19 +499,12 @@ export async function ensureDatabaseIndexes(): Promise<IndexSyncSummary[]> {
     models.SessionModel,
     models.AuditLogModel,
     models.ApiKey,
+    models.MediaAsset,
   ].filter(Boolean);
 
   const summaries = await Promise.all(
     targets.map(async (m): Promise<IndexSyncSummary> => {
-      try {
-        await m.createIndexes();
-      } catch (err) {
-        console.warn(
-          `[mongodb] Cảnh báo khi đồng bộ index cho ${m.collection.collectionName}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
+      await createModelIndexesSafely(m as never);
       const rawIndexes = await m.collection.indexes().catch(() => []);
       return {
         modelName: m.modelName,

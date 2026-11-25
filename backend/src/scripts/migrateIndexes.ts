@@ -11,6 +11,7 @@ import {
   AuditLog,
   AuditLogModel,
   Incident,
+  MediaAsset,
   OtpModel,
   OtpToken,
   ReportModel,

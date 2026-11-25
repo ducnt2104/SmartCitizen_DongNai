@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {
+  ACTIVE_GEMINI_MODEL_CHAIN,
+  buildGeminiModelChain,
   decryptApiKey,
   encryptApiKey,
+  executeGeminiWithModelFallback,
   KeyPoolManager,
   maskApiKey,
 } from '../index';
@@ -234,6 +237,109 @@ export async function runKeyPoolVerificationSuite(): Promise<void> {
     /Giải mã AES-256-GCM thất bại/,
     'Sai KEY_ENCRYPTION_SECRET phải bị GCM AuthTag từ chối ngay',
   );
+
+  // ── 6. Routing AQ.* -> AI Studio mặc định, 404 giữ key HEALTHY & fallback model, 503 Cooldown 60s ──
+  const aqStudioPool = new KeyPoolManager({
+    envSource: {
+      GEMINI_API_KEYS: 'AQ.Ab8RN6MockAiStudioKey0001,AIzaSyMockBackupKey0002,vertex:AQ.Ab8RN6ExplicitVertex0003',
+      VERTEX_API_KEYS: 'AQ.Ab8RN6VertexEnvKey0004',
+    },
+    persistenceMode: 'memory',
+    nowFn: () => fakeNow,
+    logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  });
+
+  const routedSnap = await aqStudioPool.listMaskedKeys();
+  assert.equal(routedSnap.keys[0].geminiEndpoint, 'ai_studio', 'AQ.* trong GEMINI_API_KEYS phải mặc định dùng AI Studio');
+  assert.equal(routedSnap.keys[1].geminiEndpoint, 'ai_studio');
+  assert.equal(routedSnap.keys[2].geminiEndpoint, 'vertex', 'Tiền tố vertex: phải định tuyến Vertex AI');
+  assert.equal(routedSnap.keys[3].geminiEndpoint, 'vertex', 'VERTEX_API_KEYS phải định tuyến Vertex AI');
+
+  // 6a. HTTP 404 không được đánh dấu key INVALID; cùng 1 key tự chuyển qua gemini-3.5-flash-lite -> gemini-3.6-flash -> gemini-3.8-flash
+  const calledModels: Array<{ url: string; apiKeyHeader: string | null }> = [];
+  const mock404Fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const headers = new Headers(init?.headers);
+    calledModels.push({ url, apiKeyHeader: headers.get('x-goog-api-key') });
+    if (url.includes('gemini-3.5-flash-lite')) {
+      return new Response(JSON.stringify({ error: { code: 404, message: 'models/gemini-3.5-flash-lite is not found', status: 'NOT_FOUND' } }), { status: 404 });
+    }
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const modelChainResult = await aqStudioPool.executeWithRotation(async (apiKey, meta) => {
+    assert.equal(meta.slotNumber, 1, 'Key #1 AQ.* phải được chọn đầu tiên');
+    return executeGeminiWithModelFallback({
+      apiKey,
+      geminiEndpoint: meta.geminiEndpoint,
+      models: buildGeminiModelChain(),
+      contents: 'Ping',
+      timeoutMs: 5_000,
+      label: 'Test404Fallback',
+      fetchImpl: mock404Fetch,
+    });
+  });
+
+  assert.equal(modelChainResult.modelUsed, 'gemini-3.6-flash');
+  assert.equal(modelChainResult.endpointUsed, 'ai_studio');
+  assert.equal(calledModels.length, 2, 'Phải thử 2 model trên CÙNG Key #1');
+  assert.ok(calledModels[0].url.startsWith('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent'));
+  assert.equal(calledModels[0].apiKeyHeader, 'AQ.Ab8RN6MockAiStudioKey0001');
+  assert.ok(calledModels[1].url.startsWith('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent'));
+
+  // Nếu cả chuỗi model đều trả 404, key vẫn PHẢI giữ trạng thái HEALTHY (không bị đánh dấu INVALID)
+  const all404Pool = new KeyPoolManager({
+    envSource: { GEMINI_API_KEYS: 'AQ.Ab8RN6All404TestKey9999' },
+    persistenceMode: 'memory',
+    nowFn: () => fakeNow,
+    logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  });
+  await assert.rejects(
+    all404Pool.executeWithRotation(async () => {
+      throw makeHttpError(404, '404 models/gemini-3.8-flash is not found for API version v1beta');
+    }),
+  );
+  const all404Snap = await all404Pool.listMaskedKeys();
+  assert.equal(all404Snap.keys[0].status, 'HEALTHY', 'HTTP 404 tuyệt đối không được đánh dấu key INVALID');
+
+  // 6b. HTTP 503 Overloaded -> Cooldown 60s và xoay sang key khỏe tiếp theo (không đánh dấu INVALID)
+  const overloadedPool = new KeyPoolManager({
+    envSource: { GEMINI_API_KEYS: 'AQ.Ab8RN6OverloadKey_o001,AIzaSyHealthyKey_o002' },
+    persistenceMode: 'memory',
+    nowFn: () => fakeNow,
+    logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+  });
+  const after503 = await overloadedPool.executeWithRotation(async (_k, meta) => {
+    if (meta.slotNumber === 1) throw makeHttpError(503, '503 UNAVAILABLE: Model is overloaded');
+    return `OK_${meta.slotNumber}`;
+  });
+  assert.equal(after503, 'OK_2');
+  const overloadKey1 = (await overloadedPool.listMaskedKeys()).keys[0];
+  assert.equal(overloadKey1.status, 'COOLDOWN', 'HTTP 503 phải đưa key vào COOLDOWN tạm thời');
+  assert.equal(overloadKey1.cooldownRemainingMs, 60_000, 'HTTP 503 phải có cooldown 60s');
+
+  // 6c. AQ.* bị 403 trên AI Studio thử Vertex Express 1 lần trước khi đánh dấu INVALID
+  const aqFallbackUrls: string[] = [];
+  const aqRecovered = await executeGeminiWithModelFallback({
+    apiKey: 'AQ.Ab8RN6VertexOnlyKey001',
+    geminiEndpoint: 'ai_studio',
+    models: ACTIVE_GEMINI_MODEL_CHAIN,
+    contents: 'Ping',
+    timeoutMs: 5_000,
+    label: 'TestAqFallback',
+    fetchImpl: (async (input: string | URL | Request) => {
+      const url = String(input);
+      aqFallbackUrls.push(url);
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return new Response(JSON.stringify({ error: { code: 403, message: 'API_KEY_INVALID', status: 'PERMISSION_DENIED' } }), { status: 403 });
+      }
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'VERTEX_OK' }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+  assert.equal(aqRecovered.endpointUsed, 'vertex');
+  assert.equal(aqRecovered.text, 'VERTEX_OK');
+  assert.ok(aqFallbackUrls.some((u) => u.includes('generativelanguage.googleapis.com')));
+  assert.ok(aqFallbackUrls.some((u) => u.includes('aiplatform.googleapis.com')));
 }
 
 if (require.main === module) {

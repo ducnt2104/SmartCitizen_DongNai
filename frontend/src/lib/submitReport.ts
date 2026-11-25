@@ -3,8 +3,17 @@ import { nearestWard, matchArterial } from '@shared/geo';
 import type { Category, ClientReport, VisionResult } from '@shared/types';
 import { db } from '../db/localDb';
 import { enqueue } from '../db/sync';
-import type { EdgeStatsMsg } from '../workers/edgeProcessor.worker';
+import type { EdgeStatsMsg, ExtractedExifMetadata } from '../lib/imageProcessor';
 import { authStore } from './authStore';
+
+export interface SubmitPhotoPayload {
+  dHash: string;
+  displayBlob?: Blob;
+  aiBlob?: Blob;
+  previewUrl?: string;
+  dataUrl?: string;
+  exif?: ExtractedExifMetadata;
+}
 
 export interface SubmitInput {
   category: Category;
@@ -15,7 +24,7 @@ export interface SubmitInput {
   lng: number;
   wardCode: string;
   address: string;
-  photo: { dataUrl: string; dHash: string };
+  photo: SubmitPhotoPayload;
   deviceLat?: number;
   deviceLng?: number;
   leftScene: boolean;
@@ -57,7 +66,16 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     onArterial: arterial !== null,
     lat: input.lat,
     lng: input.lng,
-    photos: [{ id: `ph_${key}`, url: input.photo.dataUrl, dHash: input.photo.dHash, kind: 'before', takenBy: 'me', createdAt: now }],
+    photos: [
+      {
+        id: `ph_${key}`,
+        url: input.photo.previewUrl ?? input.photo.dataUrl ?? '',
+        dHash: input.photo.dHash,
+        kind: 'before',
+        takenBy: 'me',
+        createdAt: now,
+      },
+    ],
     afterPhoto: null,
     clusterCount: 1,
     reporterPhoneMasked: '',
@@ -102,7 +120,11 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     lng: input.lng,
     wardCode: input.wardCode,
     address: input.address,
-    photo: input.photo,
+    dHash: input.photo.dHash,
+    ...(input.photo.dataUrl && !input.photo.displayBlob ? { photo: { dataUrl: input.photo.dataUrl, dHash: input.photo.dHash } } : {}),
+    ...(input.photo.displayBlob ? { displayBlob: input.photo.displayBlob } : {}),
+    ...(input.photo.aiBlob ? { aiBlob: input.photo.aiBlob } : {}),
+    ...(input.photo.exif ? { exif: input.photo.exif } : {}),
     ...(input.deviceLat !== undefined && input.deviceLng !== undefined ? { deviceLat: input.deviceLat, deviceLng: input.deviceLng } : {}),
     leftScene: input.leftScene,
     isProxyReport: proxy,
@@ -146,6 +168,12 @@ export async function rateReport(report: ClientReport, stars: number, comment: s
   await enqueue({ id: `rt-${report.id}`, kind: 'rate', targetId: report.id, payload: { stars, comment } });
 }
 
-export async function attachAngle(report: ClientReport, photo: { dataUrl: string; dHash: string }): Promise<void> {
-  await enqueue({ id: `at-${report.id}-${photo.dHash}`, kind: 'attach_photo', targetId: report.id, payload: { photo } });
+export async function attachAngle(
+  report: ClientReport,
+  photo: { dHash: string; displayBlob?: Blob; aiBlob?: Blob; dataUrl?: string },
+): Promise<void> {
+  const payload = photo.displayBlob
+    ? { displayBlob: photo.displayBlob, ...(photo.aiBlob ? { aiBlob: photo.aiBlob } : {}), dHash: photo.dHash }
+    : { photo: { dataUrl: photo.dataUrl ?? '', dHash: photo.dHash } };
+  await enqueue({ id: `at-${report.id}-${photo.dHash}`, kind: 'attach_photo', targetId: report.id, payload });
 }

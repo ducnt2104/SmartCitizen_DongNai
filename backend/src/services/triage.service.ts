@@ -1,5 +1,5 @@
 import {
-  AUTHENTICITY_MIN, DHASH_ANGLE_MIN, DHASH_DUPLICATE_MAX, GPS_QUARANTINE_M,
+  AUTHENTICITY_MIN, DHASH_ANGLE_MIN, DHASH_DUPLICATE_MAX, GPS_QUARANTINE_M, TRUST_SUPERVISED_BELOW,
 } from '../shared/constants';
 import { hammingDistance } from '../shared/dhash';
 import type { Category, QuarantineReason } from '../shared/types';
@@ -102,7 +102,7 @@ export function decideTriage(f: TriageFacts): TriageDecision {
       reason: 'low_trust',
       relatedReportId: null,
       needsFieldVerification: false,
-      detail: 'Tài khoản đang ở chế độ Giám sát (trustScore < 30): đơn mới cần kiểm duyệt trước.',
+      detail: `Tài khoản đang ở chế độ Giám sát (trustScore < ${TRUST_SUPERVISED_BELOW}): đơn mới cần kiểm duyệt trước.`,
     };
   }
 

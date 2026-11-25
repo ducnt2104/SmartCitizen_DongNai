@@ -26,9 +26,10 @@ import { db } from '../db/localDb';
 import { syncBus, type SyncEventDetail } from '../db/sync';
 import { usePreciseLocation } from '../hooks/usePreciseLocation';
 import { useI18n, type I18nKey } from '../i18n';
-import { api, ApiError, NetworkError } from '../lib/api';
+import { api, apiMultipart, ApiError, NetworkError } from '../lib/api';
 import { useSession } from '../lib/authStore';
 import { edge } from '../lib/edgeClient';
+import type { EdgeStatsMsg, ExifGpsCoords, ExtractedExifMetadata } from '../lib/imageProcessor';
 import { localVision } from '../lib/localVision';
 import { CATEGORY_META } from '../lib/meta';
 import { speechRecognitionSupported, startListening } from '../lib/speech';
@@ -36,18 +37,21 @@ import { attachAngle, confirmReport, submitReport } from '../lib/submitReport';
 import { useAuthGate } from '../state/authGate';
 import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
-import type { EdgeStatsMsg, ExifGpsCoords } from '../workers/edgeProcessor.worker';
 
 interface PhotoState {
-  dataUrl: string;
+  previewUrl: string;
+  aiBlob: Blob;
+  displayBlob: Blob;
   dHash: string;
   bytes: number;
+  aiBytes: number;
   originalBytes: number;
   width: number;
   height: number;
   totalMs: number;
   hashMs: number;
   stats: EdgeStatsMsg;
+  exif: ExtractedExifMetadata;
   exifGps: ExifGpsCoords | null;
 }
 
@@ -108,6 +112,16 @@ export default function ReportPage() {
   const stopListen = useRef<(() => void) | null>(null);
   const mountedRef = useRef(true);
   const visionAbortRef = useRef<AbortController | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const [dupConfirming, setDupConfirming] = useState(false);
+
+  const replacePreviewUrl = useCallback((nextUrl: string | null) => {
+    const prev = previewUrlRef.current;
+    if (prev && prev.startsWith('blob:') && prev !== nextUrl) {
+      URL.revokeObjectURL(prev);
+    }
+    previewUrlRef.current = nextUrl;
+  }, []);
 
   // Bước 2: PrecisionLocationPicker (GPS 4s + Center Crosshair Pin + Reverse Geocode 95 Phường/Xã)
   const { fix, status: gpsStatus, samples: gpsSamples, isLowAccuracy, locate: locatePrecise } = usePreciseLocation();
@@ -129,10 +143,11 @@ export default function ReportPage() {
       mountedRef.current = false;
       stopListen.current?.();
       visionAbortRef.current?.abort();
+      replacePreviewUrl(null);
     };
-  }, []);
+  }, [replacePreviewUrl]);
 
-  // ── Bước 1: Web Worker nén ảnh + trích xuất EXIF GPS + dHash → Gemini Zero-Typing ──
+  // ── Bước 1: Web Worker nén song song aiBlob/displayBlob + trích xuất EXIF + dHash → 3-Stage AI ──
   const onFile = useCallback(
     async (file: File) => {
       visionAbortRef.current?.abort();
@@ -144,17 +159,25 @@ export default function ReportPage() {
       setExifApplied(false);
       try {
         const p = await edge.processImage(file);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) {
+          if (p.previewUrl.startsWith('blob:')) URL.revokeObjectURL(p.previewUrl);
+          return;
+        }
+        replacePreviewUrl(p.previewUrl);
         setPhoto({
-          dataUrl: p.dataUrl,
+          previewUrl: p.previewUrl,
+          aiBlob: p.aiBlob,
+          displayBlob: p.displayBlob,
           dHash: p.dHash,
-          bytes: p.bytes,
+          bytes: p.displayBytes,
+          aiBytes: p.aiBytes,
           originalBytes: p.originalBytes,
           width: p.width,
           height: p.height,
           totalMs: p.timings.totalMs,
           hashMs: p.timings.hashMs,
           stats: p.stats,
+          exif: p.exif,
           exifGps: p.exifGps,
         });
 
@@ -176,20 +199,32 @@ export default function ReportPage() {
         if (cached) v = { ...cached.result, cached: true };
         if (!v && navigator.onLine) {
           try {
-            v = await api<VisionResult>('/api/ai/analyze-image', {
-              body: {
-                image: { dataUrl: p.dataUrl, dHash: p.dHash },
+            const fd = new FormData();
+            fd.append('aiImage', p.aiBlob, 'ai.webp');
+            const hint = `${title} ${description}`.trim();
+            fd.append(
+              'metadata',
+              JSON.stringify({
+                dHash: p.dHash,
                 ...(category ? { category } : {}),
-                hintText: `${title} ${description}`.trim() || undefined,
+                ...(hint ? { hintText: hint } : {}),
+                ...(p.exifGps ? { lat: p.exifGps.lat, lng: p.exifGps.lng } : {}),
                 edge: p.stats,
-              },
-              timeoutMs: 40000,
+                exif: p.exif,
+              }),
+            );
+            v = await apiMultipart<VisionResult>('/api/ai/analyze-image', {
+              body: fd,
+              timeoutMs: 25_000,
               signal: ctrl.signal,
             });
-            if (v.mode === 'gemini') await db.aiVisionCache.put({ dHash: p.dHash, result: v, at: Date.now() });
+            if (v.mode === 'gemini' && v.status !== 'DUPLICATE_FOUND' && v.decision !== 'AUTO_REJECT') {
+              await db.aiVisionCache.put({ dHash: p.dHash, result: v, at: Date.now() });
+            }
           } catch (err) {
             if (ctrl.signal.aborted || !mountedRef.current) return;
             if (err instanceof ApiError && err.status === 429) toast('info', t('report.aiLimit'), err.message);
+            else if (err instanceof ApiError && err.status === 400) toast('error', t('report.photoFail'), err.message);
             else if (!(err instanceof NetworkError)) console.warn('AI Vision lỗi, dùng bộ phân loại cục bộ:', err);
           }
         }
@@ -198,11 +233,12 @@ export default function ReportPage() {
         setVision(v);
         setCategory((c) => c ?? v!.category);
         if (v.aiSuggestedLabel) setOtherLabel((prev) => prev || v!.aiSuggestedLabel || '');
-        setTitle((x) => x || v!.title);
-        setDescription((x) => x || v!.description);
+        setTitle((x) => x || (v!.suggestedTitle ?? v!.title));
+        setDescription((x) => x || (v!.suggestedDescription ?? v!.description));
       } catch (err) {
         if (!mountedRef.current) return;
         toast('error', t('report.photoFail'), err instanceof Error ? err.message : undefined);
+        replacePreviewUrl(null);
         setPhoto(null);
       } finally {
         if (mountedRef.current) {
@@ -211,7 +247,7 @@ export default function ReportPage() {
         }
       }
     },
-    [category, title, description, toast, t],
+    [category, title, description, toast, t, replacePreviewUrl],
   );
 
   const toggleMic = (): void => {
@@ -238,11 +274,28 @@ export default function ReportPage() {
       const target = await db.reports.get(reportId);
       if (!target) return;
       if (mode === 'confirm') await confirmReport(target);
-      else await attachAngle(target, { dataUrl: photo.dataUrl, dHash: photo.dHash });
+      else await attachAngle(target, { displayBlob: photo.displayBlob, aiBlob: photo.aiBlob, dHash: photo.dHash });
       toast('success', mode === 'confirm' ? t('detail.confirmed') : t('detail.attachOk'), t('report.nearbyDone'));
       nav('/mine');
     },
     [photo, requireAuth, toast, t, nav],
+  );
+
+  const confirmDuplicateById = useCallback(
+    async (incidentId: string): Promise<void> => {
+      if (!(await requireAuth())) return;
+      setDupConfirming(true);
+      try {
+        await api(`/api/reports/${incidentId}/confirm`, { method: 'POST' });
+        toast('success', t('detail.confirmed'), t('report.nearbyDone'));
+        nav('/mine');
+      } catch (err) {
+        toast('error', t('report.submitFail'), err instanceof Error ? err.message : undefined);
+      } finally {
+        if (mountedRef.current) setDupConfirming(false);
+      }
+    },
+    [requireAuth, toast, t, nav],
   );
 
   // ── Bước 3: gửi (Local-First, Outbox) ─────────────────────────────────────────
@@ -275,7 +328,13 @@ export default function ReportPage() {
           lng: pin.lng,
           wardCode: finalWardCode,
           address: address || `${finalWardName}, TP. Đồng Nai`,
-          photo: { dataUrl: photo.dataUrl, dHash: photo.dHash },
+          photo: {
+            previewUrl: photo.previewUrl,
+            displayBlob: photo.displayBlob,
+            aiBlob: photo.aiBlob,
+            dHash: photo.dHash,
+            exif: photo.exif,
+          },
           deviceLat: fix?.lat,
           deviceLng: fix?.lng,
           leftScene,
@@ -296,6 +355,7 @@ export default function ReportPage() {
 
   const reset = (): void => {
     setStep(1);
+    replacePreviewUrl(null);
     setPhoto(null);
     setVision(null);
     setCategory(null);
@@ -384,7 +444,7 @@ export default function ReportPage() {
 
   const step1Ok = !!photo && !!category && title.trim().length >= 3 && !processing;
   const step2Ok = !!pin && !!geo?.inBounds && !!activeWardCode;
-  const authLow = vision && vision.authenticityScore < 45;
+  const authLow = Boolean(vision && (vision.authenticityScore < 45 || vision.decision === 'AUTO_REJECT'));
 
   return (
     <div className="space-y-4">
@@ -411,9 +471,9 @@ export default function ReportPage() {
 
           {photo && (
             <div className="card space-y-3 p-3">
-              <img src={photo.dataUrl} alt={t('report.photoAlt')} className="aspect-[4/3] w-full rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt={t('report.photoAlt')} decoding="async" className="aspect-[4/3] w-full rounded-xl object-cover" />
               <p className="text-xs text-muted">
-                Ảnh đã tối ưu ({photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB,{' '}
+                Ảnh WebP tối ưu ({photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB / AI {(photo.aiBytes / 1024).toFixed(0)} KB,{' '}
                 {t('report.saved', { p: Math.max(0, Math.round((1 - photo.bytes / photo.originalBytes) * 100)) })})
               </p>
               {exifApplied && (
@@ -421,7 +481,24 @@ export default function ReportPage() {
                   <MapPin className="h-4 w-4 shrink-0" aria-hidden /> {t('report.exifFound')}
                 </p>
               )}
-              {localDup !== null && (
+              {vision?.status === 'DUPLICATE_FOUND' && vision.duplicateIncidentId && (
+                <div role="alert" className="space-y-2 rounded-xl border border-warn/40 bg-warn-soft p-3 text-sm text-warn">
+                  <p className="flex items-start gap-2 font-bold">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    {vision.citizenFeedback}
+                  </p>
+                  <button
+                    type="button"
+                    disabled={dupConfirming}
+                    onClick={() => void confirmDuplicateById(vision.duplicateIncidentId!)}
+                    className="btn btn-primary !min-h-10 !px-3 text-xs"
+                  >
+                    {dupConfirming ? <Spinner /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+                    Cùng xác nhận (+1 Ưu tiên) · {vision.duplicateIncidentCode}
+                  </button>
+                </div>
+              )}
+              {localDup !== null && vision?.status !== 'DUPLICATE_FOUND' && (
                 <p role="alert" className="flex gap-2 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                   {t('report.localDup', { d: localDup })}
@@ -440,11 +517,14 @@ export default function ReportPage() {
                 </p>
               )}
               {vision && (
-                <div className={`rounded-xl p-3 text-sm ${authLow ? 'bg-danger-soft text-danger' : 'bg-ok-soft text-ok'}`}>
+                <div className={`space-y-1 rounded-xl p-3 text-sm ${authLow ? 'bg-danger-soft text-danger' : 'bg-ok-soft text-ok'}`}>
                   <p className="flex items-center gap-2 font-bold">
-                    {authLow ? <ShieldAlert className="h-4 w-4" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
+                    {authLow ? <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden /> : <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />}
                     {authLow ? t('report.authLow') : t('report.authOk')} · <span className="mono">{vision.authenticityScore}/100</span>
                   </p>
+                  {vision.citizenFeedback && vision.decision === 'AUTO_REJECT' && (
+                    <p className="text-xs font-medium">{vision.citizenFeedback}</p>
+                  )}
                 </div>
               )}
             </div>
@@ -586,7 +666,7 @@ export default function ReportPage() {
           </h2>
           <div className="card space-y-3 p-3">
             <div className="flex gap-3">
-              <img src={photo.dataUrl} alt="" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt="" decoding="async" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
               <div className="min-w-0">
                 <p className="break-words font-bold [overflow-wrap:anywhere]">{title}</p>
                 <p className="text-sm font-semibold" style={{ color: CATEGORY_META[category].color }}>

@@ -2,7 +2,9 @@ import type { ApiKeyStatus } from './types';
 
 export type KeyErrorKind =
   | 'RATE_LIMIT_429'
+  | 'OVERLOADED_503'
   | 'DAILY_QUOTA_EXHAUSTED'
+  | 'MODEL_NOT_FOUND_404'
   | 'INVALID_KEY'
   | 'TRANSIENT_UPSTREAM'
   | 'NON_RETRYABLE';
@@ -31,11 +33,13 @@ const RATE_LIMIT_RE =
 const INVALID_KEY_RE =
   /(api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|api_key_service_blocked|api_key_http_referrer_blocked|service_disabled|has not been used in project|accessnotconfigured|unauthenticated|permission_denied|invalid authentication|incorrect api key|key.*revoked|key.*leaked|key.*expired|unauthorized|forbidden)/i;
 
-const PAYLOAD_ONLY_400_RE =
-  /(inlinedata|mimetype|responseschema|safety|blocked by safety|recitation|context length|maximum context)/i;
+const MODEL_NOT_FOUND_RE =
+  /(is not found for api version|publisher model.*not found|model.*not found|models\/[^\s]+.*not found)/i;
+
+const OVERLOADED_503_RE = /(\b503\b|model is overloaded|service unavailable|high demand)/i;
 
 const TRANSIENT_RE =
-  /(\b500\b|\b502\b|\b503\b|\b504\b|unavailable|deadline_exceeded|internal error|overloaded|quá thời gian|timeout|timed out|econnreset|etimedout|fetch failed|socket hang up)/i;
+  /(\b500\b|\b502\b|\b504\b|unavailable|deadline_exceeded|internal error|quá thời gian|timeout|timed out|econnreset|etimedout|fetch failed|socket hang up)/i;
 
 function extractHttpStatus(err: unknown): number | null {
   if (!err || typeof err !== 'object') return null;
@@ -154,13 +158,25 @@ export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
     };
   }
 
-  // 2. Key chết / bị thu hồi / sai quyền (400/401/403 hoặc thông điệp xác thực)
+  // 2. HTTP 404 (Model Not Found): TUYỆT ĐỐI không đánh dấu API key INVALID/REVOKED; giữ key HEALTHY để thử model/key khác
   if (
-    status === 401 ||
-    status === 403 ||
-    INVALID_KEY_RE.test(fullText) ||
-    (status === 400 && !PAYLOAD_ONLY_400_RE.test(fullText))
+    status === 404 ||
+    (status !== 401 &&
+      status !== 403 &&
+      !INVALID_KEY_RE.test(fullText) &&
+      (/\b404\b|not[_ -]?found/i.test(fullText) && MODEL_NOT_FOUND_RE.test(fullText)))
   ) {
+    return {
+      kind: 'MODEL_NOT_FOUND_404',
+      httpStatus: 404,
+      targetStatus: 'HEALTHY',
+      retryable: true,
+      reasonSummary: shortReason || 'HTTP 404 Model Not Found',
+    };
+  }
+
+  // 3. Key chết / bị thu hồi / sai quyền (401/403 hoặc thông điệp xác thực API_KEY_INVALID)
+  if (status === 401 || status === 403 || INVALID_KEY_RE.test(fullText)) {
     return {
       kind: 'INVALID_KEY',
       httpStatus: status ?? 401,
@@ -170,18 +186,18 @@ export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
     };
   }
 
-  // 3. Lỗi 404 khi đã thử hết chuỗi model dự phòng trên key đó (vd: key Vertex Express AQ.* chưa bật endpoint/model) -> xoay sang key tiếp theo
-  if (status === 404 || /\b404\b|not[_ -]?found|is not found for api version|publisher model.*not found/i.test(fullText)) {
+  // 4. Lỗi 503 (Model Overloaded / Service Unavailable): tạm thời Cooldown (60s) và xoay sang key kế tiếp, không đánh dấu INVALID
+  if (status === 503 || OVERLOADED_503_RE.test(fullText)) {
     return {
-      kind: 'INVALID_KEY',
-      httpStatus: 404,
-      targetStatus: 'INVALID',
+      kind: 'OVERLOADED_503',
+      httpStatus: status ?? 503,
+      targetStatus: 'COOLDOWN',
       retryable: true,
-      reasonSummary: shortReason || 'HTTP 404 Model or Endpoint Not Accessible for Key',
+      reasonSummary: shortReason || 'HTTP 503 Service Unavailable / Overloaded',
     };
   }
 
-  // 4. Lỗi máy chủ upstream tạm thời / quá tải / mạng chập chờn -> giữ key HEALTHY và xoay sang key kế tiếp
+  // 5. Lỗi máy chủ upstream tạm thời / mạng chập chờn -> giữ key HEALTHY và xoay sang key kế tiếp
   if ((status !== null && status >= 500) || status === 408 || TRANSIENT_RE.test(fullText)) {
     return {
       kind: 'TRANSIENT_UPSTREAM',

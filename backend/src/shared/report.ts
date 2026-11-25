@@ -1,10 +1,27 @@
 import { computeSosPriorityScore, toSeverityLabel } from './constants';
-import type { Category, ClientReport, Report, ReportSummary, ScopeStats } from './types';
+import type { Category, ClientReport, Photo, Report, ReportSummary, ScopeStats } from './types';
 import { CATEGORIES } from './types';
+
+function sanitizePhotoForClient(p: Photo): Photo {
+  if (p.mediaId && p.url.startsWith('data:image/')) {
+    return {
+      ...p,
+      url: `/api/media/${p.mediaId}`,
+      thumbnailUrl: p.thumbnailUrl ?? `/api/media/${p.mediaId}?variant=thumb`,
+    };
+  }
+  return p;
+}
 
 export function toClientReport(r: Report): ClientReport {
   const { reporterId: _rid, contributors, confirmations, ...rest } = r;
   void _rid;
+  const safeConfirmCount = Array.isArray(confirmations)
+    ? confirmations.length
+    : ((r as unknown as { confirmCount?: number }).confirmCount ?? 0);
+  const safeContributorCount = Array.isArray(contributors)
+    ? contributors.length
+    : ((r as unknown as { contributorCount?: number }).contributorCount ?? 1);
   const priorityScore =
     r.priorityScore ??
     r.ai?.priorityScore ??
@@ -13,21 +30,28 @@ export function toClientReport(r: Report): ClientReport {
       isEmergency: r.isEmergency || r.emergencyLevel === 1,
       onArterial: r.onArterial,
       clusterCount: r.clusterCount,
-      confirmCount: confirmations.length,
+      confirmCount: safeConfirmCount,
     });
   const severityLabel =
     r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
+  const safePhotos = Array.isArray(r.photos) ? r.photos.map(sanitizePhotoForClient) : [];
+  const safeAfterPhoto = r.afterPhoto ? sanitizePhotoForClient(r.afterPhoto) : null;
   return {
     ...rest,
+    photos: safePhotos,
+    afterPhoto: safeAfterPhoto,
     priorityScore,
     severityLabel,
-    confirmCount: confirmations.length,
-    contributorCount: contributors.length,
+    confirmCount: safeConfirmCount,
+    contributorCount: safeContributorCount,
   };
 }
 
 /** Bản tóm tắt nhẹ cho endpoint bản đồ bbox (loại bỏ payload ảnh base64 lớn). */
 export function toReportSummary(r: Report): ReportSummary {
+  const safeConfirmCount = Array.isArray(r.confirmations)
+    ? r.confirmations.length
+    : ((r as unknown as { confirmCount?: number }).confirmCount ?? 0);
   const priorityScore =
     r.priorityScore ??
     r.ai?.priorityScore ??
@@ -36,10 +60,13 @@ export function toReportSummary(r: Report): ReportSummary {
       isEmergency: r.isEmergency || r.emergencyLevel === 1,
       onArterial: r.onArterial,
       clusterCount: r.clusterCount,
-      confirmCount: r.confirmations.length,
+      confirmCount: safeConfirmCount,
     });
   const severityLabel =
     r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
+  const firstPhoto = r.photos?.[0];
+  const rawThumb = firstPhoto?.thumbnailUrl ?? (firstPhoto?.mediaId ? `/api/media/${firstPhoto.mediaId}?variant=thumb` : firstPhoto?.url);
+  const thumbnailUrl = rawThumb && !rawThumb.startsWith('data:') ? rawThumb : null;
   return {
     id: r.id,
     code: r.code,
@@ -56,7 +83,8 @@ export function toReportSummary(r: Report): ReportSummary {
     lat: r.lat,
     lng: r.lng,
     clusterCount: r.clusterCount,
-    confirmCount: r.confirmations.length,
+    confirmCount: safeConfirmCount,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     createdAt: r.createdAt,
   };
 }

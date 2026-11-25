@@ -1,7 +1,13 @@
 import type { Notification, UserProfile } from '../shared/types';
 import { maskPhone } from '../shared/geo';
 import {
-  normalizeRole, toRoleCode, TRUST_SPAM_PENALTY, TRUST_START, TRUST_SUPERVISED_BELOW, TRUST_VERIFIED_BONUS,
+  normalizeRole,
+  toRoleCode,
+  TRUST_AUTO_APPROVE_BONUS,
+  TRUST_SPAM_PENALTY,
+  TRUST_START,
+  TRUST_SUPERVISED_BELOW,
+  TRUST_VERIFIED_BONUS,
 } from '../shared/constants';
 import type { UserRecord, UserRepository } from '../repositories/types';
 import { newId } from '../utils/crypto';
@@ -68,10 +74,18 @@ export class TrustService {
     return u;
   }
 
-  async penalizeSpam(userId: string): Promise<UserRecord | null> {
+  async rewardAutoApproved(userId: string, bonus = TRUST_AUTO_APPROVE_BONUS): Promise<UserRecord | null> {
     const u = await this.users.get(userId);
     if (!u) return null;
-    u.trustScore = Math.max(0, u.trustScore - TRUST_SPAM_PENALTY);
+    u.trustScore = Math.min(100, u.trustScore + Math.max(1, bonus));
+    await this.users.save(u);
+    return u;
+  }
+
+  async penalizeSpam(userId: string, penalty = TRUST_SPAM_PENALTY): Promise<UserRecord | null> {
+    const u = await this.users.get(userId);
+    if (!u) return null;
+    u.trustScore = Math.max(0, u.trustScore - Math.max(1, penalty));
     await this.users.save(u);
     return u;
   }

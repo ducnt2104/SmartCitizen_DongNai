@@ -7,11 +7,13 @@ import type { Role } from '../shared/types';
 import { badRequest } from '../utils/errors';
 
 const providerEnum = z.enum(['gemini', 'openrouter', 'groq']);
+const geminiEndpointEnum = z.enum(['ai_studio', 'vertex']);
 
 const addKeyItemSchema = z.object({
   apiKey: z.string().trim().min(8).max(512),
   label: z.string().trim().max(120).optional(),
   provider: providerEnum.optional(),
+  geminiEndpoint: geminiEndpointEnum.optional(),
   weight: z.coerce.number().int().min(1).max(20).optional(),
 });
 
@@ -22,6 +24,7 @@ export const addApiKeysSchema = z
     keysText: z.string().max(32_000).optional(),
     items: z.array(addKeyItemSchema).max(200).optional(),
     provider: providerEnum.optional(),
+    geminiEndpoint: geminiEndpointEnum.optional(),
     labelPrefix: z.string().trim().max(80).optional(),
     weight: z.coerce.number().int().min(1).max(20).optional(),
   })

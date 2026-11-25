@@ -4,7 +4,10 @@ import { isValidHash } from '../shared/dhash';
 import type { Category } from '../shared/types';
 
 const hash = z.string().refine(isValidHash, 'dHash phải là 16 ký tự hex');
-const photo = z.object({ dataUrl: z.string().max(1_900_000), dHash: hash });
+const photo = z.object({
+  dataUrl: z.string().max(1_900_000).optional(),
+  dHash: hash.optional(),
+});
 const identifier = z.string().min(5).max(120);
 const category = z
   .string()
@@ -24,6 +27,21 @@ export const edgeStatsSchema = z.object({
   brightness: z.number().min(0).max(255),
   flatRatio: z.number().min(0).max(1),
   aspect: z.number().min(0.05).max(20),
+});
+
+export const exifMetadataSchema = z.object({
+  capturedAt: z.string().max(64).nullable().optional(),
+  cameraMake: z.string().max(80).nullable().optional(),
+  cameraModel: z.string().max(80).nullable().optional(),
+  software: z.string().max(160).nullable().optional(),
+  gps: z
+    .object({
+      lat: z.number().finite(),
+      lng: z.number().finite(),
+      inBounds: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const schemas = {
@@ -117,14 +135,20 @@ export const schemas = {
   }),
 
   analyzeImage: z.object({
-    image: photo,
+    image: photo.optional(),
+    dHash: hash.optional(),
     category: category.optional(),
     hintText: z.string().max(500).optional(),
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
+    wardCode: wardCode.optional(),
     edge: edgeStatsSchema.optional(),
+    exif: exifMetadataSchema.optional(),
   }),
   verifyResolution: z.object({
     reportId: z.string().min(3).max(64),
-    afterPhoto: photo,
+    afterPhoto: photo.optional(),
+    dHash: hash.optional(),
     edge: edgeStatsSchema.optional(),
   }),
   tacticalBriefing: z.object({
@@ -157,15 +181,17 @@ export const schemas = {
     lng: z.number().finite(),
     wardCode: wardCode.optional(),
     address: z.string().max(240).optional(),
-    photo,
+    photo: photo.optional(),
+    dHash: hash.optional(),
     deviceLat: z.number().finite().optional(),
     deviceLng: z.number().finite().optional(),
     leftScene: z.boolean().default(false),
     isProxyReport: z.boolean().default(false),
     seniorSubmitted: z.boolean().default(false),
     edge: edgeStatsSchema.optional(),
+    exif: exifMetadataSchema.optional(),
   }),
-  attachPhoto: z.object({ photo }),
+  attachPhoto: z.object({ photo: photo.optional(), dHash: hash.optional() }),
   rate: z.object({ stars: z.number().int().min(1).max(5), comment: z.string().max(400).default('') }),
 
   assign: z.object({ department, slaHours: z.number().int().min(1).max(720) }),
@@ -176,7 +202,8 @@ export const schemas = {
     note: z.string().max(300).default(''),
   }),
   resolve: z.object({
-    afterPhoto: photo,
+    afterPhoto: photo.optional(),
+    dHash: hash.optional(),
     note: z.string().max(300).default(''),
     override: z.boolean().default(false),
   }),
@@ -248,7 +275,8 @@ export const schemas = {
     speed: z.number().finite().nullable().optional(),
   }),
   rescueComplete: z.object({
-    afterPhoto: photo,
+    afterPhoto: photo.optional(),
+    dHash: hash.optional(),
     note: z.string().max(400).default(''),
     override: z.boolean().default(false),
     edge: edgeStatsSchema.optional(),

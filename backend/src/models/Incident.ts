@@ -333,7 +333,7 @@ const aiEvaluationSchema = new Schema<IncidentAiEvaluation>(
     matchedIncidentId: { type: Schema.Types.Mixed, default: null },
     sceneMatchScore: { type: Number, min: 0, max: 100, default: null },
     resolutionScore: { type: Number, min: 0, max: 100, default: null },
-    modelVersion: { type: String, trim: true, maxlength: 80, default: 'gemini-2.5-flash' },
+    modelVersion: { type: String, trim: true, maxlength: 80, default: 'gemini-3.5-flash-lite' },
     evaluatedAt: { type: Date, default: Date.now },
   },
   { _id: false },
@@ -464,7 +464,7 @@ const incidentSchema = new Schema<IIncident>(
         matchedIncidentId: null,
         sceneMatchScore: null,
         resolutionScore: null,
-        modelVersion: 'gemini-3.5-flash',
+        modelVersion: 'gemini-3.5-flash-lite',
         evaluatedAt: new Date(),
       }),
       required: true,
@@ -648,12 +648,15 @@ incidentSchema.pre('validate', function prepareIncidentFields() {
 // 1. GeoJSON 2dsphere Index cho truy vấn bán kính ($nearSphere) và khung bản đồ ($geoWithin)
 incidentSchema.index({ location: '2dsphere' });
 // 2. Compound Indexes tăng tốc IOC Dashboard 95 Phường/Xã
+incidentSchema.index({ status: 1, createdAt: -1 });
+incidentSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 incidentSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
 incidentSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 incidentSchema.index({ reporterId: 1, createdAt: -1 });
 // 3. Compound Index tương thích ngược theo district
 incidentSchema.index({ status: 1, district: 1, priorityScore: -1, createdAt: -1 });
 // 4. Index tìm kiếm nhanh ảnh trùng theo 64-bit dHash & pHash
+incidentSchema.index({ 'media.dHash': 1, createdAt: -1 });
 incidentSchema.index({ 'media.dHash': 1 });
 incidentSchema.index({ 'imageFingerprints.pHash': 1 });
 // 5. Unique Sparse Index trên syncId & clientOfflineId đảm bảo Idempotent Write cho Outbox Queue

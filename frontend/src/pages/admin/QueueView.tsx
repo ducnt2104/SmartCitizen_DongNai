@@ -7,6 +7,7 @@ import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { useI18n, type I18nKey } from '../../i18n';
 import { api } from '../../lib/api';
 import { CATEGORY_META, STATUS_KEY } from '../../lib/meta';
+import { invalidateSwrPrefix } from '../../lib/swrCache';
 import { useToast } from '../../state/toast';
 import { ReportPanel } from './ReportPanel';
 import { useQueue, useQueueCounts, type QueueTab } from './useAdminData';
@@ -60,12 +61,17 @@ export function QueueView({ scope, isCity, online }: { scope: string; isCity: bo
   }, [rows.length]);
 
   const quickRestore = useCallback(async (r: ClientReport) => {
+    const snapshot = q.data;
+    q.mutate((prev) => (prev ? prev.filter((item) => item.id !== r.id) : prev));
     try {
       const upd = await api<ClientReport>(`/api/admin/reports/${r.id}/restore`, { method: 'POST', body: {} });
       await db.reports.put({ ...upd, syncState: 'synced' });
+      invalidateSwrPrefix('q:');
+      invalidateSwrPrefix('ov:');
       toast('success', t('ioc.restored'));
       q.reload();
     } catch (e) {
+      q.mutate(() => snapshot);
       toast('error', t('ioc.actionFail'), e instanceof Error ? e.message : undefined);
     }
   }, [q, t, toast]);

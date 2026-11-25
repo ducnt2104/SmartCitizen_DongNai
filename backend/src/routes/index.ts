@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, asyncHandler } from '../middleware/auth';
 import { limits } from '../middleware/rateLimit';
+import { parseMultipartOrJson } from '../middleware/upload';
 import { validateBody } from '../middleware/validate';
 import {
   adminController,
@@ -35,9 +36,12 @@ export function buildRouter(
 
   const api = Router();
   api.get('/health', h(meta.health));
+  api.get('/media/:id/thumb', h(r.media));
+  api.get('/media/:id', h(r.media));
   api.get('/wards', h(r.wards));
   api.get('/geo/reverse', h(r.reverseGeocode));
   api.get('/stats', h(r.stats));
+  api.get('/incidents/map', auth.optional, h(r.summary));
 
   // Xác thực thật & Quản lý phiên (Citizen Email + Phone SMS +84 OTP + Firebase + Password + Staff + Rescue Team JWT)
   api.use('/auth', buildAuthRouter(s));
@@ -57,23 +61,23 @@ export function buildRouter(
   api.patch('/me/profile', auth.required, validateBody(schemas.updateProfile), h(a.updateProfile));
   api.post('/me/notifications/read', auth.required, h(a.readNotifications));
 
-  // Phản ánh hiện trường (Summary BBox + Cursor Pagination + OTHER category)
+  // Phản ánh hiện trường (Summary BBox + Cursor Pagination + OTHER category + Multipart Binary Upload)
   api.get('/reports/summary', auth.optional, h(r.summary));
   api.get('/reports', auth.optional, h(r.list));
   api.get('/reports/lookup', auth.optional, h(r.lookup));
   api.get('/reports/mine', auth.required, h(r.mine));
   api.get('/reports/:id', auth.optional, h(r.get));
-  api.post('/reports', auth.required, limits.reportBurst, validateBody(schemas.createReport), h(r.create));
+  api.post('/reports', auth.required, limits.reportBurst, parseMultipartOrJson, validateBody(schemas.createReport), h(r.create));
   api.post('/reports/:id/confirm', auth.required, limits.confirm, h(r.confirm));
-  api.post('/reports/:id/attach-photo', auth.required, limits.reportBurst, validateBody(schemas.attachPhoto), h(r.attachPhoto));
+  api.post('/reports/:id/attach-photo', auth.required, limits.reportBurst, parseMultipartOrJson, validateBody(schemas.attachPhoto), h(r.attachPhoto));
   api.post('/reports/:id/rate', auth.required, validateBody(schemas.rate), h(r.rate));
 
   // Tác vụ xác minh hiện trường (gộp về Cán bộ xử lý OFFICER & ADMIN)
   const vol = auth.requireRole('officer', 'admin');
   api.get('/volunteer/tasks', vol, h(v.tasks));
   api.post('/volunteer/tasks/:id/accept', vol, h(v.accept));
-  api.post('/volunteer/tasks/:id/verify', vol, validateBody(schemas.volunteerVerify), h(v.verify));
-  api.post('/volunteer/proxy-report', vol, limits.reportBurst, validateBody(schemas.createReport), h(v.proxyReport));
+  api.post('/volunteer/tasks/:id/verify', vol, parseMultipartOrJson, validateBody(schemas.volunteerVerify), h(v.verify));
+  api.post('/volunteer/proxy-report', vol, limits.reportBurst, parseMultipartOrJson, validateBody(schemas.createReport), h(v.proxyReport));
   api.get('/volunteer/leaderboard', auth.optional, h(v.leaderboard));
   api.get('/volunteer/logbook', vol, h(v.logbook));
 
@@ -81,11 +85,11 @@ export function buildRouter(
   const rescue = auth.requireRole('rescue', 'officer', 'admin');
   api.get('/rescue/missions', rescue, h(rc.missions));
   api.post('/rescue/missions/:id/accept', rescue, validateBody(schemas.rescueAccept), h(rc.accept));
-  api.patch('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
-  api.post('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
+  api.patch('/rescue/missions/:id/status', rescue, parseMultipartOrJson, validateBody(schemas.rescueStatus), h(rc.updateStatus));
+  api.post('/rescue/missions/:id/status', rescue, parseMultipartOrJson, validateBody(schemas.rescueStatus), h(rc.updateStatus));
   api.post('/rescue/missions/:id/release', rescue, validateBody(schemas.rescueRelease), h(rc.release));
   api.patch('/rescue/missions/:id/location', rescue, validateBody(schemas.rescueLocation), h(rc.updateLocation));
-  api.post('/rescue/missions/:id/complete', rescue, validateBody(schemas.rescueComplete), h(rc.complete));
+  api.post('/rescue/missions/:id/complete', rescue, parseMultipartOrJson, validateBody(schemas.rescueComplete), h(rc.complete));
 
   // IOC Cán bộ xử lý & Quản trị Hệ thống (ADMIN, OFFICER)
   const staff = auth.requireRole('officer', 'admin');
@@ -100,7 +104,7 @@ export function buildRouter(
   api.post('/admin/reports/:id/transfer', staff, validateBody(schemas.transferWard), h(ad.transfer));
   api.post('/admin/reports/:id/restore', staff, h(ad.restore));
   api.post('/admin/reports/:id/spam', staff, validateBody(schemas.markSpam), h(ad.spam));
-  api.post('/admin/reports/:id/resolve', staff, validateBody(schemas.resolve), h(ad.resolve));
+  api.post('/admin/reports/:id/resolve', staff, parseMultipartOrJson, validateBody(schemas.resolve), h(ad.resolve));
   api.get('/admin/audit', staff, h(ad.audit));
   api.get('/admin/audit-logs', admins, h(ad.audit));
   api.get('/admin/audit/verify', admins, h(ad.auditVerify));
@@ -121,9 +125,9 @@ export function buildRouter(
   api.use('/admin/api-keys', buildApiKeysRouter(s));
   api.get('/admin/export', staff, h(ad.export));
 
-  // SmartCitizen AI Brain & Computer Vision
-  api.post('/ai/analyze-image', limits.vision, validateBody(schemas.analyzeImage), h(ai.analyzeImage));
-  api.post('/ai/verify-resolution', staffOrRescue, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
+  // SmartCitizen AI Brain & Computer Vision (3-Stage Cascade + Multipart Binary WebP)
+  api.post('/ai/analyze-image', limits.vision, parseMultipartOrJson, validateBody(schemas.analyzeImage), h(ai.analyzeImage));
+  api.post('/ai/verify-resolution', staffOrRescue, parseMultipartOrJson, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
   api.post('/ai/tactical-briefing', staffOrRescue, validateBody(schemas.tacticalBriefing), h(ai.tacticalBriefing));
   api.post('/ai/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));
 

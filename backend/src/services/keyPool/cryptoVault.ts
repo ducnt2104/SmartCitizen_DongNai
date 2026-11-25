@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { ApiKeyProvider } from './types';
+import type { ApiKeyProvider, GeminiEndpointKind } from './types';
 
 const ENVELOPE_VERSION = 'v1';
 const IV_BYTES = 12; // Chuẩn NIST SP 800-38D cho AES-GCM (96-bit nonce)
@@ -64,6 +64,7 @@ export function shortMaskApiKey(rawKey: string): string {
 export function detectKeyProvider(rawKey: string, explicit?: ApiKeyProvider): ApiKeyProvider {
   if (explicit) return explicit;
   const clean = rawKey.trim();
+  if (/^vertex:/i.test(clean)) return 'gemini';
   if (clean.startsWith('sk-or-')) return 'openrouter';
   if (clean.startsWith('gsk_')) return 'groq';
   return 'gemini';
@@ -147,9 +148,34 @@ export function decryptApiKey(
   return plain;
 }
 
-/** Nhận diện loại endpoint Google cho Gemini key (`AQ....` -> Vertex AI, `AIza...` -> Google AI Studio). */
-export function detectGeminiKeyKind(rawKey: string): 'vertex' | 'ai_studio' {
-  return /^AQ\./.test(rawKey.trim()) ? 'vertex' : 'ai_studio';
+/**
+ * Tách tiền tố `vertex:` tường minh (nếu có) và xác định loại endpoint Google Gemini.
+ * Mặc định mọi key trong pool AI Studio (bao gồm cả `AQ.*` lẫn `AIzaSy*`) đều định tuyến tới
+ * Google AI Studio (`ai_studio`), chỉ định tuyến Vertex AI khi được cấu hình tường minh (`VERTEX_API_KEYS` hoặc `vertex:`).
+ */
+export function parseGeminiKeyRouting(
+  rawKey: string,
+  defaultEndpoint: GeminiEndpointKind = 'ai_studio',
+): { cleanKey: string; geminiEndpoint: GeminiEndpointKind } {
+  const trimmed = rawKey.trim();
+  if (/^vertex:/i.test(trimmed)) {
+    return {
+      cleanKey: trimmed.replace(/^vertex:\s*/i, '').trim(),
+      geminiEndpoint: 'vertex',
+    };
+  }
+  return {
+    cleanKey: trimmed,
+    geminiEndpoint: defaultEndpoint,
+  };
+}
+
+/** Nhận diện loại endpoint Google cho Gemini key (`vertex:` hoặc tag tường minh -> Vertex AI, mặc định -> Google AI Studio). */
+export function detectGeminiKeyKind(
+  rawKey: string,
+  explicitEndpoint?: GeminiEndpointKind,
+): GeminiEndpointKind {
+  return parseGeminiKeyRouting(rawKey, explicitEndpoint ?? 'ai_studio').geminiEndpoint;
 }
 
 function stripOuterQuotesAndBrackets(value: string): string {
