@@ -21,7 +21,7 @@ export function useOnline(): boolean {
 }
 
 export function isStaffRole(role: Role | undefined): boolean {
-  return role === 'ward_officer' || role === 'city_admin';
+  return role === 'ward_officer' || role === 'city_admin' || role === 'super_admin';
 }
 
 /** Quy tắc hiển thị: hồ sơ cách ly/từ chối chỉ chủ đơn, cán bộ, hoặc tình nguyện viên (nhiệm vụ) mới thấy. */

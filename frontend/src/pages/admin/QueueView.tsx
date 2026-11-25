@@ -18,7 +18,7 @@ const TABS: Array<{ k: QueueTab; label: I18nKey; icon: typeof Flame; tone: strin
   { k: 'open', label: 'ioc.tab.open', icon: ListChecks, tone: 'text-ioc-cyan' },
   { k: 'quarantine', label: 'ioc.tab.quarantine', icon: ShieldAlert, tone: 'text-ioc-amber' },
 ];
-const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong'];
+const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong', 'khac'];
 
 function weight(r: ClientReport): number {
   return (r.emergencyLevel === 1 ? 0 : r.priority === 'emergency' ? 1 : r.priority === 'high' ? 2 : 3);
@@ -178,5 +178,5 @@ export function QueueView({ scope, isCity, online }: { scope: string; isCity: bo
 }
 
 function CAT_COLOR(c: Category): string {
-  return { rac_thai: '#FBBF24', den_duong: '#22D3EE', ngap_nuoc: '#60A5FA', mat_duong: '#A3A3A3' }[c];
+  return { rac_thai: '#FBBF24', den_duong: '#22D3EE', ngap_nuoc: '#60A5FA', mat_duong: '#A3A3A3', khac: '#C084FC' }[c];
 }

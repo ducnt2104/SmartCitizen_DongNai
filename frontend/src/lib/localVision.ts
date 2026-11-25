@@ -9,6 +9,7 @@ const TEXT: Record<Category, { title: string; desc: string }> = {
   den_duong: { title: 'Đèn chiếu sáng công cộng hư hỏng', desc: 'Đèn đường không sáng hoặc nhấp nháy, khu vực thiếu sáng ban đêm.' },
   ngap_nuoc: { title: 'Điểm ngập nước sau mưa', desc: 'Nước đọng/ngập tại khu vực, cản trở giao thông và sinh hoạt.' },
   mat_duong: { title: 'Mặt đường hư hỏng (ổ gà, nứt, lún)', desc: 'Mặt đường xuống cấp, nguy cơ té ngã cho người đi xe.' },
+  khac: { title: 'Sự cố hạ tầng / trật tự đô thị khác', desc: 'Sự cố công cộng cần cơ quan chức năng địa phương kiểm tra xử lý.' },
 };
 
 export function guessCategory(text: string, edge?: EdgeStatsMsg): Category {
@@ -17,6 +18,7 @@ export function guessCategory(text: string, edge?: EdgeStatsMsg): Category {
   if (/(đèn|điện|cột đèn)/.test(t)) return 'den_duong';
   if (/(ngập|nước|cống|mưa)/.test(t)) return 'ngap_nuoc';
   if (/(ổ gà|đường|nứt|lún|nắp cống)/.test(t)) return 'mat_duong';
+  if (/(cây xanh|cây đổ|biển báo|vỉa hè|lấn chiếm|cáp|khác)/.test(t)) return 'khac';
   if (edge && edge.brightness < 70) return 'den_duong';
   return 'rac_thai';
 }

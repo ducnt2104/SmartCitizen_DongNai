@@ -50,7 +50,7 @@ interface PhotoState {
   exifGps: ExifGpsCoords | null;
 }
 
-const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong'];
+const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong', 'khac'];
 
 function StepDots({ step }: { step: number }) {
   const { t } = useI18n();
@@ -88,6 +88,7 @@ export default function ReportPage() {
   const [vision, setVision] = useState<VisionResult | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [category, setCategory] = useState<Category | null>(null);
+  const [otherLabel, setOtherLabel] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [localDup, setLocalDup] = useState<number | null>(null);
@@ -184,6 +185,7 @@ export default function ReportPage() {
         if (!v) v = localVision(category, `${title} ${description}`, p.stats);
         setVision(v);
         setCategory((c) => c ?? v!.category);
+        if (v.aiSuggestedLabel) setOtherLabel((prev) => prev || v!.aiSuggestedLabel || '');
         setTitle((x) => x || v!.title);
         setDescription((x) => x || v!.description);
       } catch (err) {
@@ -254,6 +256,7 @@ export default function ReportPage() {
       const rep = await submitReport(
         {
           category,
+          aiSuggestedLabel: category === 'khac' ? (otherLabel.trim() || vision?.aiSuggestedLabel || null) : null,
           title: title.trim(),
           description: description.trim(),
           lat: pin.lat,
@@ -284,6 +287,7 @@ export default function ReportPage() {
     setPhoto(null);
     setVision(null);
     setCategory(null);
+    setOtherLabel('');
     setTitle('');
     setDescription('');
     setPin(null);
@@ -297,7 +301,7 @@ export default function ReportPage() {
     setLocalDup(null);
   };
 
-  if (session?.user && (session.user.role === 'ward_officer' || session.user.role === 'city_admin')) {
+  if (session?.user && (session.user.role === 'ward_officer' || session.user.role === 'city_admin' || session.user.role === 'super_admin')) {
     return (
       <div className="card p-6 text-center">
         <ShieldAlert className="mx-auto h-10 w-10 text-warn" aria-hidden />
@@ -428,11 +432,16 @@ export default function ReportPage() {
                     <p className="mt-1 break-words text-xs font-semibold">{vision.fraudFlags.join(' · ')}</p>
                   )}
                   <p className="mt-1 text-[11px] font-semibold text-ink/70">
-                    {vision.mode === 'fallback'
-                      ? t('ai.fallbackLabel')
-                      : vision.cached
-                        ? t('ai.cachedLabel')
-                        : t('ai.geminiLabel')}
+                    {vision.mode === 'local_rust'
+                      ? t('ai.rustLabel')
+                      : vision.mode === 'ollama'
+                        ? t('ai.ollamaLabel')
+                        : vision.mode === 'fallback'
+                          ? t('ai.fallbackLabel')
+                          : vision.cached
+                            ? t('ai.cachedLabel')
+                            : t('ai.geminiLabel')}
+                    {vision.latencyMs !== undefined && <span className="mono ml-1">({vision.latencyMs}ms)</span>}
                   </p>
                 </div>
               )}
@@ -461,6 +470,21 @@ export default function ReportPage() {
                   })}
                 </div>
               </fieldset>
+              {category === 'khac' && (
+                <div>
+                  <label htmlFor="oth" className="label">
+                    {t('report.otherLabelField')}
+                  </label>
+                  <input
+                    id="oth"
+                    className="field"
+                    value={otherLabel}
+                    maxLength={80}
+                    placeholder={t('report.otherLabelPlaceholder')}
+                    onChange={(e) => setOtherLabel(e.target.value)}
+                  />
+                </div>
+              )}
               <div>
                 <label htmlFor="ttl" className="label">
                   {t('report.titleField')}

@@ -191,8 +191,10 @@ export const vi = {
 
   // ── AI ──
   'ai.fallbackLabel': 'Chế độ AI Dự phòng Cục bộ',
+  'ai.rustLabel': 'Kiểm định bởi Rust CV & ONNX Cục bộ',
+  'ai.ollamaLabel': 'Phân tích bởi Local LLM + RAG',
   'ai.geminiLabel': 'Phân tích bởi Gemini',
-  'ai.cachedLabel': 'Phân tích bởi Gemini (từ bộ nhớ đệm)',
+  'ai.cachedLabel': 'Phân tích từ bộ nhớ đệm AI',
   'ai.seedLabel': 'Dữ liệu mẫu',
 
   // ── Chat ──
@@ -276,6 +278,7 @@ export const vi = {
   'cat.den_duong': 'Đèn đường hỏng',
   'cat.ngap_nuoc': 'Ngập nước sau mưa',
   'cat.mat_duong': 'Ổ gà / mặt đường hư hỏng',
+  'cat.khac': 'Sự cố khác (OTHER)',
   'status.received': 'Đã tiếp nhận',
   'status.verifying': 'Đang xác minh',
   'status.processing': 'Đang xử lý',
@@ -292,6 +295,7 @@ export const vi = {
   'role.volunteer': 'Tình nguyện viên',
   'role.ward_officer': 'Cán bộ phường/xã',
   'role.city_admin': 'Điều hành cấp Thành phố',
+  'role.super_admin': 'Quản trị Tối cao (Super Admin)',
   'badge.emergency1': 'KHẨN CẤP CẤP 1',
   'badge.highPriority': 'Ưu tiên cao',
   'badge.cluster': 'Gom {n} người',
@@ -511,6 +515,11 @@ export const vi = {
   'ioc.nav.queue': 'Duyệt đơn AI',
   'ioc.nav.map': 'Bản đồ',
   'ioc.nav.audit': 'Kiểm toán & Báo cáo',
+  'ioc.nav.sysadmin': 'Quản trị Hệ thống',
+  'report.otherLabelField': 'Nhãn phụ sự cố (AI gợi ý hoặc tự nhập)',
+  'report.otherLabelPlaceholder': 'Ví dụ: Cây xanh gãy đổ, biển báo hư hỏng, lấn chiếm vỉa hè…',
+  'detail.sceneScore': 'Đúng hiện trường',
+  'detail.resScore': 'Mức độ khắc phục',
   'ioc.collapse': 'Thu gọn',
   'ioc.expand': 'Mở rộng',
   'ioc.kpiTotal': 'Tổng hồ sơ',

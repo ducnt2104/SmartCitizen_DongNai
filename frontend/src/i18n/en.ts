@@ -193,8 +193,10 @@ export const en: Record<keyof typeof vi, string> = {
 
   // ── AI Badges ──
   'ai.fallbackLabel': 'Local Heuristic AI Fallback',
+  'ai.rustLabel': 'Verified by Local Rust CV & ONNX',
+  'ai.ollamaLabel': 'Analyzed by Local LLM + RAG',
   'ai.geminiLabel': 'Analyzed by Gemini',
-  'ai.cachedLabel': 'Analyzed by Gemini (cached)',
+  'ai.cachedLabel': 'Analyzed from AI cache',
   'ai.seedLabel': 'Sample dataset',
 
   // ── Chat Widget ──
@@ -278,6 +280,7 @@ export const en: Record<keyof typeof vi, string> = {
   'cat.den_duong': 'Broken street light',
   'cat.ngap_nuoc': 'Post-rain flooding',
   'cat.mat_duong': 'Pothole / Road damage',
+  'cat.khac': 'Other issue (OTHER)',
   'status.received': 'Received',
   'status.verifying': 'Verifying',
   'status.processing': 'In progress',
@@ -294,6 +297,7 @@ export const en: Record<keyof typeof vi, string> = {
   'role.volunteer': 'Youth Volunteer',
   'role.ward_officer': 'Ward Officer',
   'role.city_admin': 'City IOC Admin',
+  'role.super_admin': 'Super Administrator',
   'badge.emergency1': 'LEVEL-1 EMERGENCY',
   'badge.highPriority': 'High Priority',
   'badge.cluster': '{n} reporters merged',
@@ -513,6 +517,11 @@ export const en: Record<keyof typeof vi, string> = {
   'ioc.nav.queue': 'AI Triage Queue',
   'ioc.nav.map': 'Map',
   'ioc.nav.audit': 'Audit & Exports',
+  'ioc.nav.sysadmin': 'System Console',
+  'report.otherLabelField': 'Sub-category label (AI suggested or custom)',
+  'report.otherLabelPlaceholder': 'E.g. Fallen tree, damaged sign, sidewalk obstruction…',
+  'detail.sceneScore': 'Scene match',
+  'detail.resScore': 'Defect resolved',
   'ioc.collapse': 'Collapse',
   'ioc.expand': 'Expand',
   'ioc.kpiTotal': 'Total reports',

@@ -1,4 +1,4 @@
-import { Droplets, Lightbulb, Route, Trash2, type LucideIcon } from 'lucide-react';
+import { Droplets, Layers, Lightbulb, Route, Trash2, type LucideIcon } from 'lucide-react';
 import type { Category, Department, ReportStatus } from '@shared/types';
 import type { I18nKey } from '../i18n';
 
@@ -14,6 +14,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   den_duong: { icon: Lightbulb, color: '#B45309', labelKey: 'cat.den_duong' },
   ngap_nuoc: { icon: Droplets, color: '#0369A1', labelKey: 'cat.ngap_nuoc' },
   mat_duong: { icon: Route, color: '#44403C', labelKey: 'cat.mat_duong' },
+  khac: { icon: Layers, color: '#6D28D9', labelKey: 'cat.khac' },
 };
 
 export const STATUS_KEY: Record<ReportStatus, I18nKey> = {

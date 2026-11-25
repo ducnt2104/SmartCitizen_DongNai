@@ -43,7 +43,7 @@ export default function AuthPage() {
 
   const go = (s: AuthSession): void => {
     const role = s.user.role;
-    if (role === 'city_admin') set({ scope: 'city' });
+    if (role === 'super_admin' || role === 'city_admin') set({ scope: 'city' });
     else if (role === 'ward_officer' && s.user.wardCode) set({ scope: `ward:${s.user.wardCode}` });
     else if (s.user.defaultWardCode) set({ scope: `ward:${s.user.defaultWardCode}` });
     nav(role === 'volunteer' ? '/volunteer' : role === 'citizen' ? '/' : '/admin', { replace: true });
@@ -119,7 +119,7 @@ export default function AuthPage() {
             <form className="mt-4 space-y-3" onSubmit={(e) => { e.preventDefault(); void staffLogin(); }}>
               <div>
                 <label htmlFor="sc" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-ioc-dim">{t('auth.staffCode')}</label>
-                <input id="sc" className="ioc-field mono w-full !min-h-11" value={staffCode} onChange={(e) => setStaffCode(e.target.value)} autoComplete="username" placeholder="ADMIN-DN-01 / CB-..." />
+                <input id="sc" className="ioc-field mono w-full !min-h-11" value={staffCode} onChange={(e) => setStaffCode(e.target.value)} autoComplete="username" placeholder="SUPER-ADMIN / TP-01 / CB-TB-01" />
               </div>
               <div>
                 <label htmlFor="pw" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-ioc-dim">{t('auth.password')}</label>
