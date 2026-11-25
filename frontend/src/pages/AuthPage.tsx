@@ -134,7 +134,7 @@ export default function AuthPage() {
             </button>
           </div>
           <div className="mt-5">{tabs(true)}</div>
-          <div className="ioc-panel mt-4 rounded-2xl p-5 shadow-lift">
+          <main className="ioc-panel mt-4 rounded-2xl p-5 shadow-lift">
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-ioc-cyan">{t('ioc.brand')}</p>
             <h1 className="mt-1 text-xl font-bold">{t('auth.iocTitle')}</h1>
             <p className="mt-1 text-sm text-ioc-dim">{t('auth.iocIntro')}</p>
@@ -210,7 +210,7 @@ export default function AuthPage() {
                 {err}
               </p>
             )}
-          </div>
+          </main>
           <p className="mt-auto pt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </div>
       </div>
@@ -234,7 +234,7 @@ export default function AuthPage() {
           </button>
         </div>
         <div className="mt-5">{tabs(false)}</div>
-        <div className="card mt-4 space-y-4 rounded-3xl p-5 shadow-lift">
+        <main className="card mt-4 space-y-4 rounded-3xl p-5 shadow-lift">
           <h1 className="text-xl font-extrabold">{t('auth.communityTitle')}</h1>
           {session ? (
             <div className="space-y-3">
@@ -256,7 +256,7 @@ export default function AuthPage() {
             <CitizenLogin onDone={(s) => go(s)} />
           )}
           {err && <p role="alert" className="rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">{err}</p>}
-        </div>
+        </main>
         <p className="mt-auto pt-6 text-center text-xs text-muted">{t('footer.credit')}</p>
       </div>
     </div>

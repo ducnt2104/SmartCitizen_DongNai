@@ -592,4 +592,8 @@ export const en: Record<keyof typeof vi, string> = {
   'ioc.staffStatusRevoked': 'Revoked',
   'ioc.staffRevokeBtn': 'Revoke',
   'ioc.staffRestoreBtn': 'Restore',
+
+  // ── 404 ──
+  'notFound.title': 'Page not found',
+  'notFound.text': 'The page you requested does not exist or has been moved. Please return to the Home page or open the incident map.',
 };

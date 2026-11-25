@@ -197,6 +197,9 @@ export default function AdminPage() {
         <OfflineBanner dark />
 
         <main className="min-w-0 flex-1 p-3 md:p-4">
+          <h1 className="sr-only">
+            {t('ioc.brand')} — {scopeName}
+          </h1>
           <div role="tablist" aria-label={t('ioc.nav.title')} className="mb-3 flex gap-1.5 overflow-x-auto pb-1 md:hidden">
             {navItems.map(({ k, label, icon: Icon }) => (
               <button
