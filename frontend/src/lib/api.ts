@@ -304,35 +304,85 @@ export function saveStoredGeminiApiKey(rawKey: string): void {
   }
 }
 
-let cachedClientGeminiModel = 'gemini-3.8-flash';
+const CLIENT_MODEL_TTL_MS = 30 * 60_000;
+const CLIENT_DEFAULT_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+const CLIENT_OVERLOAD_MSG =
+  'Hệ thống AI đang có nhiều người truy cập cùng lúc, cô/chú vui lòng bấm nút Thử lại sau vài giây nhé.';
 
-async function discoverLatestFlashModelClient(apiKey: string, signal: AbortSignal): Promise<string | null> {
+let clientModelsCache: { keySuffix: string; models: string[]; expiresAt: number } | null = null;
+
+function rankClientGeminiModels(rawModels: Array<{ name?: string; supportedGenerationMethods?: string[] }>): string[] {
+  const valid = rawModels
+    .filter((m) => {
+      const name = (m.name ?? '').toLowerCase();
+      const methods = m.supportedGenerationMethods ?? [];
+      return (
+        name.includes('gemini') &&
+        !/embedding|tts|image|audio|aqa|robotics|computer-use|lite-preview/i.test(name) &&
+        (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
+      );
+    })
+    .map((m) => (m.name ?? '').replace(/^models\//, ''))
+    .filter(Boolean);
+
+  const descVersion = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
+  const flashLite = valid.filter((n) => /flash-lite/i.test(n)).sort(descVersion);
+  const flash = valid.filter((n) => /flash/i.test(n) && !/flash-lite/i.test(n)).sort(descVersion);
+  const others = valid.filter((n) => !/flash/i.test(n)).sort(descVersion);
+  return [...new Set([...flashLite, ...flash, ...others])];
+}
+
+async function getPrioritizedClientModels(apiKey: string, signal: AbortSignal): Promise<string[]> {
+  const keySuffix = apiKey.slice(-8);
+  if (
+    clientModelsCache &&
+    clientModelsCache.keySuffix === keySuffix &&
+    Date.now() < clientModelsCache.expiresAt &&
+    clientModelsCache.models.length > 0
+  ) {
+    return clientModelsCache.models;
+  }
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
       { signal },
     );
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
-    };
-    const candidates = (data.models ?? [])
-      .filter((m) => {
-        const name = (m.name ?? '').toLowerCase();
-        const methods = m.supportedGenerationMethods ?? [];
-        return (
-          name.includes('flash') &&
-          !/embedding|tts|image|audio|lite-preview/i.test(name) &&
-          (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
-        );
-      })
-      .map((m) => (m.name ?? '').replace(/^models\//, ''))
-      .filter(Boolean)
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-    return candidates[0] ?? null;
+    if (res.ok) {
+      const data = (await res.json()) as {
+        models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+      };
+      const ranked = rankClientGeminiModels(data.models ?? []);
+      if (ranked.length > 0) {
+        clientModelsCache = {
+          keySuffix,
+          models: ranked,
+          expiresAt: Date.now() + CLIENT_MODEL_TTL_MS,
+        };
+        return ranked;
+      }
+    }
   } catch {
-    return null;
+    /* fallback to default list */
   }
+  return CLIENT_DEFAULT_MODELS;
+}
+
+function sleepAbortableClient(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const id = window.setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        window.clearTimeout(id);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
 }
 
 async function streamDirectGeminiClient(
@@ -366,26 +416,34 @@ async function streamDirectGeminiClient(
     });
   };
 
-  let modelId = cachedClientGeminiModel;
-  let res = await callModel(modelId);
-  if (res.status === 404 || res.status === 400) {
-    const discovered = await discoverLatestFlashModelClient(apiKey, signal);
-    if (discovered && discovered !== modelId) {
-      modelId = discovered;
-      cachedClientGeminiModel = discovered;
-      res = await callModel(modelId);
+  const candidates = (await getPrioritizedClientModels(apiKey, signal)).slice(0, 4);
+  let res: Response | null = null;
+  let lastStatus = 0;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const attempt = await callModel(candidates[i]);
+    if (attempt.ok && attempt.body) {
+      res = attempt;
+      break;
+    }
+    lastStatus = attempt.status;
+    const rawErr = await attempt.text().catch(() => '');
+    if (lastStatus === 401 || lastStatus === 403 || (lastStatus === 400 && /api[_ ]?key/i.test(rawErr))) {
+      throw new ApiError(
+        lastStatus,
+        'gemini_invalid_key',
+        'API Key Gemini không hợp lệ hoặc bị từ chối. Cô/chú vui lòng kiểm tra lại trong mục Cài đặt ⚙️.',
+      );
+    }
+    const retryable = lastStatus === 503 || lastStatus === 429 || lastStatus === 404;
+    if (!retryable) break;
+    if (i < candidates.length - 1 && lastStatus === 503) {
+      await sleepAbortableClient(800, signal);
     }
   }
 
-  if (!res.ok || !res.body) {
-    const raw = await res.text().catch(() => '');
-    let detail = `HTTP ${res.status}`;
-    try {
-      detail = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? detail;
-    } catch {
-      if (raw) detail = `${detail}: ${raw.slice(0, 120)}`;
-    }
-    throw new ApiError(res.status, 'gemini_direct_failed', `Lỗi ${res.status}: ${detail}`);
+  if (!res || !res.body) {
+    throw new ApiError(lastStatus || 503, 'gemini_overloaded', CLIENT_OVERLOAD_MSG);
   }
 
   const reader = res.body.getReader();
@@ -433,7 +491,7 @@ export async function streamChat(
   const timeoutId = window.setTimeout(() => {
     timedOut = true;
     timeoutCtrl.abort();
-  }, 15_000);
+  }, 20_000);
   const onExternalAbort = (): void => timeoutCtrl.abort();
   externalSignal.addEventListener('abort', onExternalAbort, { once: true });
 
@@ -453,7 +511,7 @@ export async function streamChat(
         signal: timeoutCtrl.signal,
       });
     } catch (err) {
-      if (timedOut) throw new ApiError(408, 'timeout', 'Kết nối quá hạn (15 giây), vui lòng thử lại.');
+      if (timedOut) throw new ApiError(408, 'timeout', CLIENT_OVERLOAD_MSG);
       if (externalSignal.aborted) return;
       if (userGeminiKey) {
         await streamDirectGeminiClient(userGeminiKey, body, onChunk, timeoutCtrl.signal);
@@ -513,7 +571,7 @@ export async function streamChat(
     if (buf.trim()) emitFrame(buf);
   } catch (err) {
     if (timedOut) {
-      throw new ApiError(408, 'timeout', 'Kết nối quá hạn (15 giây), vui lòng thử lại.');
+      throw new ApiError(408, 'timeout', CLIENT_OVERLOAD_MSG);
     }
     if (externalSignal.aborted) return;
     throw err;

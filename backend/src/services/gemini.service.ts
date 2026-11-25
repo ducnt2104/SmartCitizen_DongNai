@@ -1992,77 +1992,137 @@ export class GeminiService {
       });
     };
 
-    const discoverFlashModel = async (signal: AbortSignal): Promise<string | null> => {
+    const MODEL_LIST_TTL_MS = 30 * 60_000;
+    const DEFAULT_MODEL_PRIORITY = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    const OVERLOAD_VI_MSG =
+      'Hệ thống AI đang có nhiều người truy cập cùng lúc, cô/chú vui lòng bấm nút Thử lại sau vài giây nhé.';
+
+    const rankGeminiModels = (rawModels: Array<{ name?: string; supportedGenerationMethods?: string[] }>): string[] => {
+      const valid = rawModels
+        .filter((m) => {
+          const name = (m.name ?? '').toLowerCase();
+          const methods = m.supportedGenerationMethods ?? [];
+          return (
+            name.includes('gemini') &&
+            !/embedding|tts|image|audio|aqa|robotics|computer-use|lite-preview/i.test(name) &&
+            (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
+          );
+        })
+        .map((m) => (m.name ?? '').replace(/^models\//, ''))
+        .filter(Boolean);
+
+      const descVersion = (a: string, b: string) => b.localeCompare(a, undefined, { numeric: true });
+      const flashLite = valid.filter((n) => /flash-lite/i.test(n)).sort(descVersion);
+      const flash = valid.filter((n) => /flash/i.test(n) && !/flash-lite/i.test(n)).sort(descVersion);
+      const others = valid.filter((n) => !/flash/i.test(n)).sort(descVersion);
+      return [...new Set([...flashLite, ...flash, ...others])];
+    };
+
+    const gCache = globalThis as typeof globalThis & {
+      __scGeminiModelsCache?: { keyHash: string; models: string[]; expiresAt: number };
+    };
+
+    const getPrioritizedModels = async (signal: AbortSignal): Promise<string[]> => {
+      const keyHash = apiKey.slice(-8);
+      if (
+        gCache.__scGeminiModelsCache &&
+        gCache.__scGeminiModelsCache.keyHash === keyHash &&
+        Date.now() < gCache.__scGeminiModelsCache.expiresAt &&
+        gCache.__scGeminiModelsCache.models.length > 0
+      ) {
+        return gCache.__scGeminiModelsCache.models;
+      }
       try {
         const listRes = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
           { signal },
         );
-        if (!listRes.ok) return null;
-        const data = (await listRes.json()) as {
-          models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
-        };
-        const supported = (data.models ?? []).filter((m) => {
-          const name = (m.name ?? '').toLowerCase();
-          const methods = m.supportedGenerationMethods ?? [];
-          return (
-            !/embedding|tts|image|audio|lite-preview|aqa/i.test(name) &&
-            (methods.includes('streamGenerateContent') || methods.includes('generateContent'))
-          );
-        });
-        const flashCandidates = supported
-          .filter((m) => (m.name ?? '').toLowerCase().includes('flash'))
-          .map((m) => (m.name ?? '').replace(/^models\//, ''))
-          .filter(Boolean)
-          .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-        if (flashCandidates.length > 0) return flashCandidates[0];
-        const anyCandidate = supported
-          .map((m) => (m.name ?? '').replace(/^models\//, ''))
-          .filter(Boolean)[0];
-        return anyCandidate ?? null;
+        if (listRes.ok) {
+          const data = (await listRes.json()) as {
+            models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+          };
+          const ranked = rankGeminiModels(data.models ?? []);
+          if (ranked.length > 0) {
+            gCache.__scGeminiModelsCache = {
+              keyHash,
+              models: ranked,
+              expiresAt: Date.now() + MODEL_LIST_TTL_MS,
+            };
+            return ranked;
+          }
+        }
       } catch {
-        return null;
+        /* fallback to default priority */
       }
+      return DEFAULT_MODEL_PRIORITY;
     };
 
+    const sleepWithAbort = (ms: number, signal: AbortSignal): Promise<void> =>
+      new Promise((resolve, reject) => {
+        if (signal.aborted) {
+          reject(new Error('AbortError'));
+          return;
+        }
+        const t = setTimeout(resolve, ms);
+        t.unref?.();
+        signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            reject(new Error('AbortError'));
+          },
+          { once: true },
+        );
+      });
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    const timer = setTimeout(() => ctrl.abort(), 20_000);
     timer.unref?.();
 
     try {
-      let modelId = this.cachedLiveGeminiModel ?? 'gemini-3.8-flash';
-      let upstream = await callStreamEndpoint(modelId, ctrl.signal);
+      const candidateModels = (await getPrioritizedModels(ctrl.signal)).slice(0, 4);
+      let upstream: globalThis.Response | null = null;
+      let lastStatus = 0;
+      let lastUpstreamMsg = '';
 
-      if (upstream.status === 404 || upstream.status === 400) {
-        const discovered = await discoverFlashModel(ctrl.signal);
-        if (discovered && discovered !== modelId) {
-          console.warn(`[ai/chat] Model "${modelId}" trả ${upstream.status}, tự động chuyển sang "${discovered}"`);
-          modelId = discovered;
-          this.cachedLiveGeminiModel = discovered;
-          upstream = await callStreamEndpoint(modelId, ctrl.signal);
+      for (let i = 0; i < candidateModels.length; i++) {
+        const modelId = candidateModels[i];
+        const res = await callStreamEndpoint(modelId, ctrl.signal);
+        if (res.ok && res.body) {
+          this.cachedLiveGeminiModel = modelId;
+          upstream = res;
+          break;
         }
-      }
-
-      if (!upstream.ok || !upstream.body) {
-        const errBody = await upstream.text().catch(() => '');
-        let upstreamMsg = '';
+        lastStatus = res.status;
+        const errBody = await res.text().catch(() => '');
         try {
-          upstreamMsg = (JSON.parse(errBody) as { error?: { message?: string } }).error?.message ?? '';
+          lastUpstreamMsg = (JSON.parse(errBody) as { error?: { message?: string } }).error?.message ?? '';
         } catch {
-          upstreamMsg = errBody.slice(0, 160);
+          lastUpstreamMsg = errBody.slice(0, 160);
         }
-        console.warn(`[ai/chat] Gemini HTTP ${upstream.status}: ${upstreamMsg}`);
-        if (upstream.status === 400 || upstream.status === 401 || upstream.status === 403) {
+        console.warn(`[ai/chat] Model "${modelId}" trả HTTP ${lastStatus}: ${lastUpstreamMsg}`);
+
+        if (lastStatus === 401 || lastStatus === 403 || (lastStatus === 400 && /api[_ ]?key/i.test(lastUpstreamMsg))) {
           yield {
-            error: `Lỗi ${upstream.status} (${upstreamMsg || 'API Key Gemini không hợp lệ hoặc bị từ chối'}). Vui lòng kiểm tra lại GEMINI_API_KEY hoặc nhập lại trong mục Cài đặt ⚙️`,
+            error: 'API Key Gemini không hợp lệ hoặc bị từ chối. Cô/chú vui lòng kiểm tra lại trong mục Cài đặt ⚙️.',
             mode: 'fallback',
           };
           return;
         }
-        yield {
-          error: `Lỗi ${upstream.status} từ Google Gemini: ${upstreamMsg || 'Vui lòng thử lại sau ít phút.'}`,
-          mode: 'fallback',
-        };
+
+        const isRetryable = lastStatus === 503 || lastStatus === 429 || lastStatus === 404;
+        if (!isRetryable) break;
+        if (i < candidateModels.length - 1 && lastStatus === 503) {
+          await sleepWithAbort(800, ctrl.signal);
+        }
+      }
+
+      if (!upstream || !upstream.body) {
+        if (lastStatus === 503 || lastStatus === 429 || lastStatus === 404 || lastStatus === 0) {
+          yield { error: OVERLOAD_VI_MSG, mode: 'fallback' };
+          return;
+        }
+        yield { error: OVERLOAD_VI_MSG, mode: 'fallback' };
         return;
       }
 
@@ -2123,11 +2183,12 @@ export class GeminiService {
         };
       }
     } catch (err) {
-      const isAbort = err instanceof Error && err.name === 'AbortError';
-      const detail = isAbort ? 'Kết nối quá hạn (15 giây), vui lòng thử lại.' : err instanceof Error ? err.message : 'Lỗi kết nối';
-      console.warn('[ai/chat] Gemini fetch error:', detail);
+      const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message === 'AbortError');
+      console.warn('[ai/chat] Gemini fetch error:', err instanceof Error ? err.message : 'Lỗi kết nối');
       yield {
-        error: isAbort ? detail : `Lỗi kết nối Google Gemini (${detail}). Vui lòng thử lại.`,
+        error: isAbort
+          ? 'Hệ thống AI đang có nhiều người truy cập cùng lúc, cô/chú vui lòng bấm nút Thử lại sau vài giây nhé.'
+          : 'Hệ thống AI đang có nhiều người truy cập cùng lúc, cô/chú vui lòng bấm nút Thử lại sau vài giây nhé.',
         mode: 'fallback',
       };
     } finally {

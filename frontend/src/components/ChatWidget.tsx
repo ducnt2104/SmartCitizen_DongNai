@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Mic, MicOff, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
+import { Bot, KeyRound, Mic, MicOff, RotateCcw, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError, getStoredGeminiApiKey, NetworkError, saveStoredGeminiApiKey, streamChat } from '../lib/api';
@@ -10,6 +10,7 @@ interface Msg {
   text: string;
   mode?: 'gemini' | 'ollama' | 'fallback';
   error?: boolean;
+  retryPrompt?: string;
 }
 
 export { openAssistant } from '../state/settings';
@@ -119,14 +120,17 @@ export function ChatWidget() {
             if (/API Key|GEMINI_API_KEY|401|403/i.test(c.error)) {
               setShowKeyBox(true);
             }
-            setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: acc || errText, error: !acc, mode: c.mode ?? 'fallback' }]);
+            setMsgs((m) => [
+              ...m.slice(0, -1),
+              { role: 'model', text: acc || errText, error: !acc, mode: c.mode ?? 'fallback', retryPrompt: !acc ? text : undefined },
+            ]);
           }
         },
         ctrl.signal,
       );
       if (!acc && !errText) {
         if (ctrl.signal.aborted) {
-          setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: 'Đã dừng trả lời.', error: true }]);
+          setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: 'Đã dừng trả lời.', error: true, retryPrompt: text }]);
         } else {
           throw new Error('empty');
         }
@@ -138,7 +142,10 @@ export function ChatWidget() {
       if (/API Key|GEMINI_API_KEY|401|403|missing_gemini_key/i.test(msg)) {
         setShowKeyBox(true);
       }
-      setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: acc || msg, error: !acc, mode: acc ? mode : undefined }]);
+      setMsgs((m) => [
+        ...m.slice(0, -1),
+        { role: 'model', text: acc || msg, error: !acc, mode: acc ? mode : undefined, retryPrompt: !acc ? text : undefined },
+      ]);
     } finally {
       setBusy(false);
       abortRef.current = null;
@@ -201,7 +208,23 @@ export function ChatWidget() {
                       : 'rounded-bl-md border border-line/70 bg-surface-2 text-ink'
                 }`}
               >
-                {m.text || (
+                {m.text ? (
+                  <>
+                    <span>{m.text}</span>
+                    {m.error && m.retryPrompt && !busy && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => void send(m.retryPrompt!)}
+                          className="btn btn-primary !min-h-9 !rounded-xl !px-3 !text-xs font-bold"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                          <span>Thử lại</span>
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : (
                   <span className="inline-flex items-center gap-2 text-sm text-muted" aria-label={t('chat.thinking')}>
                     <span className="inline-flex gap-1">
                       <i className="h-2 w-2 animate-pulse rounded-full bg-brand/70" />
@@ -262,7 +285,7 @@ export function ChatWidget() {
         )}
 
         {msgs.length > 0 && !busy && (
-          <div className="flex gap-1.5 overflow-x-auto border-t border-line/60 px-3 py-2">
+          <div className="no-scrollbar flex gap-1.5 overflow-x-auto border-t border-line/60 px-3 py-2">
             {chips.map((k) => (
               <button key={k} type="button" className="chip shrink-0 text-xs" onClick={() => void send(t(k))}>
                 {t(k)}
