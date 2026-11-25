@@ -1,4 +1,4 @@
-import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Plus, ShieldCheck } from 'lucide-react';
+import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useId, useState, type ComponentType, type ReactNode } from 'react';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import { useI18n } from '../../i18n';
@@ -144,8 +144,10 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl border ${
-        isDarkFrame ? 'border-ioc-line bg-ioc-bg' : 'border-line bg-surface-2'
+      className={`relative overflow-hidden rounded-[1.35rem] border ${
+        isDarkFrame
+          ? 'border-ioc-line bg-ioc-bg shadow-[0_18px_48px_-14px_rgba(2,6,23,0.65)]'
+          : 'border-line/80 bg-surface-2 shadow-[0_18px_48px_-14px_rgba(15,23,42,0.16)]'
       } ${p.className ?? 'h-[58dvh]'}`}
       role="application"
       aria-label={p.ariaLabel ?? t('map.aria')}
@@ -196,7 +198,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
 
           {p.showLayerSwitcher !== false && (
             <div
-              className="no-scrollbar pointer-events-auto ml-auto inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-line/85 bg-surface/95 p-0.5 text-[11px] font-semibold shadow-lift backdrop-blur-md sm:p-1 sm:text-xs"
+              className="no-scrollbar pointer-events-auto ml-auto inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-2xl border border-line/75 bg-surface/90 p-1 text-[11px] font-semibold shadow-lift backdrop-blur-xl sm:text-xs"
               role="group"
               aria-label={t('map.baseLayer')}
             >
@@ -204,6 +206,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
                 [
                   ['roadmap', t('map.layer.light'), Layers],
                   ['hybrid', t('map.layer.satellite'), Compass],
+                  ['dark', t('map.layer.dark'), Moon],
                 ] as const
               ).map(([id, label, Icon]) => (
                 <button
@@ -211,11 +214,13 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
                   type="button"
                   aria-pressed={surface === id}
                   onClick={() => setSurface(id)}
-                  className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg px-2 transition-colors sm:min-h-9 sm:px-2.5 ${
-                    surface === id ? 'bg-brand text-brand-ink' : 'text-ink hover:bg-surface-2'
+                  className={`inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-xl px-2.5 transition-all sm:min-h-9 sm:px-3 ${
+                    surface === id
+                      ? 'bg-gradient-to-r from-brand to-brand-2 text-brand-ink shadow-sm'
+                      : 'text-ink/85 hover:bg-surface-2 hover:text-ink'
                   }`}
                 >
-                  <Icon className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden />
+                  <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   <span className="whitespace-nowrap">{label}</span>
                 </button>
               ))}

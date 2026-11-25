@@ -233,6 +233,7 @@ export const vi = {
   'map.baseLayer': 'Chọn lớp nền bản đồ',
   'map.layer.light': 'Đường phố',
   'map.layer.satellite': 'Vệ tinh + Đường',
+  'map.layer.dark': 'Bản đồ tối',
   'map.fallbackBadge': 'Bản đồ tiêu chuẩn',
   'map.fallbackHint': 'Chế độ bản đồ số chi tiết Thành phố Đồng Nai',
   'map.openGoogleMaps': 'Mở Google Maps',

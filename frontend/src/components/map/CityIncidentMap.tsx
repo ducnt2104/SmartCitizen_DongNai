@@ -66,6 +66,14 @@ interface InspectedSpot {
   loading?: boolean;
 }
 
+const REGION_DOT_COLOR: Record<string, string> = {
+  trung_tam: '#2563EB',
+  nam_san_bay_cang: '#0891B2',
+  dong_xuan_loc: '#D97706',
+  dong_bac_cat_tien: '#059669',
+  bac_dong_nai: '#6366F1',
+};
+
 const LEGEND_COLORS = [
   ['emergency', '#E11D48', 'legend.emergency'],
   ['high', '#D97706', 'legend.high'],
@@ -407,7 +415,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       </div>
 
       {/* Floating Glass Filter Bar: Tìm địa chỉ/hẻm + Chọn nhanh 95 Phường/Xã + Chip Danh mục/Trạng thái */}
-      <div className="rounded-[1.25rem] border border-line/85 bg-surface/95 p-3 shadow-card backdrop-blur-md">
+      <div className="rounded-[1.35rem] border border-line/75 bg-surface/90 p-3.5 shadow-[0_10px_32px_-8px_rgba(15,23,42,0.08)] backdrop-blur-xl">
         <div className="grid gap-2 md:grid-cols-[1fr_20rem]">
           {/* Ô tìm kiếm Địa chỉ / Con hẻm / 95 Phường Xã */}
           <div className="relative">
@@ -521,6 +529,11 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
                 pushCamera({ kind: 'flyTo', lat: reg.center[0], lng: reg.center[1], zoom: reg.zoom });
               }}
             >
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: REGION_DOT_COLOR[reg.id] ?? '#2563EB' }}
+                aria-hidden
+              />
               {lang === 'en' ? reg.labelEn : reg.labelVi}
             </button>
           ))}

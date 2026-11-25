@@ -149,19 +149,19 @@ export const DONG_NAI_OUTER_SHADE_POLYGON: GeoJSON.Feature<GeoJSON.Polygon> = {
 };
 
 const REGION_PASTEL_PALETTE: Record<CityRegionId, readonly [string, string, string]> = {
-  trung_tam: ['#DBEAFE', '#BFDBFE', '#E0F2FE'],
-  nam_san_bay_cang: ['#D1FAE5', '#CCFBF1', '#DCFCE7'],
-  dong_xuan_loc: ['#FEF3C7', '#FDE68A', '#FFEDD5'],
-  dong_bac_cat_tien: ['#DCFCE7', '#D9F99D', '#CCFBF1'],
-  bac_dong_nai: ['#EDE9FE', '#E0E7FF', '#FCE7F3'],
+  trung_tam: ['#EFF6FF', '#DBEAFE', '#E0F2FE'],
+  nam_san_bay_cang: ['#ECFEFF', '#CFFAFE', '#E0F2FE'],
+  dong_xuan_loc: ['#FFFBEB', '#FEF3C7', '#FFEDD5'],
+  dong_bac_cat_tien: ['#ECFDF5', '#D1FAE5', '#DCFCE7'],
+  bac_dong_nai: ['#F5F3FF', '#EDE9FE', '#EEF2FF'],
 };
 
 const REGION_BORDER_COLOR: Record<CityRegionId, string> = {
   trung_tam: '#2563EB',
-  nam_san_bay_cang: '#0D9488',
+  nam_san_bay_cang: '#0891B2',
   dong_xuan_loc: '#D97706',
-  dong_bac_cat_tien: '#16A34A',
-  bac_dong_nai: '#7C3AED',
+  dong_bac_cat_tien: '#059669',
+  bac_dong_nai: '#6366F1',
 };
 
 const COS_LAT_SQUARED = Math.cos((11.35 * Math.PI) / 180) ** 2;

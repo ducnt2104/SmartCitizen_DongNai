@@ -208,9 +208,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     map.setStyle(vecStyle);
     vectorWatchdogRef.current = window.setTimeout(() => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        fallbackToRasterStyle(map, 'vector load timeout (4.5s)');
+        fallbackToRasterStyle(map, 'vector load timeout (7.5s)');
       }
-    }, 4500);
+    }, 7500);
   };
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi unmount
@@ -610,7 +610,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           'road_trunk_primary_casing',
         ].find((lid) => Boolean(map.getLayer(lid))) ?? overlayBeforeId;
 
-      // Lớp phủ mờ nhẹ ngoài ranh giới thực & phân khu màu pastel 95 ĐVHC 2 cấp đặt dưới mạng đường/sông
+      // Lớp phủ mờ nhẹ ngoài ranh giới thực & phân khu màu tinh tế 95 ĐVHC 2 cấp đặt dưới mạng đường/sông
       if (!map.getSource('sc-outer-shade')) {
         map.addSource('sc-outer-shade', {
           type: 'geojson',
@@ -623,8 +623,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             source: 'sc-outer-shade',
             maxzoom: 13.6,
             paint: {
-              'fill-color': isRoadmap ? '#E2E8F0' : '#020617',
-              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, isRoadmap ? 0.26 : 0.32, 11, 0.14, 13.2, 0],
+              'fill-color': isRoadmap ? '#CBD5E1' : '#020617',
+              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, isRoadmap ? 0.22 : 0.34, 11, 0.1, 13.2, 0],
             },
           },
           tintBeforeLayerId,
@@ -641,7 +641,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             id: 'sc-ward-zones-fill',
             type: 'fill',
             source: 'sc-ward-zones',
-            maxzoom: 14.8,
+            maxzoom: 14.6,
             paint: {
               'fill-color': ['get', 'fillColor'],
               'fill-opacity': [
@@ -649,12 +649,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
                 ['linear'],
                 ['zoom'],
                 7.2,
-                isRoadmap ? 0.28 : 0.18,
+                isRoadmap ? 0.16 : 0.13,
                 10.5,
-                isRoadmap ? 0.22 : 0.14,
+                isRoadmap ? 0.11 : 0.09,
                 13.0,
-                isRoadmap ? 0.1 : 0.06,
-                14.5,
+                isRoadmap ? 0.04 : 0.04,
+                14.4,
                 0,
               ],
             },
@@ -669,11 +669,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             maxzoom: 14.8,
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
-              'line-color': isRoadmap
-                ? ['case', ['==', ['get', 'kind'], 'Phường'], '#2563EB', '#475569']
-                : '#94A3B8',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.75, 11, 1.15, 13.5, 1.4],
-              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.45, 12.5, 0.55, 14.6, 0],
+              'line-color': isRoadmap ? ['get', 'borderColor'] : '#64748B',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.65, 11, 1.0, 13.5, 1.25],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.26, 12.5, 0.34, 14.6, 0],
             },
           },
           overlayBeforeId,
@@ -693,9 +691,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             source: 'sc-city-boundary',
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
-              'line-color': isRoadmap ? '#60A5FA' : '#93C5FD',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 5.5, 12, 7.5],
-              'line-opacity': 0.22,
+              'line-color': isRoadmap ? '#60A5FA' : '#38BDF8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 6.5, 12, 8.5],
+              'line-opacity': isRoadmap ? 0.24 : 0.28,
             },
           },
           overlayBeforeId,
@@ -707,9 +705,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             source: 'sc-city-boundary',
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
-              'line-color': isRoadmap ? '#1A73E8' : '#60A5FA',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.0, 12, 2.8],
-              'line-opacity': 0.88,
+              'line-color': isRoadmap ? '#2563EB' : '#38BDF8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.2, 12, 3.0],
+              'line-opacity': 0.92,
             },
           },
           overlayBeforeId,
@@ -721,9 +719,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           type: 'geojson',
           data: buildDongNaiWardsGeoJson(),
         });
-        const phuongColor = isRoadmap ? '#0B57D0' : '#93C5FD';
-        const xaColor = isRoadmap ? '#0F766E' : '#A7F3D0';
-        const haloColor = isRoadmap ? 'rgba(255, 255, 255, 0.96)' : 'rgba(15, 23, 42, 0.88)';
+        const phuongColor = isRoadmap ? '#1E40AF' : '#93C5FD';
+        const xaColor = isRoadmap ? '#0F766E' : '#6EE7B7';
+        const haloColor = isRoadmap ? 'rgba(255, 255, 255, 0.98)' : 'rgba(9, 14, 28, 0.92)';
 
         map.addLayer({
           id: 'sc-admin-hub-labels',
@@ -735,15 +733,15 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           layout: {
             'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
-            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.5, 10.0, 12.5],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.8, 10.0, 12.8],
             'text-max-width': 10,
-            'text-padding': 5,
+            'text-padding': 6,
             'text-variable-anchor': ['center', 'top', 'bottom'],
           },
           paint: {
             'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
             'text-halo-color': haloColor,
-            'text-halo-width': 2.2,
+            'text-halo-width': 2.4,
           },
         });
 
@@ -754,12 +752,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           minzoom: 10.2,
           maxzoom: 15.8,
           paint: {
-            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 4, 3.2],
-            'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#0B57D0', '#0F766E'],
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 3.8, 2.8],
+            'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#1D4ED8', '#0F766E'],
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,
-            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.9, 15.8, 0],
-            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.95, 15.8, 0],
+            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.92, 15.8, 0],
+            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.96, 15.8, 0],
           },
         });
 
@@ -784,12 +782,13 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             'text-offset': [0, 0.85],
             'text-anchor': 'top',
             'text-max-width': 10,
-            'text-padding': 3,
+            'text-padding': 5,
+            'text-optional': true,
           },
           paint: {
             'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
             'text-halo-color': haloColor,
-            'text-halo-width': 2,
+            'text-halo-width': 2.2,
             'text-opacity': ['interpolate', ['linear'], ['zoom'], 15.2, 0.96, 16.2, 0],
           },
         });
