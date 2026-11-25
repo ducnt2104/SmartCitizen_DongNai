@@ -94,7 +94,7 @@ describe('Local AI Engine (NLP Classifier + Pure-TS ONNX + Hybrid <0.75 Gate), B
         dataDir: poolDir,
         encryptionSecret: 'test-secret-hybrid-0123456789ab',
         quotaResetTimeZone: 'Asia/Ho_Chi_Minh',
-        defaultGeminiModel: 'gemini-2.5-flash',
+        defaultGeminiModel: 'gemini-3.8-flash',
       });
       await kp.addKeys({ apiKey: 'AIzaSy_Test_Hybrid_Key_00000000001' });
 

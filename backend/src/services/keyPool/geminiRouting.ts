@@ -2,27 +2,150 @@ import { parseGeminiKeyRouting, redactSecretsInText } from './cryptoVault';
 import { sanitizeUpstreamErrorReason } from './errorClassifier';
 import type { GeminiEndpointKind, GeminiKeyFormat } from './types';
 
-/** Chuỗi model Gemini Flash chính thức, ổn định & tốc độ cao: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`. */
-export const PRIMARY_GEMINI_MODEL = 'gemini-2.5-flash';
+/** Chuỗi model Gemini Flash hiện hành, ổn định 2026: `gemini-3.8-flash` -> `gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite`. */
+export const PRIMARY_GEMINI_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_GEMINI_MODEL = PRIMARY_GEMINI_MODEL;
-export const FALLBACK_GEMINI_MODEL = 'gemini-2.0-flash';
+export const FALLBACK_GEMINI_MODEL = 'gemini-3.5-flash-lite';
 export const ACTIVE_GEMINI_MODEL_CHAIN: readonly string[] = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
 ] as const;
 
 export const SUPPORTED_GEMINI_MODELS: ReadonlySet<string> = new Set([
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-2.5-pro',
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-4-argon',
+  'gemini-4-carbon',
 ]);
 
 const DEPRECATED_OR_INVALID_GEMINI_MODEL_RE =
-  /^(?:gemini-(?:1\.0|1\.5|3\.5|3\.6|3\.8)(?:-|$)|gemini-2\.0-flash-exp$)/i;
+  /^(?:gemini-(?:1\.0|1\.5|2\.0|2\.5)(?:-|$)|gemini-3\.1-flash-lite-preview$)/i;
 const warnedUnsupportedModels = new Set<string>();
+const INTERACTIONS_API_REVISION = '2026-05-20';
+
+function isGemini3OrNewer(modelId: string): boolean {
+  return /^gemini-(?:3|4)(?:\.|-|$)/i.test(modelId.trim());
+}
+
+function isMinimalThinkingUnsupported(modelId: string): boolean {
+  return /^gemini-(?:3\.8|4)(?:-|$)/i.test(modelId.trim());
+}
+
+function resolveEffectiveThinkingLevel(
+  modelId: string,
+  cfg: GeminiRestConfig,
+): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
+  if (cfg.thinkingLevel) {
+    const lower = cfg.thinkingLevel.toLowerCase() as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+    if (lower === 'minimal' && isMinimalThinkingUnsupported(modelId)) {
+      return 'low';
+    }
+    return lower;
+  }
+  if (cfg.thinkingBudget !== undefined) {
+    if (cfg.thinkingBudget <= 0) {
+      return isMinimalThinkingUnsupported(modelId) ? 'low' : 'minimal';
+    }
+    if (cfg.thinkingBudget <= 2_048) return 'low';
+    if (cfg.thinkingBudget <= 8_192) return 'medium';
+    return 'high';
+  }
+  return undefined;
+}
+
+const UPPERCASE_JSON_SCHEMA_TYPES: Readonly<Record<string, string>> = {
+  OBJECT: 'object',
+  ARRAY: 'array',
+  STRING: 'string',
+  INTEGER: 'integer',
+  NUMBER: 'number',
+  BOOLEAN: 'boolean',
+  NULL: 'null',
+};
+
+function normalizeJsonSchemaTypes(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    return node.map((item) => normalizeJsonSchemaTypes(item));
+  }
+  if (!node || typeof node !== 'object') {
+    return node;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (k === 'type' && typeof v === 'string') {
+      out[k] = UPPERCASE_JSON_SCHEMA_TYPES[v] ?? v.toLowerCase();
+    } else {
+      out[k] = normalizeJsonSchemaTypes(v);
+    }
+  }
+  return out;
+}
+
+interface LegacyContentTurn {
+  role?: string;
+  parts?: Array<{
+    text?: string;
+    inlineData?: { mimeType?: string; data?: string };
+  }>;
+}
+
+function mapPartsToInteractionContent(
+  parts: NonNullable<LegacyContentTurn['parts']>,
+): Array<Record<string, unknown>> {
+  const mapped: Array<Record<string, unknown>> = [];
+  for (const part of parts) {
+    if (typeof part.text === 'string' && part.text.length > 0) {
+      mapped.push({ type: 'text', text: part.text });
+    } else if (part.inlineData?.data) {
+      const mimeType = part.inlineData.mimeType || 'image/jpeg';
+      const contentType = mimeType.startsWith('audio/')
+        ? 'audio'
+        : mimeType.startsWith('video/')
+          ? 'video'
+          : mimeType === 'application/pdf'
+            ? 'document'
+            : 'image';
+      mapped.push({
+        type: contentType,
+        data: part.inlineData.data,
+        mime_type: mimeType,
+      });
+    }
+  }
+  return mapped;
+}
+
+function convertContentsToInteractionInput(contents: unknown): unknown {
+  if (typeof contents === 'string') {
+    return contents;
+  }
+  if (!Array.isArray(contents)) {
+    return contents;
+  }
+  const turns = contents as LegacyContentTurn[];
+  if (turns.length === 0) {
+    return '';
+  }
+  if (turns.length === 1 && Array.isArray(turns[0]?.parts)) {
+    const singleParts = mapPartsToInteractionContent(turns[0].parts);
+    if (singleParts.length === 1 && singleParts[0].type === 'text') {
+      return singleParts[0].text;
+    }
+    return singleParts;
+  }
+  const steps: Array<Record<string, unknown>> = [];
+  for (const turn of turns) {
+    const content = Array.isArray(turn?.parts) ? mapPartsToInteractionContent(turn.parts) : [];
+    if (content.length === 0) continue;
+    steps.push({
+      type: turn.role === 'model' ? 'model_output' : 'user_input',
+      content,
+    });
+  }
+  return steps;
+}
 
 export interface GeminiRestConfig {
   systemInstruction?: string;
@@ -58,7 +181,7 @@ export function isValidGeminiModel(modelId?: string | null): boolean {
   return SUPPORTED_GEMINI_MODELS.has(trimmed);
 }
 
-/** Chuẩn hóa tên model Gemini: thay thế các model cũ/không hợp lệ (`gemini-1.5-*`, `gemini-3.5-*`, ...) về `gemini-2.5-flash`. */
+/** Chuẩn hóa tên model Gemini: thay thế các model cũ/không hợp lệ (`gemini-1.5-*`, `gemini-2.0-*`, `gemini-2.5-*`, ...) về `gemini-3.8-flash`. */
 export function normalizeGeminiModelName(rawModel?: string | null): string {
   const trimmed = (rawModel ?? '').trim();
   if (!trimmed) return DEFAULT_GEMINI_MODEL;
@@ -66,7 +189,7 @@ export function normalizeGeminiModelName(rawModel?: string | null): string {
     if (!warnedUnsupportedModels.has(trimmed)) {
       warnedUnsupportedModels.add(trimmed);
       console.warn(
-        `[ai] Model "${trimmed}" không nằm trong danh sách model Gemini ổn định (${Array.from(SUPPORTED_GEMINI_MODELS).join(', ')}). Tự động chuyển sang "${DEFAULT_GEMINI_MODEL}".`,
+        `[ai] Model "${trimmed}" đã ngừng hỗ trợ hoặc không nằm trong danh sách model Gemini hiện hành (${Array.from(SUPPORTED_GEMINI_MODELS).join(', ')}). Tự động chuyển sang "${DEFAULT_GEMINI_MODEL}".`,
       );
     }
     return DEFAULT_GEMINI_MODEL;
@@ -98,7 +221,7 @@ export function buildGeminiModelChain(
     const fb = normalizeGeminiModelName(options.fallbackModel ?? FALLBACK_GEMINI_MODEL);
     const ordered = [
       fb,
-      'gemini-2.5-flash-lite',
+      FALLBACK_GEMINI_MODEL,
       ...ACTIVE_GEMINI_MODEL_CHAIN,
     ].filter((m) => isValidGeminiModel(m));
     const unique = Array.from(new Set(ordered));
@@ -141,7 +264,7 @@ export function isGeminiAuthOrInvalidKeyError(err: unknown): boolean {
   );
 }
 
-/** Tạo URL, headers và payload REST chuẩn cho Google AI Studio, Vertex AI Express Mode hoặc OAuth Bearer. */
+/** Tạo URL, headers và payload REST chuẩn cho Google AI Studio (Interactions API), Vertex AI Express Mode hoặc OAuth Bearer. */
 export function buildGeminiRestRequest(params: {
   cleanKey: string;
   endpoint: GeminiEndpointKind;
@@ -159,29 +282,82 @@ export function buildGeminiRestRequest(params: {
   const isVertex = params.endpoint === 'vertex' || (!isOAuthBearer && params.cleanKey.startsWith('AQ.'));
   const resolvedModel = isValidGeminiModel(params.modelId) ? params.modelId.trim() : DEFAULT_GEMINI_MODEL;
   const encodedModel = encodeURIComponent(resolvedModel);
+  const cfg = params.config ?? {};
+  const thinkingLevel = resolveEffectiveThinkingLevel(resolvedModel, cfg);
+  const modernModel = isGemini3OrNewer(resolvedModel);
 
-  const url = isVertex
-    ? isOAuthBearer
-      ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent`
-      : `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent?key=${encodeURIComponent(params.cleanKey)}`
-    : `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}:generateContent`;
+  if (!isVertex) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Api-Revision': INTERACTIONS_API_REVISION,
+      ...(isOAuthBearer
+        ? { Authorization: `Bearer ${params.cleanKey}` }
+        : { 'x-goog-api-key': params.cleanKey }),
+    };
+
+    const generationConfig: Record<string, unknown> = {};
+    if (!modernModel && cfg.temperature !== undefined) {
+      generationConfig.temperature = cfg.temperature;
+    }
+    if (cfg.maxOutputTokens !== undefined) {
+      generationConfig.max_output_tokens = cfg.maxOutputTokens;
+    }
+    if (thinkingLevel !== undefined) {
+      generationConfig.thinking_level = thinkingLevel;
+    }
+
+    const body: Record<string, unknown> = {
+      model: resolvedModel,
+      input: convertContentsToInteractionInput(params.contents),
+      store: false,
+      ...(Object.keys(generationConfig).length > 0 ? { generation_config: generationConfig } : {}),
+    };
+
+    if (typeof cfg.systemInstruction === 'string' && cfg.systemInstruction) {
+      body.system_instruction = cfg.systemInstruction;
+    }
+
+    if (cfg.responseMimeType === 'application/json' || cfg.responseSchema !== undefined) {
+      const responseFormat: Record<string, unknown> = {
+        type: 'text',
+        mime_type: cfg.responseMimeType ?? 'application/json',
+      };
+      if (cfg.responseSchema !== undefined) {
+        responseFormat.schema = normalizeJsonSchemaTypes(cfg.responseSchema);
+      }
+      body.response_format = responseFormat;
+    }
+
+    return {
+      url,
+      headers,
+      body,
+      endpointLabel: 'AIStudio',
+    };
+  }
+
+  const url = isOAuthBearer
+    ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent`
+    : `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent?key=${encodeURIComponent(params.cleanKey)}`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(isOAuthBearer
-      ? { Authorization: `Bearer ${params.cleanKey}` }
-      : isVertex
-        ? {}
-        : { 'x-goog-api-key': params.cleanKey }),
+    ...(isOAuthBearer ? { Authorization: `Bearer ${params.cleanKey}` } : {}),
   };
 
-  const cfg = params.config ?? {};
   const generationConfig: Record<string, unknown> = {};
-  if (cfg.temperature !== undefined) generationConfig.temperature = cfg.temperature;
+  if (!modernModel && cfg.temperature !== undefined) {
+    generationConfig.temperature = cfg.temperature;
+  }
   if (cfg.maxOutputTokens !== undefined) generationConfig.maxOutputTokens = cfg.maxOutputTokens;
   if (cfg.responseMimeType !== undefined) generationConfig.responseMimeType = cfg.responseMimeType;
   if (cfg.responseSchema !== undefined) generationConfig.responseSchema = cfg.responseSchema;
-  if (cfg.thinkingBudget !== undefined) {
+  if (modernModel) {
+    if (thinkingLevel !== undefined) {
+      generationConfig.thinkingConfig = { thinkingLevel: thinkingLevel.toUpperCase() };
+    }
+  } else if (cfg.thinkingBudget !== undefined) {
     generationConfig.thinkingConfig = { thinkingBudget: cfg.thinkingBudget };
   } else if (cfg.thinkingLevel !== undefined) {
     generationConfig.thinkingConfig = { thinkingLevel: cfg.thinkingLevel };
@@ -198,17 +374,94 @@ export function buildGeminiRestRequest(params: {
   };
 
   if (typeof cfg.systemInstruction === 'string' && cfg.systemInstruction) {
-    body.systemInstruction = isVertex
-      ? { role: 'system', parts: [{ text: cfg.systemInstruction }] }
-      : { parts: [{ text: cfg.systemInstruction }] };
+    body.systemInstruction = { role: 'system', parts: [{ text: cfg.systemInstruction }] };
   }
 
   return {
     url,
     headers,
     body,
-    endpointLabel: isVertex ? 'VertexAI' : 'AIStudio',
+    endpointLabel: 'VertexAI',
   };
+}
+
+interface InteractionStepLike {
+  type?: string;
+  content?: Array<{ type?: string; text?: string }>;
+  text?: string;
+}
+
+function extractGeminiResponseText(json: unknown, endpointLabel: string, modelId: string): string {
+  if (!json || typeof json !== 'object') return '';
+  const data = json as {
+    status?: string;
+    output_text?: string;
+    errors?: Array<{ code?: number | string; message?: string }>;
+    steps?: InteractionStepLike[];
+    outputs?: Array<{ type?: string; text?: string; content?: Array<{ type?: string; text?: string }> }>;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+
+  if (typeof data.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
+  if (Array.isArray(data.steps) && data.steps.length > 0) {
+    const textParts: string[] = [];
+    let collecting = false;
+    outer: for (let i = data.steps.length - 1; i >= 0; i--) {
+      const step = data.steps[i];
+      if (!step) continue;
+      if (step.type === 'user_input') break;
+      if (step.type === 'thought') continue;
+      if (step.type !== 'model_output') {
+        if (collecting) break;
+        continue;
+      }
+      if (!Array.isArray(step.content)) continue;
+      for (let j = step.content.length - 1; j >= 0; j--) {
+        const item = step.content[j];
+        if (item?.type === 'text') {
+          collecting = true;
+          textParts.push(item.text ?? '');
+        } else if (collecting) {
+          break outer;
+        }
+      }
+    }
+    const joined = textParts.reverse().join('').trim();
+    if (joined) return joined;
+  }
+
+  if (Array.isArray(data.outputs) && data.outputs.length > 0) {
+    const outputParts: string[] = [];
+    for (const out of data.outputs) {
+      if (out?.type === 'text' && typeof out.text === 'string') {
+        outputParts.push(out.text);
+      } else if (Array.isArray(out?.content)) {
+        for (const c of out.content) {
+          if (c?.type === 'text' && typeof c.text === 'string') {
+            outputParts.push(c.text);
+          }
+        }
+      }
+    }
+    const joined = outputParts.join('').trim();
+    if (joined) return joined;
+  }
+
+  const candidateText = (data.candidates?.[0]?.content?.parts ?? [])
+    .map((p) => p.text ?? '')
+    .join('')
+    .trim();
+  if (candidateText) return candidateText;
+
+  if (data.status === 'failed' || (Array.isArray(data.errors) && data.errors.length > 0)) {
+    const errMsg = data.errors?.[0]?.message || 'Interaction failed';
+    throw new Error(`${endpointLabel}(${modelId}) ${sanitizeUpstreamErrorReason(errMsg, null)}`);
+  }
+
+  return '';
 }
 
 async function callSingleGeminiRequest(params: {
@@ -231,7 +484,7 @@ async function callSingleGeminiRequest(params: {
     config: params.config,
   });
 
-  const effectiveTimeoutMs = Math.max(1_000, Math.min(params.timeoutMs, 6_000));
+  const effectiveTimeoutMs = Math.max(1_000, Math.min(params.timeoutMs, 8_000));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), effectiveTimeoutMs);
   try {
@@ -265,13 +518,8 @@ async function callSingleGeminiRequest(params: {
       );
     }
 
-    const json = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const text = (json.candidates?.[0]?.content?.parts ?? [])
-      .map((p) => p.text ?? '')
-      .join('')
-      .trim();
+    const json = await res.json();
+    const text = extractGeminiResponseText(json, req.endpointLabel, params.modelId);
     if (!text) {
       throw new Error(`${req.endpointLabel}(${params.modelId}) trả về rỗng`);
     }
@@ -373,7 +621,7 @@ export async function probeGeminiKeyEndpoint(params: {
     keyFormat: params.keyFormat,
     models: modelsToTry,
     contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
-    config: { maxOutputTokens: 5, temperature: 0 },
+    config: { maxOutputTokens: 64, thinkingLevel: 'low' },
     timeoutMs: params.timeoutMs ?? 8_000,
     label: 'KeyPool Probe',
     fetchImpl: params.fetchImpl,

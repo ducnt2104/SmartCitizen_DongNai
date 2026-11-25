@@ -66,35 +66,35 @@ describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đ�
     const { buildGoogleGenAiClientOptions, extractJsonObject, resolveGeminiModelChain } = await import(
       '../src/services/gemini.service'
     );
+    expect(resolveGeminiModelChain('gemini-3.8-flash')).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+    ]);
     expect(resolveGeminiModelChain('gemini-2.5-flash')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
     ]);
     expect(resolveGeminiModelChain('gemini-1.5-flash')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
     ]);
     expect(resolveGeminiModelChain('gemini-3.5-flash-lite')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
-    ]);
-    expect(resolveGeminiModelChain('gemini-2.5-flash-lite')).toEqual([
-      'gemini-2.5-flash-lite',
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
+      'gemini-3.1-flash-lite',
     ]);
     expect(resolveGeminiModelChain('')).toEqual([
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
     ]);
-    expect(resolveGeminiModelChain('gemini-2.5-flash', { preferFallbackModel: true })).toEqual([
-      'gemini-2.0-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.5-flash',
+    expect(resolveGeminiModelChain('gemini-3.8-flash', { preferFallbackModel: true })).toEqual([
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-3.8-flash',
     ]);
 
     expect(buildGoogleGenAiClientOptions('AQ.Ab8RN6J2zkHaPWh_test')).toEqual({

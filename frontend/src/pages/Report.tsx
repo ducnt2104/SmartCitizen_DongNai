@@ -323,7 +323,7 @@ export default function ReportPage() {
 
         if (ctrl.signal.aborted || !mountedRef.current || opts.seq !== activePhotoSeqRef.current) return;
 
-        // 2. Gọi API Backend Vision (ảnh <= 1024px 120-220KB + SHA-256 + Gemini 2.5 Flash + KeyPool failover)
+        // 2. Gọi API Backend Vision (ảnh <= 1024px 120-220KB + SHA-256 + Gemini 3.8 Flash + KeyPool failover)
         if (!v && navigator.onLine) {
           try {
             const fd = new FormData();

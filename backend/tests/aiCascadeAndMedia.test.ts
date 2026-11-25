@@ -272,7 +272,7 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
       dataDir: kpDir,
       encryptionSecret: 'test-secret-0123456789abcdef',
       quotaResetTimeZone: 'Asia/Ho_Chi_Minh',
-      defaultGeminiModel: 'gemini-2.5-flash',
+      defaultGeminiModel: 'gemini-3.8-flash',
     });
     await kp.addKeys({ apiKey: 'AIzaSyTestFakeGeminiKey000000000001' });
 
@@ -291,31 +291,33 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
         }
         return new Response(
           JSON.stringify({
-            candidates: [
+            id: 'int_cascade_1',
+            status: 'completed',
+            steps: [
               {
-                content: {
-                  parts: [
-                    {
-                      text: JSON.stringify({
-                        authenticity: { authenticity_score: 94, is_screen_capture_or_fake: false, forensic_flags: [] },
-                        moderation: { relevance_score: 92, abuse_risk: 'NONE' },
-                        classification: {
-                          standardized_category: 'NGAP_UNG_THOAT_NUOC',
-                          severity: 'HIGH',
-                          priority_score: 84,
-                          suggested_unit: 'Phường Trấn Biên — Tổ Thoát nước',
-                          is_emergency: false,
-                          safety_hazards: ['Nước đọng sâu lòng đường'],
-                        },
-                        auto_fill: {
-                          suggested_title: 'Ngập nước sâu chắn lối lưu thông trước khu dân cư',
-                          suggested_description: 'Mặt đường đọng nước lớn sau mưa, gây nguy hiểm cho xe máy di chuyển.',
-                          key_evidence_tags: ['ngập nước', 'mặt đường', 'khu dân cư'],
-                        },
-                      }),
-                    },
-                  ],
-                },
+                type: 'model_output',
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      authenticity: { authenticity_score: 94, is_screen_capture_or_fake: false, forensic_flags: [] },
+                      moderation: { relevance_score: 92, abuse_risk: 'NONE' },
+                      classification: {
+                        standardized_category: 'NGAP_UNG_THOAT_NUOC',
+                        severity: 'HIGH',
+                        priority_score: 84,
+                        suggested_unit: 'Phường Trấn Biên — Tổ Thoát nước',
+                        is_emergency: false,
+                        safety_hazards: ['Nước đọng sâu lòng đường'],
+                      },
+                      auto_fill: {
+                        suggested_title: 'Ngập nước sâu chắn lối lưu thông trước khu dân cư',
+                        suggested_description: 'Mặt đường đọng nước lớn sau mưa, gây nguy hiểm cho xe máy di chuyển.',
+                        key_evidence_tags: ['ngập nước', 'mặt đường', 'khu dân cư'],
+                      },
+                    }),
+                  },
+                ],
               },
             ],
           }),
@@ -345,11 +347,14 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
       expect(res.category).toBe('ngap_nuoc');
       expect(res.decision).toBe('AUTO_APPROVE');
       expect(res.keyEvidenceTags).toContain('ngập nước');
-      const genCfg = capturedPayloads[0]?.generationConfig as Record<string, unknown>;
-      expect(genCfg?.responseMimeType).toBe('application/json');
-      expect(genCfg?.responseSchema).toBeTruthy();
-      expect(genCfg?.thinkingConfig).toEqual({ thinkingBudget: 0 });
-      expect(genCfg?.maxOutputTokens).toBeLessThanOrEqual(600);
+      expect(capturedPayloads[0]?.model).toBe('gemini-3.8-flash');
+      const respFmt = capturedPayloads[0]?.response_format as Record<string, unknown>;
+      expect(respFmt?.mime_type).toBe('application/json');
+      expect((respFmt?.schema as Record<string, unknown> | undefined)?.type).toBe('object');
+      const genCfg = capturedPayloads[0]?.generation_config as Record<string, unknown>;
+      expect(genCfg?.thinking_level).toBe('low');
+      expect(genCfg?.temperature).toBeUndefined();
+      expect(genCfg?.max_output_tokens).toBeLessThanOrEqual(600);
     } finally {
       globalThis.fetch = origFetch;
       if (prevFallback === undefined) delete process.env.ALLOW_CLOUD_AI_FALLBACK;
