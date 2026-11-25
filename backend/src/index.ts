@@ -7,7 +7,7 @@ import { createServices } from './services/container';
 async function main(): Promise<void> {
   const boot = await createRepositories();
   const services = createServices(boot.repos);
-  await services.keyPool.init();
+  await Promise.all([services.keyPool.init(), services.cvEngine.ensureEngineRunning()]);
   const seeded = await seedIfEmpty(boot.repos, services.audit);
   const app = createApp(services, boot);
 
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     console.log(`[server] nhận ${signal}, đang tắt...`);
     server.close(() => {
-      boot.repos.close().finally(() => process.exit(0));
+      Promise.allSettled([services.cvEngine.stop(), boot.repos.close()]).finally(() => process.exit(0));
     });
     setTimeout(() => process.exit(1), 8000).unref();
   };

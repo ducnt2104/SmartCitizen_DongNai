@@ -9,8 +9,8 @@ import { useI18n } from '../../i18n';
 import { CATEGORY_META } from '../../lib/meta';
 import { useOverview } from './useAdminData';
 
-const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong'];
-const CAT_COLOR: Record<Category, string> = { rac_thai: '#FBBF24', den_duong: '#22D3EE', ngap_nuoc: '#60A5FA', mat_duong: '#A3A3A3' };
+const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong', 'khac'];
+const CAT_COLOR: Record<Category, string> = { rac_thai: '#FBBF24', den_duong: '#22D3EE', ngap_nuoc: '#60A5FA', mat_duong: '#A3A3A3', khac: '#C084FC' };
 
 function Spark({ data, color }: { data: Array<{ v: number }>; color: string }) {
   return (

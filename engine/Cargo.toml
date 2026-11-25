@@ -1,0 +1,29 @@
+[package]
+name = "smartcitizen-cv-engine"
+version = "1.0.0"
+edition = "2021"
+description = "SmartCitizen Dong Nai High-Speed Local Computer Vision & ONNX Engine (Screenshot Forensics, Crop-Invariant ORB+RANSAC Dedup, CLAHE Before/After Verification)"
+
+[lib]
+name = "smartcitizen_cv_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smartcitizen-cv-engine"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+rayon = "1.10"
+rustfft = "6.2"
+kamadak-exif = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

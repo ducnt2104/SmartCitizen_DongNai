@@ -1,12 +1,27 @@
 /**
- * Data Contract dùng chung cho client/ và server/ (Interface-First).
+ * Data Contract dùng chung cho frontend/ và backend/ (Interface-First).
  * Mô hình chính quyền 2 cấp: Thành phố Đồng Nai -> 95 Phường/Xã (33 Phường, 62 Xã từ 30/04/2026).
  */
 
-export type Category = 'rac_thai' | 'den_duong' | 'ngap_nuoc' | 'mat_duong';
-export const CATEGORIES: readonly Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong'] as const;
+export type Category = 'rac_thai' | 'den_duong' | 'ngap_nuoc' | 'mat_duong' | 'khac';
+export const CATEGORIES: readonly Category[] = [
+  'rac_thai',
+  'den_duong',
+  'ngap_nuoc',
+  'mat_duong',
+  'khac',
+] as const;
 
-export type Role = 'citizen' | 'volunteer' | 'ward_officer' | 'city_admin';
+export type Role = 'super_admin' | 'city_admin' | 'ward_officer' | 'volunteer' | 'citizen';
+export type RoleCode = 'SUPER_ADMIN' | 'ADMIN' | 'OFFICER' | 'YOUTH_UNION' | 'CITIZEN';
+
+export const ROLES: readonly Role[] = [
+  'super_admin',
+  'city_admin',
+  'ward_officer',
+  'volunteer',
+  'citizen',
+] as const;
 
 export type ReportStatus = 'received' | 'verifying' | 'processing' | 'resolved' | 'quarantined' | 'rejected';
 export type Priority = 'normal' | 'high' | 'emergency';
@@ -70,7 +85,7 @@ export interface Photo {
   createdAt: string;
 }
 
-export type AiMode = 'gemini' | 'fallback' | 'seed';
+export type AiMode = 'local_rust_llm' | 'local_rust' | 'ollama' | 'gemini' | 'fallback' | 'seed';
 
 export interface AiAnalysis {
   authenticityScore: number;
@@ -78,6 +93,10 @@ export interface AiAnalysis {
   confidence: number;
   safetyHazards: string[];
   suggestedDepartment: Department | null;
+  aiSuggestedLabel?: string | null;
+  isDuplicateCrop?: boolean;
+  duplicateSimilarity?: number | null;
+  inlierCount?: number | null;
   mode: AiMode;
 }
 
@@ -95,6 +114,9 @@ export interface DispatchOrder {
 export interface ResolutionVerification {
   resolutionVerified: boolean;
   matchConfidence: number;
+  sceneMatchScore?: number;
+  resolutionScore?: number;
+  inlierKeypoints?: number;
   summary: string;
   mode: AiMode;
   at: string;
@@ -133,6 +155,7 @@ export interface Report {
   id: string;
   code: string;
   category: Category;
+  aiSuggestedLabel?: string | null;
   title: string;
   description: string;
   severity: 1 | 2 | 3 | 4 | 5;
@@ -250,6 +273,7 @@ export interface Notification {
 export interface UserProfile {
   id: string;
   role: Role;
+  roleCode?: RoleCode;
   name: string;
   phoneMasked: string | null;
   email: string | null;
@@ -259,12 +283,14 @@ export interface UserProfile {
   defaultWardCode?: string | null;
   notificationsEnabled?: boolean;
   revoked?: boolean;
+  isActive?: boolean;
   trustScore: number;
   badges: string[];
   volunteerHours: number;
   points: number;
   supervised: boolean;
   notifications: Notification[];
+  createdAt?: string;
 }
 
 export interface AuthSession {
@@ -274,6 +300,7 @@ export interface AuthSession {
 
 export interface VisionResult {
   category: Category;
+  aiSuggestedLabel?: string | null;
   title: string;
   description: string;
   severity: 1 | 2 | 3 | 4 | 5;
@@ -281,10 +308,23 @@ export interface VisionResult {
   safetyHazards: string[];
   suggestedDepartment: Department;
   authenticityScore: number;
+  isAuthentic?: boolean;
   fraudFlags: string[];
   confidence: number;
-  mode: 'gemini' | 'fallback';
+  mode: AiMode;
   cached: boolean;
+  latencyMs?: number;
+}
+
+export interface DynamicAiConfig {
+  screenshotThreshold: number;
+  duplicateThreshold: number;
+  minKeypointInliers: number;
+  sceneMatchThreshold: number;
+  resolutionThreshold: number;
+  allowCloudFallback: boolean;
+  updatedAt: string;
+  updatedBy: string;
 }
 
 export interface ScopeStats {

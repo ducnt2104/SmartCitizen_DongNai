@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "seed": "tsx src/seed/seedAll.ts",
     "seed:dongnai": "tsx src/seed/seedDongNai.ts",
     "db:seed": "tsx src/scripts/seed.ts",
     "db:migrate-indexes": "tsx src/scripts/migrateIndexes.ts",

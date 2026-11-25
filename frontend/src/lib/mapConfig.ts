@@ -56,6 +56,8 @@ const CAT_SVG_MARKUP: Record<Category, string> = {
     '<path d="M17 10.5s-4 4.5-4 7a4 4 0 0 0 8 0c0-2.5-4-7-4-7Z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round" fill="none"/>',
   mat_duong:
     '<path d="m17 10.5 5 9H12l5-9Zm0 3.5v2.5m0 1.8h.01" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  khac:
+    '<circle cx="17" cy="15.5" r="5" stroke="#fff" stroke-width="1.8" fill="none"/><circle cx="17" cy="15.5" r="1.5" fill="#fff"/>',
 };
 
 export function getPinState(r: MapPoint): PinPriorityState {

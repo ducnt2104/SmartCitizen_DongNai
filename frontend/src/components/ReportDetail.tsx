@@ -136,7 +136,7 @@ export function ReportDetail({
 
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.code')}</dt><dd className="mono break-all font-semibold">{r.code}</dd></div>
-          <div className="rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.category')}</dt><dd className="font-semibold" style={{ color: meta.color }}>{t(meta.labelKey)}</dd></div>
+          <div className="rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.category')}</dt><dd className="font-semibold" style={{ color: meta.color }}>{t(meta.labelKey)}{r.aiSuggestedLabel ? ` · ${r.aiSuggestedLabel}` : ''}</dd></div>
           <div className="col-span-2 rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.location')}</dt><dd className="break-words font-semibold">{r.address}</dd><dd className="mono text-xs text-muted">{r.lat.toFixed(5)}, {r.lng.toFixed(5)} · {ward?.name}</dd></div>
           {r.slaDueAt && r.status !== 'resolved' && (
             <div className="col-span-2 flex items-center justify-between rounded-xl bg-surface-2 p-3"><dt className="flex items-center gap-1 text-xs text-muted"><Clock className="h-3.5 w-3.5" aria-hidden />{t('detail.sla')}</dt><dd><SlaClock iso={r.slaDueAt} /></dd></div>
@@ -176,9 +176,24 @@ export function ReportDetail({
             <p className="mb-2 text-sm font-bold">{t('detail.beforeAfter')}</p>
             <BeforeAfterSlider before={photos[0].url} after={r.afterPhoto.url} labelBefore={t('detail.before')} labelAfter={t('detail.after')} />
             {r.resolution && (
-              <p className={`mt-2 rounded-xl p-3 text-sm ${r.resolution.resolutionVerified ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>
-                <span className="font-bold">{t('detail.aiVerify')}: {r.resolution.matchConfidence}/100</span> — {r.resolution.summary}
-              </p>
+              <div className={`mt-2 space-y-1.5 rounded-xl p-3 text-sm ${r.resolution.resolutionVerified ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger'}`}>
+                <p>
+                  <span className="font-bold">{t('detail.aiVerify')}: {r.resolution.matchConfidence}/100</span> — {r.resolution.summary}
+                </p>
+                {(r.resolution.sceneMatchScore !== undefined || r.resolution.resolutionScore !== undefined) && (
+                  <div className="flex flex-wrap gap-3 text-xs font-semibold">
+                    {r.resolution.sceneMatchScore !== undefined && (
+                      <span>{t('detail.sceneScore')}: <strong className="mono">{r.resolution.sceneMatchScore}%</strong></span>
+                    )}
+                    {r.resolution.resolutionScore !== undefined && (
+                      <span>{t('detail.resScore')}: <strong className="mono">{r.resolution.resolutionScore}%</strong></span>
+                    )}
+                    {r.resolution.inlierKeypoints !== undefined && r.resolution.inlierKeypoints > 0 && (
+                      <span className="mono">RANSAC {r.resolution.inlierKeypoints} inliers</span>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

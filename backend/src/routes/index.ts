@@ -6,9 +6,9 @@ import {
   adminController, authController, metaController, reportController, volunteerController,
 } from '../controllers';
 import { aiController } from '../controllers/ai.controller';
-import { buildApiKeysRouter } from './apiKeys';
 import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
+import { buildApiKeysRouter } from './apiKeys';
 
 export function buildRouter(s: Services, bootInfo: { fallbackReason: string | null }): { api: Router; root: Router } {
   const auth = authMiddleware(s);
@@ -29,13 +29,14 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.get('/geo/reverse', h(r.reverseGeocode));
   api.get('/stats', h(r.stats));
 
-  // Xác thực thật & Quản lý phiên (Zero Mock Auth / Zero Fake OTP)
+  // Xác thực thật & Quản lý phiên (Citizen OTP + Password + Staff/Admin/SuperAdmin JWT)
   api.get('/auth/otp/status', h(a.otpStatus));
   api.post('/auth/otp/request', limits.otp, validateBody(schemas.otpRequest), h(a.otpRequest));
   api.post('/auth/otp/verify', limits.login, validateBody(schemas.otpVerify), h(a.otpVerify));
   api.post('/auth/password/login', limits.login, validateBody(schemas.passwordLogin), h(a.passwordLogin));
   api.post('/auth/password/reset', limits.login, validateBody(schemas.passwordReset), h(a.passwordReset));
   api.post('/auth/staff/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
+  api.post('/auth/admin/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
   api.post('/auth/refresh', limits.login, h(a.refresh));
   api.post('/auth/logout', h(a.logout));
   api.post('/auth/logout-all', auth.required, h(a.logoutAll));
@@ -44,7 +45,7 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.patch('/me/profile', auth.required, validateBody(schemas.updateProfile), h(a.updateProfile));
   api.post('/me/notifications/read', auth.required, h(a.readNotifications));
 
-  // Phản ánh (hỗ trợ Summary BBox siêu nhẹ & Cursor Pagination)
+  // Phản ánh hiện trường (Summary BBox + Cursor Pagination + OTHER category)
   api.get('/reports/summary', auth.optional, h(r.summary));
   api.get('/reports', auth.optional, h(r.list));
   api.get('/reports/lookup', auth.optional, h(r.lookup));
@@ -55,7 +56,7 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.post('/reports/:id/attach-photo', auth.required, limits.reportBurst, validateBody(schemas.attachPhoto), h(r.attachPhoto));
   api.post('/reports/:id/rate', auth.required, validateBody(schemas.rate), h(r.rate));
 
-  // Tình nguyện viên
+  // Tình nguyện viên (YOUTH_UNION)
   const vol = auth.requireRole('volunteer');
   api.get('/volunteer/tasks', vol, h(v.tasks));
   api.post('/volunteer/tasks/:id/accept', vol, h(v.accept));
@@ -64,9 +65,10 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.get('/volunteer/leaderboard', auth.optional, h(v.leaderboard));
   api.get('/volunteer/logbook', vol, h(v.logbook));
 
-  // IOC Cán bộ 2 cấp (WARD_OFFICER & CITY_ADMIN)
-  const staff = auth.requireRole('ward_officer', 'city_admin');
-  const city = auth.requireRole('city_admin');
+  // IOC Cán bộ & Quản trị Hệ thống (SUPER_ADMIN, ADMIN, OFFICER)
+  const staff = auth.requireRole('ward_officer', 'city_admin', 'super_admin');
+  const admins = auth.requireRole('city_admin', 'super_admin');
+
   api.get('/admin/overview', staff, h(ad.overview));
   api.get('/admin/queue', staff, h(ad.queue));
   api.post('/admin/reports/:id/assign', staff, validateBody(schemas.assign), h(ad.assign));
@@ -77,14 +79,24 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.post('/admin/reports/:id/spam', staff, validateBody(schemas.markSpam), h(ad.spam));
   api.post('/admin/reports/:id/resolve', staff, validateBody(schemas.resolve), h(ad.resolve));
   api.get('/admin/audit', staff, h(ad.audit));
-  api.get('/admin/audit/verify', city, h(ad.auditVerify));
-  api.get('/admin/staff', city, h(ad.staff));
-  api.post('/admin/staff', city, validateBody(schemas.createStaff), h(ad.createStaff));
-  api.patch('/admin/staff/:id/revoke', city, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
-  api.get('/admin/export', staff, h(ad.export));
-  api.use('/admin/api-keys', buildApiKeysRouter(s));
+  api.get('/admin/audit-logs', admins, h(ad.audit));
+  api.get('/admin/audit/verify', admins, h(ad.auditVerify));
+  api.get('/admin/staff', admins, h(ad.staff));
+  api.post('/admin/staff', admins, validateBody(schemas.createStaff), h(ad.createStaff));
+  api.patch('/admin/staff/:id/revoke', admins, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
 
-  // AI (Lớp 4 & 7)
+  // Full RBAC User Management & Dynamic Local AI Config
+  api.get('/admin/users', admins, h(ad.listUsers));
+  api.post('/admin/users', admins, validateBody(schemas.adminCreateUser), h(ad.createUser));
+  api.patch('/admin/users/:id', admins, validateBody(schemas.adminUpdateUser), h(ad.updateUser));
+  api.post('/admin/users/:id/reset-password', admins, validateBody(schemas.adminResetPassword), h(ad.resetUserPassword));
+  api.delete('/admin/users/:id', admins, h(ad.deleteUser));
+  api.get('/admin/ai-config', admins, h(ad.getAiConfig));
+  api.patch('/admin/ai-config', admins, validateBody(schemas.adminUpdateAiConfig), h(ad.updateAiConfig));
+  api.use('/admin/api-keys', buildApiKeysRouter(s));
+  api.get('/admin/export', staff, h(ad.export));
+
+  // AI & Computer Vision
   api.post('/ai/analyze-image', limits.vision, validateBody(schemas.analyzeImage), h(ai.analyzeImage));
   api.post('/ai/verify-resolution', staff, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
   api.post('/ai/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));

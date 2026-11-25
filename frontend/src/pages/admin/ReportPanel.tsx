@@ -140,7 +140,18 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
         {r.afterPhoto && r.photos[0] && (
           <div>
             <BeforeAfterSlider before={r.photos[0].url} after={r.afterPhoto.url} labelBefore={t('detail.before')} labelAfter={t('detail.after')} />
-            {r.resolution && <p className={`mt-1 text-xs ${r.resolution.resolutionVerified ? 'text-ioc-green' : 'text-ioc-red'}`}>{t('detail.aiVerify')}: <span className="mono font-bold">{r.resolution.matchConfidence}</span> — {r.resolution.summary}</p>}
+            {r.resolution && (
+              <div className={`mt-1.5 rounded border p-2 text-xs ${r.resolution.resolutionVerified ? 'border-emerald-500/40 bg-emerald-500/10 text-ioc-green' : 'border-red-500/40 bg-red-500/10 text-ioc-red'}`}>
+                <p>{t('detail.aiVerify')}: <span className="mono font-bold">{r.resolution.matchConfidence}%</span> — {r.resolution.summary}</p>
+                {(r.resolution.sceneMatchScore !== undefined || r.resolution.resolutionScore !== undefined) && (
+                  <p className="mono mt-1 text-[11px] text-ioc-text">
+                    {r.resolution.sceneMatchScore !== undefined ? `${t('detail.sceneScore')}: ${r.resolution.sceneMatchScore}%` : ''}
+                    {r.resolution.resolutionScore !== undefined ? ` · ${t('detail.resScore')}: ${r.resolution.resolutionScore}%` : ''}
+                    {r.resolution.inlierKeypoints ? ` · RANSAC ${r.resolution.inlierKeypoints} pts` : ''}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

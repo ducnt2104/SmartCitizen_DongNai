@@ -124,6 +124,11 @@ const TITLES: Record<Category, string[]> = {
     'Nắp hố ga bị sập nứt sát vỉa hè',
     'Sạt lở lề đường sau mưa cần gia cố khẩn',
   ],
+  khac: [
+    'Biển báo giao thông gãy đổ che khuất tầm nhìn',
+    'Cây xanh nghiêng gãy cành sát đường dây hạ thế',
+    'Lấn chiếm hành lang an toàn vỉa hè khu dân cư',
+  ],
 };
 
 const DESCS: Record<Category, string> = {
@@ -131,6 +136,7 @@ const DESCS: Record<Category, string> = {
   den_duong: 'Hệ thống chiếu sáng không hoạt động ổn định vào ban đêm, tiềm ẩn nguy cơ mất an toàn giao thông.',
   ngap_nuoc: 'Nước thoát chậm gây ngập kéo dài sau mỗi trận mưa, ảnh hưởng sinh hoạt và việc đi lại.',
   mat_duong: 'Kết cấu mặt đường hư hỏng nghiêm trọng, xe hai bánh đi qua buổi tối rất nguy hiểm.',
+  khac: 'Sự cố trật tự đô thị / hạ tầng công cộng khác cần cơ quan chức năng địa phương kiểm tra xử lý.',
 };
 
 function makeReport(

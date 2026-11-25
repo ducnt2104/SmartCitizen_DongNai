@@ -33,7 +33,7 @@ import { EmptyState, SkeletonBlock } from '../ui';
 import type { CameraCommand } from './GoogleMapEngine';
 import { UnifiedMapCanvas } from './UnifiedMapCanvas';
 
-const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong'];
+const CATS: Category[] = ['rac_thai', 'den_duong', 'ngap_nuoc', 'mat_duong', 'khac'];
 const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
 const WARDS_XA = DONG_NAI_WARDS.filter((w) => w.kind === 'Xã');
 

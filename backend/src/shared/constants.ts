@@ -1,4 +1,4 @@
-import type { Category, Department } from './types';
+import type { Category, Department, Role, RoleCode } from './types';
 
 export const DHASH_DUPLICATE_MAX = 5;
 export const DHASH_ANGLE_MIN = 12;
@@ -15,10 +15,6 @@ export const TRUST_VERIFIED_BONUS = 5;
 export const TRUST_SPAM_PENALTY = 20;
 export const DUPLICATE_WINDOW_MS = 24 * 3600 * 1000;
 
-/**
- * Khung bao địa lý toàn Thành phố Đồng Nai mới (95 Phường/Xã — gồm cả khu vực phía Bắc/Bình Phước cũ
- * và Đông Bắc/Cát Tiên, từ Nam Nhơn Trạch 10.50°N đến Bắc Bù Gia Mập/Lộc Thạnh 12.28°N).
- */
 export const DONG_NAI_CITY_BOUNDS = {
   latMin: 10.5,
   latMax: 12.28,
@@ -27,11 +23,8 @@ export const DONG_NAI_CITY_BOUNDS = {
 } as const;
 
 export const DONG_NAI_BBOX = DONG_NAI_CITY_BOUNDS;
-
-/** Tâm địa lý toàn Thành phố Đồng Nai cho chế độ xem tổng thể (không khóa riêng 1 phường). */
 export const DONG_NAI_CITY_CENTER: readonly [lat: number, lng: number] = [11.35, 107.02];
 
-/** Khung fitBounds toàn Thành phố Đồng Nai [[south, west], [north, east]] */
 export const DONG_NAI_MAP_BOUNDS: readonly [readonly [number, number], readonly [number, number]] = [
   [DONG_NAI_CITY_BOUNDS.latMin, DONG_NAI_CITY_BOUNDS.lngMin],
   [DONG_NAI_CITY_BOUNDS.latMax, DONG_NAI_CITY_BOUNDS.lngMax],
@@ -42,6 +35,7 @@ export const DEPARTMENT_BY_CATEGORY: Record<Category, Department> = {
   den_duong: 'dien_chieu_sang',
   ngap_nuoc: 'ubnd_khu_pho',
   mat_duong: 'giao_thong',
+  khac: 'ubnd_khu_pho',
 };
 
 export const DEPARTMENTS: readonly Department[] = [
@@ -55,3 +49,59 @@ export const DEPARTMENTS: readonly Department[] = [
 
 /** Mã chi đoàn hợp lệ: DN-TB-01, DN-BH-12 ... */
 export const UNIT_CODE_REGEX = /^DN-[A-Z]{2,4}-\d{2}$/;
+
+export function toRoleCode(role: Role): RoleCode {
+  switch (role) {
+    case 'super_admin':
+      return 'SUPER_ADMIN';
+    case 'city_admin':
+      return 'ADMIN';
+    case 'ward_officer':
+      return 'OFFICER';
+    case 'volunteer':
+      return 'YOUTH_UNION';
+    case 'citizen':
+      return 'CITIZEN';
+  }
+}
+
+export function normalizeRoleInput(raw: string): Role | null {
+  switch (raw.trim().toLowerCase()) {
+    case 'super_admin':
+    case 'superadmin':
+      return 'super_admin';
+    case 'city_admin':
+    case 'admin':
+      return 'city_admin';
+    case 'ward_officer':
+    case 'officer':
+      return 'ward_officer';
+    case 'volunteer':
+    case 'youth_union':
+      return 'volunteer';
+    case 'citizen':
+      return 'citizen';
+    default:
+      return null;
+  }
+}
+
+export function normalizeCategoryInput(raw: string): Category | null {
+  switch (raw.trim().toLowerCase()) {
+    case 'rac_thai':
+    case 'moi_truong':
+      return 'rac_thai';
+    case 'den_duong':
+      return 'den_duong';
+    case 'ngap_nuoc':
+      return 'ngap_nuoc';
+    case 'mat_duong':
+    case 'giao_thong':
+      return 'mat_duong';
+    case 'khac':
+    case 'other':
+      return 'khac';
+    default:
+      return null;
+  }
+}

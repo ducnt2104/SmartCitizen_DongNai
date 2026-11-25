@@ -8,6 +8,7 @@ import { authStore } from './authStore';
 
 export interface SubmitInput {
   category: Category;
+  aiSuggestedLabel?: string | null;
   title: string;
   description: string;
   lat: number;
@@ -42,6 +43,7 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     id,
     code: `CHO-${key.slice(0, 6).toUpperCase()}`,
     category: input.category,
+    aiSuggestedLabel: input.category === 'khac' ? (input.aiSuggestedLabel ?? v?.aiSuggestedLabel ?? null) : null,
     title: input.title,
     description: input.description,
     severity: v?.severity ?? 3,
@@ -93,6 +95,7 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
   const payload = {
     idempotencyKey: key,
     category: input.category,
+    ...(input.category === 'khac' && input.aiSuggestedLabel ? { aiSuggestedLabel: input.aiSuggestedLabel } : {}),
     title: input.title,
     description: input.description,
     lat: input.lat,

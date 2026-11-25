@@ -321,22 +321,28 @@ export class AuthService {
     return u;
   }
 
-  async staffLogin(staffCode: string, password: string, unit: string, userAgent?: string): Promise<IssuedAuth> {
-    const key = `staff:${staffCode.toLowerCase()}`;
+  async staffLogin(staffIdentifier: string, password: string, unit: string, userAgent?: string): Promise<IssuedAuth> {
+    const trimmed = staffIdentifier.trim();
+    const key = `staff:${trimmed.toLowerCase()}`;
     const now = Date.now();
     const f = this.staffFails.get(key);
     if (f && f.lockedUntil > now) throw tooMany('Tài khoản cán bộ tạm khóa do nhập sai nhiều lần.', 'staff_locked');
-    const u = await this.users.getByStaffCode(staffCode);
+    const u = trimmed.includes('@')
+      ? await this.users.getByEmail(trimmed.toLowerCase())
+      : await this.users.getByStaffCode(trimmed);
     if (u?.revoked) {
-      throw forbidden('Tài khoản cán bộ đã bị thu hồi quyền truy cập.');
+      throw forbidden('Tài khoản cán bộ đã bị khóa hoặc thu hồi quyền truy cập.');
     }
     const ok = !!u && !!u.passwordHash && verifyPassword(password, u.passwordHash);
-    const scopeOk = !!u && (unit === 'city' ? u.role === 'city_admin' : u.role === 'ward_officer' && u.wardCode === unit);
+    const scopeOk =
+      !!u &&
+      (u.role === 'super_admin' ||
+        (unit === 'city' ? u.role === 'city_admin' : u.role === 'ward_officer' && u.wardCode === unit));
     if (!ok || !scopeOk || !u) {
       const next = { count: (f?.count ?? 0) + 1, lockedUntil: 0 };
       if (next.count >= OTP_MAX_FAILS) next.lockedUntil = now + OTP_LOCK_MS;
       this.staffFails.set(key, next);
-      throw unauthorized('Mã cán bộ, mật khẩu hoặc cấp đơn vị không đúng.');
+      throw unauthorized('Mã cán bộ/Email, mật khẩu hoặc cấp đơn vị không đúng.');
     }
     this.staffFails.delete(key);
     await this.audit.log({ id: u.id, name: u.name, role: u.role }, 'auth.staff_login', u.id, null, { unit });

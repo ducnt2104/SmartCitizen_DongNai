@@ -100,7 +100,7 @@ function UserMenu() {
               <Users className="h-4 w-4" aria-hidden /> {t('nav.volunteer')}
             </button>
           )}
-          {(u.role === 'ward_officer' || u.role === 'city_admin') && (
+          {(u.role === 'ward_officer' || u.role === 'city_admin' || u.role === 'super_admin') && (
             <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/admin'); }}>
               <ShieldCheck className="h-4 w-4" aria-hidden /> {t('nav.admin')}
             </button>

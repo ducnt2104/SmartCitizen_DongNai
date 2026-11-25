@@ -244,9 +244,13 @@ export async function ensureDatabaseIndexes(): Promise<IndexSyncSummary[]> {
     models.AuditLog,
     models.ReportModel,
     models.UserModel,
+    models.ImageFingerprintModel,
+    models.AiEvaluationModel,
+    models.AiConfigModel,
     models.OtpModel,
     models.SessionModel,
     models.AuditLogModel,
+    models.ApiKey,
   ].filter(Boolean);
 
   const summaries: IndexSyncSummary[] = [];

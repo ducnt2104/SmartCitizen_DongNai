@@ -1,23 +1,50 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AuditEntry, Report, Role } from '../shared/types';
+import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
 import { haversineMeters } from '../shared/geo';
 import type {
-  AuditRepository, NearbyQuery, OtpRecord, OtpRepository, ReportQuery, ReportRepository, Repositories,
-  SessionRecord, SessionRepository, UserRecord, UserRepository,
+  AiConfigRepository,
+  AiEvaluationRecord,
+  AiEvaluationRepository,
+  AuditRepository,
+  DbHealthStats,
+  FingerprintRepository,
+  ImageFingerprintRecord,
+  NearbyQuery,
+  OtpRecord,
+  OtpRepository,
+  ReportQuery,
+  ReportRepository,
+  Repositories,
+  SessionRecord,
+  SessionRepository,
+  UserFilterQuery,
+  UserRecord,
+  UserRepository,
 } from './types';
 
 interface StoreShape {
   reports: Report[];
   users: UserRecord[];
+  fingerprints: ImageFingerprintRecord[];
+  evaluations: AiEvaluationRecord[];
+  aiConfig: DynamicAiConfig | null;
   audit: AuditEntry[];
   otps: OtpRecord[];
   sessions: SessionRecord[];
 }
 
-/** Local Persistent JSON Store: ghi nguyên tử (tmp + rename), gộp nhiều lần ghi liên tiếp (debounce). */
 class JsonStore {
-  data: StoreShape = { reports: [], users: [], audit: [], otps: [], sessions: [] };
+  data: StoreShape = {
+    reports: [],
+    users: [],
+    fingerprints: [],
+    evaluations: [],
+    aiConfig: null,
+    audit: [],
+    otps: [],
+    sessions: [],
+  };
   private timer: NodeJS.Timeout | null = null;
   private writing: Promise<void> = Promise.resolve();
 
@@ -33,6 +60,9 @@ class JsonStore {
       this.data = {
         reports: parsed.reports ?? [],
         users: parsed.users ?? [],
+        fingerprints: parsed.fingerprints ?? [],
+        evaluations: parsed.evaluations ?? [],
+        aiConfig: parsed.aiConfig ?? null,
         audit: parsed.audit ?? [],
         otps: parsed.otps ?? [],
         sessions: parsed.sessions ?? [],
@@ -53,13 +83,15 @@ class JsonStore {
   }
 
   flush(): Promise<void> {
-    this.writing = this.writing.then(async () => {
-      const tmp = `${this.file}.tmp`;
-      await fs.promises.writeFile(tmp, JSON.stringify(this.data), 'utf8');
-      await fs.promises.rename(tmp, this.file);
-    }).catch((err) => {
-      console.error('[json-store] Ghi store.json thất bại:', err);
-    });
+    this.writing = this.writing
+      .then(async () => {
+        const tmp = `${this.file}.tmp`;
+        await fs.promises.writeFile(tmp, JSON.stringify(this.data), 'utf8');
+        await fs.promises.rename(tmp, this.file);
+      })
+      .catch((err) => {
+        console.error('[json-store] Ghi store.json thất bại:', err);
+      });
     return this.writing;
   }
 }
@@ -72,7 +104,9 @@ class JsonReportRepo implements ReportRepository {
     if (q.wardCodes) rows = rows.filter((r) => q.wardCodes!.includes(r.wardCode));
     if (q.statuses) rows = rows.filter((r) => q.statuses!.includes(r.status));
     if (q.category) rows = rows.filter((r) => r.category === q.category);
-    if (q.reporterId) rows = rows.filter((r) => r.reporterId === q.reporterId || r.contributors.some((c) => c.userId === q.reporterId));
+    if (q.reporterId) {
+      rows = rows.filter((r) => r.reporterId === q.reporterId || r.contributors.some((c) => c.userId === q.reporterId));
+    }
     if (q.bbox) {
       const { minLng, minLat, maxLng, maxLat } = q.bbox;
       rows = rows.filter((r) => r.lat >= minLat && r.lat <= maxLat && r.lng >= minLng && r.lng <= maxLng);
@@ -144,11 +178,89 @@ class JsonUserRepo implements UserRepository {
     else this.s.data.users.push(structuredClone(user));
     this.s.touch();
   }
+  async delete(id: string): Promise<boolean> {
+    const before = this.s.data.users.length;
+    this.s.data.users = this.s.data.users.filter((x) => x.id !== id);
+    if (this.s.data.users.length !== before) {
+      this.s.touch();
+      return true;
+    }
+    return false;
+  }
   async list(role?: Role): Promise<UserRecord[]> {
     return structuredClone(role ? this.s.data.users.filter((u) => u.role === role) : this.s.data.users);
   }
+  async query(filter: UserFilterQuery = {}): Promise<UserRecord[]> {
+    let rows = this.s.data.users;
+    if (filter.role) rows = rows.filter((u) => u.role === filter.role);
+    if (filter.wardCode) rows = rows.filter((u) => u.wardCode === filter.wardCode);
+    if (filter.isActive !== undefined) rows = rows.filter((u) => Boolean(!u.revoked) === filter.isActive);
+    if (filter.q && filter.q.trim()) {
+      const low = filter.q.trim().toLowerCase();
+      rows = rows.filter(
+        (u) =>
+          u.name.toLowerCase().includes(low) ||
+          (u.email?.toLowerCase().includes(low) ?? false) ||
+          (u.phone?.toLowerCase().includes(low) ?? false) ||
+          (u.staffCode?.toLowerCase().includes(low) ?? false) ||
+          u.id.toLowerCase().includes(low),
+      );
+    }
+    return structuredClone([...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  }
   async count(): Promise<number> {
     return this.s.data.users.length;
+  }
+}
+
+class JsonFingerprintRepo implements FingerprintRepository {
+  constructor(private readonly s: JsonStore) {}
+  async save(fp: ImageFingerprintRecord): Promise<void> {
+    const i = this.s.data.fingerprints.findIndex((x) => x.id === fp.id);
+    if (i >= 0) this.s.data.fingerprints[i] = structuredClone(fp);
+    else this.s.data.fingerprints.push(structuredClone(fp));
+    this.s.touch();
+  }
+  async findNearbyRecent(lat: number, lng: number, radiusM: number, sinceIso: string): Promise<ImageFingerprintRecord[]> {
+    return structuredClone(
+      this.s.data.fingerprints
+        .filter((f) => f.createdAt >= sinceIso && haversineMeters(lat, lng, f.lat, f.lng) <= radiusM)
+        .slice(-120),
+    );
+  }
+  async listByReport(reportId: string): Promise<ImageFingerprintRecord[]> {
+    return structuredClone(this.s.data.fingerprints.filter((f) => f.reportId === reportId));
+  }
+  async count(): Promise<number> {
+    return this.s.data.fingerprints.length;
+  }
+}
+
+class JsonEvaluationRepo implements AiEvaluationRepository {
+  constructor(private readonly s: JsonStore) {}
+  async append(rec: AiEvaluationRecord): Promise<void> {
+    this.s.data.evaluations.push(structuredClone(rec));
+    this.s.touch();
+  }
+  async listByReport(reportId: string): Promise<AiEvaluationRecord[]> {
+    return structuredClone(this.s.data.evaluations.filter((e) => e.reportId === reportId).reverse());
+  }
+  async recent(limit = 100): Promise<AiEvaluationRecord[]> {
+    return structuredClone(this.s.data.evaluations.slice(-limit).reverse());
+  }
+  async count(): Promise<number> {
+    return this.s.data.evaluations.length;
+  }
+}
+
+class JsonAiConfigRepo implements AiConfigRepository {
+  constructor(private readonly s: JsonStore) {}
+  async get(): Promise<DynamicAiConfig | null> {
+    return this.s.data.aiConfig ? structuredClone(this.s.data.aiConfig) : null;
+  }
+  async save(cfg: DynamicAiConfig): Promise<void> {
+    this.s.data.aiConfig = structuredClone(cfg);
+    this.s.touch();
   }
 }
 
@@ -220,14 +332,37 @@ class JsonSessionRepo implements SessionRepository {
 export function createJsonRepositories(dataDir: string): Repositories {
   const store = new JsonStore(path.join(dataDir, 'store.json'));
   store.load();
+  const reports = new JsonReportRepo(store);
+  const users = new JsonUserRepo(store);
+  const fingerprints = new JsonFingerprintRepo(store);
+  const evaluations = new JsonEvaluationRepo(store);
+  const aiConfig = new JsonAiConfigRepo(store);
+  const audit = new JsonAuditRepo(store);
+  const otps = new JsonOtpRepo(store);
+  const sessions = new JsonSessionRepo(store);
+
   return {
     mode: 'json',
-    reports: new JsonReportRepo(store),
-    users: new JsonUserRepo(store),
-    audit: new JsonAuditRepo(store),
-    otps: new JsonOtpRepo(store),
-    sessions: new JsonSessionRepo(store),
+    reports,
+    users,
+    fingerprints,
+    evaluations,
+    aiConfig,
+    audit,
+    otps,
+    sessions,
     ping: async () => true,
+    healthStats: async () => ({
+      ok: true,
+      latencyMs: 0.2,
+      counts: {
+        reports: store.data.reports.length,
+        users: store.data.users.length,
+        fingerprints: store.data.fingerprints.length,
+        evaluations: store.data.evaluations.length,
+        auditLogs: store.data.audit.length,
+      },
+    }),
     close: () => store.flush(),
   };
 }

@@ -1,0 +1,3 @@
+# Local ONNX & Vision Models Directory
+# Chạy `powershell -ExecutionPolicy Bypass -File scripts/download_models.ps1` (Windows)
+# hoặc `bash scripts/download_models.sh` (Linux/macOS) để khởi tạo/tải model ONNX cục bộ.

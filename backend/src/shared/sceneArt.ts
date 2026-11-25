@@ -55,6 +55,11 @@ function pothole(v: number, after: boolean): string {
     `<ellipse cx="${300 + (v % 5) * 12}" cy="318" rx="52" ry="14" fill="#0b1220"/>`;
 }
 
+function otherIssue(v: number, after: boolean): string {
+  if (after) return `${road(240)}<rect x="280" y="170" width="80" height="70" rx="8" fill="#22c55e" opacity="0.85"/>`;
+  return `${road(240)}<polygon points="${300 + (v % 3) * 10},165 360,265 240,265" fill="#f59e0b" stroke="#78350f" stroke-width="4"/>`;
+}
+
 export function sceneSvg(category: Category, variant: number, kind: SceneKind): string {
   const after = kind === 'after';
   const label = after ? 'Ảnh minh họa dữ liệu mẫu — SAU xử lý' : 'Ảnh minh họa dữ liệu mẫu — hiện trường';
@@ -63,7 +68,8 @@ export function sceneSvg(category: Category, variant: number, kind: SceneKind): 
     category === 'rac_thai' ? trash(variant, after)
     : category === 'den_duong' ? lamp(variant, after)
     : category === 'ngap_nuoc' ? flood(variant, after)
-    : pothole(variant, after);
+    : category === 'mat_duong' ? pothole(variant, after)
+    : otherIssue(variant, after);
   const angleShift = kind === 'angle' ? `<g transform="translate(${(variant % 3) * 26 - 26} 0) rotate(${(variant % 5) - 2} 320 200)">${inner}</g>` : inner;
   return svgWrap(angleShift, sky[0], sky[1], label);
 }

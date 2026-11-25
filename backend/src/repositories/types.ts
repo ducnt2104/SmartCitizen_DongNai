@@ -1,4 +1,4 @@
-import type { AuditEntry, Notification, Report, ReportStatus, Role } from '../shared/types';
+import type { AuditEntry, Category, DynamicAiConfig, Notification, Report, ReportStatus, Role } from '../shared/types';
 import type { OtpChannel } from '../services/otpDelivery.service';
 
 export interface UserRecord {
@@ -22,7 +22,6 @@ export interface UserRecord {
   createdAt: string;
 }
 
-/** Bảng otp_challenges: lưu HMAC-SHA256 hash, thời hạn 5 phút, số lần sai & đánh dấu consumedAt chống replay. */
 export interface OtpRecord {
   identifier: string;
   channel: OtpChannel;
@@ -35,7 +34,6 @@ export interface OtpRecord {
   consumedAt: number | null;
 }
 
-/** Bảng sessions: quản lý Refresh Token rotation & thu hồi phiên trên từng hoặc mọi thiết bị. */
 export interface SessionRecord {
   id: string;
   userId: string;
@@ -45,6 +43,41 @@ export interface SessionRecord {
   expiresAt: number;
   revokedAt: number | null;
   replacedBySessionId: string | null;
+}
+
+export interface ImageFingerprintRecord {
+  id: string;
+  reportId: string;
+  photoId: string;
+  wardCode: string;
+  category: Category;
+  dHash: string;
+  pHash: string;
+  centerHash: string;
+  gridHashes: string[];
+  keypointCount: number;
+  descriptorsBase64: string;
+  lat: number;
+  lng: number;
+  createdAt: string;
+}
+
+export interface AiEvaluationRecord {
+  id: string;
+  reportId: string;
+  kind: 'authenticity' | 'duplicate' | 'resolution';
+  authenticityScore: number | null;
+  sceneMatchScore: number | null;
+  resolutionScore: number | null;
+  isAuthentic: boolean | null;
+  isDuplicate: boolean | null;
+  resolutionVerified: boolean | null;
+  inlierCount: number;
+  flags: string[];
+  engineMode: string;
+  latencyMs: number;
+  summary: string;
+  createdAt: string;
 }
 
 export interface BoundingBoxQuery {
@@ -60,7 +93,6 @@ export interface ReportQuery {
   category?: string;
   reporterId?: string;
   bbox?: BoundingBoxQuery;
-  /** Keyset/Cursor pagination: ISO timestamp `createdAt` của phần tử cuối trang trước */
   cursor?: string;
   limit?: number;
 }
@@ -72,15 +104,20 @@ export interface NearbyQuery {
   category?: string;
 }
 
+export interface UserFilterQuery {
+  role?: Role;
+  wardCode?: string;
+  isActive?: boolean;
+  q?: string;
+}
+
 export interface ReportRepository {
   list(q?: ReportQuery): Promise<Report[]>;
   get(id: string): Promise<Report | null>;
   getByCode(code: string): Promise<Report | null>;
   insert(report: Report): Promise<void>;
-  /** Thay thế toàn bộ bản ghi theo id. */
   update(report: Report): Promise<void>;
   findNearby(q: NearbyQuery): Promise<Report[]>;
-  /** Các hồ sơ tạo từ `sinceIso` đến nay (phục vụ so sánh dHash trong 24h). */
   findSince(sinceIso: string): Promise<Report[]>;
   countByReporterSince(reporterId: string, sinceIso: string): Promise<number>;
   count(): Promise<number>;
@@ -92,11 +129,31 @@ export interface UserRepository {
   getByEmail(email: string): Promise<UserRecord | null>;
   getByStaffCode(code: string): Promise<UserRecord | null>;
   save(user: UserRecord): Promise<void>;
+  delete(id: string): Promise<boolean>;
   list(role?: Role): Promise<UserRecord[]>;
+  query(filter?: UserFilterQuery): Promise<UserRecord[]>;
   count(): Promise<number>;
 }
 
-/** Nhật ký kiểm toán: CHỈ có append/đọc — không có update/delete. */
+export interface FingerprintRepository {
+  save(fp: ImageFingerprintRecord): Promise<void>;
+  findNearbyRecent(lat: number, lng: number, radiusM: number, sinceIso: string): Promise<ImageFingerprintRecord[]>;
+  listByReport(reportId: string): Promise<ImageFingerprintRecord[]>;
+  count(): Promise<number>;
+}
+
+export interface AiEvaluationRepository {
+  append(rec: AiEvaluationRecord): Promise<void>;
+  listByReport(reportId: string): Promise<AiEvaluationRecord[]>;
+  recent(limit?: number): Promise<AiEvaluationRecord[]>;
+  count(): Promise<number>;
+}
+
+export interface AiConfigRepository {
+  get(): Promise<DynamicAiConfig | null>;
+  save(cfg: DynamicAiConfig): Promise<void>;
+}
+
 export interface AuditRepository {
   last(): Promise<AuditEntry | null>;
   append(entry: AuditEntry): Promise<void>;
@@ -117,13 +174,29 @@ export interface SessionRepository {
   revokeAllForUser(userId: string): Promise<void>;
 }
 
+export interface DbHealthStats {
+  ok: boolean;
+  latencyMs: number;
+  counts: {
+    reports: number;
+    users: number;
+    fingerprints: number;
+    evaluations: number;
+    auditLogs: number;
+  };
+}
+
 export interface Repositories {
   mode: 'mongodb' | 'json';
   reports: ReportRepository;
   users: UserRepository;
+  fingerprints: FingerprintRepository;
+  evaluations: AiEvaluationRepository;
+  aiConfig: AiConfigRepository;
   audit: AuditRepository;
   otps: OtpRepository;
   sessions: SessionRepository;
   ping(): Promise<boolean>;
+  healthStats(): Promise<DbHealthStats>;
   close(): Promise<void>;
 }
