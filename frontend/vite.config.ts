@@ -1,12 +1,21 @@
 import react from '@vitejs/plugin-react';
+import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
 const DEFAULT_SITE_URL = 'https://smartcitizen-dongnai.onrender.com';
+const GOOGLE_VERIFICATION_FILE_NAME_RE = /^google[a-z0-9_-]+\.html$/i;
 
 function normalizeSiteUrl(raw?: string): string {
   const trimmed = (raw ?? '').trim().replace(/\/+$/, '');
   return /^https?:\/\/[^/\s]+/i.test(trimmed) ? trimmed : DEFAULT_SITE_URL;
+}
+
+function normalizeGoogleSiteVerification(raw?: string): string {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return '';
+  const metaMatch = trimmed.match(/<meta\b[^>]*\bcontent=["']([^"']+)["']/i);
+  return (metaMatch?.[1] ?? trimmed).trim();
 }
 
 function escapeHtmlAttr(value: string): string {
@@ -18,8 +27,15 @@ function escapeHtmlAttr(value: string): string {
 }
 
 function seoHtmlPlugin(siteUrl: string, verificationToken: string): Plugin {
+  let publicDir = path.resolve(__dirname, 'public');
+  let outDir = path.resolve(__dirname, 'dist');
+
   return {
     name: 'smartcitizen-seo-html',
+    configResolved(config) {
+      if (config.publicDir) publicDir = config.publicDir;
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
     transformIndexHtml(html) {
       let out = siteUrl !== DEFAULT_SITE_URL ? html.split(DEFAULT_SITE_URL).join(siteUrl) : html;
       const verificationMeta = verificationToken
@@ -28,13 +44,29 @@ function seoHtmlPlugin(siteUrl: string, verificationToken: string): Plugin {
       out = out.replace(/[ \t]*<!-- google-site-verification -->\r?\n?/g, verificationMeta ? `    ${verificationMeta}\n` : '');
       return out;
     },
+    closeBundle() {
+      if (!fs.existsSync(publicDir) || !fs.existsSync(outDir)) return;
+      for (const fileName of fs.readdirSync(publicDir)) {
+        if (!GOOGLE_VERIFICATION_FILE_NAME_RE.test(fileName)) continue;
+        const src = path.join(publicDir, fileName);
+        if (!fs.statSync(src).isFile()) continue;
+        fs.copyFileSync(src, path.join(outDir, fileName));
+      }
+    },
   };
 }
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const siteUrl = normalizeSiteUrl(env.VITE_SITE_URL || env.SITE_URL);
-  const verificationToken = (env.VITE_GOOGLE_SITE_VERIFICATION || env.GOOGLE_SITE_VERIFICATION || '').trim();
+  const siteUrl = normalizeSiteUrl(
+    env.VITE_SITE_URL || env.SITE_URL || process.env.VITE_SITE_URL || process.env.SITE_URL,
+  );
+  const verificationToken = normalizeGoogleSiteVerification(
+    env.VITE_GOOGLE_SITE_VERIFICATION ||
+      env.GOOGLE_SITE_VERIFICATION ||
+      process.env.VITE_GOOGLE_SITE_VERIFICATION ||
+      process.env.GOOGLE_SITE_VERIFICATION,
+  );
 
   return {
     base: '/',

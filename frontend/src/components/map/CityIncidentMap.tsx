@@ -751,7 +751,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-2.5">
-              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-rose-500/12 text-rose-600">
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-rose-500/10 text-rose-600">
                 <MapPinned className="h-4 w-4" aria-hidden />
               </span>
               <div className="min-w-0 flex-1">

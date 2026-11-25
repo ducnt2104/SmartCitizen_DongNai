@@ -188,6 +188,7 @@ export function usePageSeo(entry: RouteSeoEntry, lang: 'vi' | 'en' = 'vi'): void
       : null;
 
     upsertCanonical(canonicalUrl);
+    upsertMeta('property', 'og:locale', lang === 'en' ? 'en_US' : 'vi_VN');
     upsertMeta('property', 'og:title', entry.title);
     upsertMeta('property', 'og:description', entry.description);
     if (canonicalUrl) {

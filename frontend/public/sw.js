@@ -47,7 +47,16 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  if (url.pathname.startsWith('/api') || url.pathname === '/healthz' || url.pathname === '/sw.js') return;
+  if (
+    url.pathname.startsWith('/api') ||
+    url.pathname === '/healthz' ||
+    url.pathname === '/sw.js' ||
+    url.pathname === '/robots.txt' ||
+    url.pathname === '/sitemap.xml' ||
+    /^\/google[a-z0-9_-]+\.html$/i.test(url.pathname)
+  ) {
+    return;
+  }
 
   if (
     url.hostname.endsWith('tile.openstreetmap.org') ||

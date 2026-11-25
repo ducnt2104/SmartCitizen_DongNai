@@ -18,7 +18,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label={t('nav.main')}
-      className="safe-b fixed inset-x-0 bottom-0 z-40 border-t border-line/80 bg-surface/92 shadow-[0_-6px_24px_rgb(15_23_42/0.07)] backdrop-blur-xl md:hidden"
+      className="safe-b fixed inset-x-0 bottom-0 z-40 border-t border-line/80 bg-surface/90 shadow-[0_-6px_24px_rgb(15_23_42/0.07)] backdrop-blur-xl md:hidden"
     >
       <ul className="mx-auto grid max-w-lg grid-cols-5">
         {items.map(({ to, icon: Icon, label, end, tour }) => (

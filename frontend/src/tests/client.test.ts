@@ -168,7 +168,7 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     const dark = buildMapLibreStyle('dark');
     expect(roadmap.layers.length).toBe(1);
     expect(hybrid.layers.length).toBe(3); // Vệ tinh + Mạng lưới đường + Nhãn tên đường
-    expect(dark.layers.length).toBe(2);
+    expect(dark.layers.length).toBe(1); // CARTO dark_nolabels (nhãn 95 ĐVHC vẽ từ vector GeoJSON)
     expect(googleMapsPlaceUrl(10.9465, 106.8243)).toBe('https://www.google.com/maps/search/?api=1&query=10.946500,106.824300');
 
     const circle = createGeoJsonCircle(10.9465, 106.8243, 25, 32);

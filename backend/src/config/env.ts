@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { normalizeSiteUrl } from '../utils/seo';
+import { normalizeGoogleSiteVerification, normalizeSiteUrl } from '../utils/seo';
 import {
   DEFAULT_GEMINI_MODEL,
   normalizeGeminiModelName,
@@ -320,8 +320,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   const cookieSecure = parseBoolEnv(source, 'COOKIE_SECURE', isProd, issues);
   const dataDirRaw = readTrimmed(source, 'DATA_DIR') || './data';
   const siteUrl = normalizeSiteUrl(readTrimmed(source, 'SITE_URL') || readTrimmed(source, 'VITE_SITE_URL'));
-  const googleSiteVerification =
-    readTrimmed(source, 'GOOGLE_SITE_VERIFICATION') || readTrimmed(source, 'VITE_GOOGLE_SITE_VERIFICATION') || '';
+  const googleSiteVerification = normalizeGoogleSiteVerification(
+    readTrimmed(source, 'GOOGLE_SITE_VERIFICATION') || readTrimmed(source, 'VITE_GOOGLE_SITE_VERIFICATION'),
+  );
 
   if (issues.length > 0) {
     throw new Error(`\n${formatEnvErrorReport(issues, rawNodeEnv || nodeEnv)}`);
