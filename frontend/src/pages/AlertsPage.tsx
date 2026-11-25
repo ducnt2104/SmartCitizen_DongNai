@@ -19,7 +19,7 @@ import {
   Wind,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeRole } from '@shared/constants';
 import type {
   AlertCategory,
@@ -33,11 +33,17 @@ import type {
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
 import { useI18n } from '../i18n';
 import { api } from '../lib/api';
+import { fastFetch } from '../lib/swrCache';
 import { useSession } from '../lib/authStore';
 import { useToast } from '../state/toast';
-import { WardInspectorDrawer } from '../components/WardInspectorDrawer';
-import { UnifiedMapCanvas } from '../components/map/UnifiedMapCanvas';
 import { Spinner } from '../components/ui';
+
+const WardInspectorDrawer = lazy(() =>
+  import('../components/WardInspectorDrawer').then((m) => ({ default: m.WardInspectorDrawer })),
+);
+const UnifiedMapCanvas = lazy(() =>
+  import('../components/map/UnifiedMapCanvas').then((m) => ({ default: m.UnifiedMapCanvas })),
+);
 
 type FilterGroup = 'all' | 'disaster' | 'traffic' | 'utility_official';
 
@@ -108,14 +114,57 @@ export default function AlertsPage() {
   const commLoadedAtRef = useRef(Date.now());
   const [savingComm, setSavingComm] = useState(false);
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (forceRefresh = false) => {
     setLoading(true);
+    let active = true;
     try {
       const [wRes, aRes, bRes, dRes] = await Promise.allSettled([
-        api<{ items: WeatherSnapshotItem[]; lastSyncAt: string | null }>('/api/weather'),
-        api<{ items: CivicAlertItem[] }>('/api/alerts?status=active&limit=100'),
-        api<{ items: OfficialBulletinItem[] }>('/api/bulletins?limit=20'),
-        api<DailyDigestItem>('/api/ai/daily-digest'),
+        fastFetch<{ items: WeatherSnapshotItem[]; lastSyncAt: string | null }>(
+          '/api/weather',
+          () => api('/api/weather'),
+          {
+            staleMs: 60_000,
+            forceRefresh,
+            onUpdate: (fresh) => {
+              if (!active) return;
+              setWeather(fresh.items);
+              setWeatherSyncAt(fresh.lastSyncAt);
+            },
+          },
+        ),
+        fastFetch<{ items: CivicAlertItem[] }>(
+          '/api/alerts?status=active&limit=100',
+          () => api('/api/alerts?status=active&limit=100'),
+          {
+            staleMs: 30_000,
+            forceRefresh,
+            onUpdate: (fresh) => {
+              if (active) setAlerts(fresh.items);
+            },
+          },
+        ),
+        fastFetch<{ items: OfficialBulletinItem[] }>(
+          '/api/bulletins?limit=20',
+          () => api('/api/bulletins?limit=20'),
+          {
+            staleMs: 60_000,
+            forceRefresh,
+            onUpdate: (fresh) => {
+              if (active) setBulletins(fresh.items);
+            },
+          },
+        ),
+        fastFetch<DailyDigestItem>(
+          '/api/ai/daily-digest',
+          () => api('/api/ai/daily-digest'),
+          {
+            staleMs: 120_000,
+            forceRefresh,
+            onUpdate: (fresh) => {
+              if (active) setDigest(fresh);
+            },
+          },
+        ),
       ]);
       if (wRes.status === 'fulfilled') {
         setWeather(wRes.value.items);
@@ -133,6 +182,9 @@ export default function AlertsPage() {
     } finally {
       setLoading(false);
     }
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -640,28 +692,30 @@ export default function AlertsPage() {
             </span>
             {drawOpen && <span className="text-brand animate-pulse">Nhấn vào bản đồ để chấm tọa độ!</span>}
           </div>
-          <UnifiedMapCanvas
-            reports={mapMarkers}
-            alerts={filteredAlerts}
-            mode="pins"
-            fitCityOnMount
-            showArterials
-            showFitCityButton
-            draftPolyline={drawOpen && drawGeomType === 'polyline' ? drawPoints : undefined}
-            draftCircle={
-              drawOpen && drawGeomType === 'circle' && drawPoints[0]
-                ? { lat: drawPoints[0][0], lng: drawPoints[0][1], radiusM: drawRadiusM }
-                : null
-            }
-            onSelectAlert={(al) => setSelectedAlert(al)}
-            onMapClick={(lat, lng) => {
-              if (drawOpen) {
-                setDrawPoints((prev) => (drawGeomType === 'circle' ? [[lat, lng]] : [...prev, [lat, lng]]));
+          <Suspense fallback={<div className="h-[44dvh] animate-pulse rounded-2xl bg-surface-2 lg:h-[62dvh]" />}>
+            <UnifiedMapCanvas
+              reports={mapMarkers}
+              alerts={filteredAlerts}
+              mode="pins"
+              fitCityOnMount
+              showArterials
+              showFitCityButton
+              draftPolyline={drawOpen && drawGeomType === 'polyline' ? drawPoints : undefined}
+              draftCircle={
+                drawOpen && drawGeomType === 'circle' && drawPoints[0]
+                  ? { lat: drawPoints[0][0], lng: drawPoints[0][1], radiusM: drawRadiusM }
+                  : null
               }
-            }}
-            className="h-[44dvh] lg:h-[62dvh]"
-            ariaLabel="Bản đồ cảnh báo thiên tai và tuyến đường Đồng Nai"
-          />
+              onSelectAlert={(al) => setSelectedAlert(al)}
+              onMapClick={(lat, lng) => {
+                if (drawOpen) {
+                  setDrawPoints((prev) => (drawGeomType === 'circle' ? [[lat, lng]] : [...prev, [lat, lng]]));
+                }
+              }}
+              className="h-[44dvh] lg:h-[62dvh]"
+              ariaLabel="Bản đồ cảnh báo thiên tai và tuyến đường Đồng Nai"
+            />
+          </Suspense>
           {selectedAlert && (
             <div className="card flex items-start justify-between gap-2 border-brand/30 p-3 text-xs">
               <div>
@@ -931,7 +985,11 @@ export default function AlertsPage() {
         </div>
       )}
 
-      <WardInspectorDrawer wardCode={inspectWardCode} onClose={() => setInspectWardCode(null)} />
+      {inspectWardCode && (
+        <Suspense fallback={<div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl animate-pulse bg-surface shadow-2xl" />}>
+          <WardInspectorDrawer wardCode={inspectWardCode} onClose={() => setInspectWardCode(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

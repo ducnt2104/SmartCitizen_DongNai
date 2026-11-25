@@ -12,14 +12,6 @@ import { canSee } from './services/access';
 import type { Services } from './services/container';
 import type { Category } from './shared/types';
 import { WARD_BY_CODE } from './shared/dongNaiWards';
-
-const CATEGORY_VI: Record<Category, string> = {
-  rac_thai: 'Rác thải & Môi trường',
-  den_duong: 'Đèn chiếu sáng & Điện',
-  ngap_nuoc: 'Ngập nước & Thoát nước',
-  mat_duong: 'Hư hỏng mặt đường',
-  khac: 'Sự cố đô thị khác',
-};
 import { smartCompressionMiddleware } from './utils/compression';
 import {
   buildRobotsTxt,
@@ -33,7 +25,15 @@ import {
   type SitemapRoute,
 } from './utils/seo';
 
-const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+const CATEGORY_VI: Record<Category, string> = {
+  rac_thai: 'Rác thải & Môi trường',
+  den_duong: 'Đèn chiếu sáng & Điện',
+  ngap_nuoc: 'Ngập nước & Thoát nước',
+  mat_duong: 'Hư hỏng mặt đường',
+  khac: 'Sự cố đô thị khác',
+};
+
+const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
 const LEGACY_JSON_IMAGE_ROUTE_RE =
   /^\/api\/(?:reports(?:\/[^/]+\/attach-photo)?|volunteer\/(?:proxy-report|tasks\/[^/]+\/verify)|rescue\/missions\/[^/]+\/(?:status|complete)|admin\/reports\/[^/]+\/resolve|ai\/(?:analyze-image|verify-resolution))$/;
 
@@ -67,6 +67,20 @@ export function createApp(
   app.disable('x-powered-by');
   app.set('trust proxy', 1); // Render đặt sau reverse proxy
 
+  // Gắn Server-Timing: total;dur=<ms> trước khi header được đẩy ra socket cho mọi endpoint
+  app.use((_req, res, next) => {
+    const startNs = process.hrtime.bigint();
+    const origWriteHead = res.writeHead.bind(res) as (...args: unknown[]) => typeof res;
+    res.writeHead = ((...args: unknown[]) => {
+      if (!res.headersSent && !res.hasHeader('Server-Timing')) {
+        const durMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+        res.setHeader('Server-Timing', `total;dur=${durMs.toFixed(2)}`);
+      }
+      return origWriteHead(...args);
+    }) as typeof res.writeHead;
+    next();
+  });
+
   app.use(
     helmet({
       frameguard: { action: 'deny' },
@@ -96,7 +110,6 @@ export function createApp(
             'https://*.ggpht.com',
             'https://tile.openstreetmap.org',
             'https://*.tile.openstreetmap.org',
-            'https://tile.openstreetmap.org',
             'https://*.basemaps.cartocdn.com',
             'https://server.arcgisonline.com',
             'https://services.arcgisonline.com',
@@ -113,7 +126,6 @@ export function createApp(
             'https://nominatim.openstreetmap.org',
             'https://tile.openstreetmap.org',
             'https://*.tile.openstreetmap.org',
-            'https://tile.openstreetmap.org',
             'https://*.basemaps.cartocdn.com',
             'https://server.arcgisonline.com',
             'https://services.arcgisonline.com',
@@ -159,6 +171,12 @@ export function createApp(
       cb(new Error(`Origin không được phép: ${origin}`));
     }),
   );
+  // Fast-path health ping (không đi qua JSON body parser / rate limiter nặng -> phản hồi < 5ms)
+  app.get('/api/health/ping', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ ok: true, ts: Date.now() });
+  });
+
   // Nén Brotli (`br`) & Gzip đa chuẩn, bỏ qua SSE và ảnh WebP đã nén
   app.use(smartCompressionMiddleware());
   const strictJsonParser = express.json({ limit: '100kb' });
@@ -265,6 +283,50 @@ export function createApp(
     const assetsDir = path.join(dist, 'assets') + path.sep;
     const indexHtmlPath = path.join(dist, 'index.html');
     const rawIndexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
+
+    const PRECOMPRESSED_MIME: Record<string, string> = {
+      '.js': 'application/javascript; charset=utf-8',
+      '.mjs': 'application/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.svg': 'image/svg+xml; charset=utf-8',
+    };
+
+    // Phục vụ trực tiếp bản nén tĩnh .br / .gz do Vite precompress sinh ra để tiết kiệm CPU Render
+    app.use('/assets', (req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        next();
+        return;
+      }
+      const ext = path.extname(req.path).toLowerCase();
+      const mime = PRECOMPRESSED_MIME[ext];
+      if (!mime) {
+        next();
+        return;
+      }
+      const rel = req.path.replace(/^\/+/, '');
+      const fullPath = path.resolve(assetsDir, rel);
+      if (!fullPath.startsWith(assetsDir)) {
+        next();
+        return;
+      }
+      const ae = String(req.headers['accept-encoding'] ?? '');
+      const tryVariants: Array<{ suffix: '.br' | '.gz'; enc: 'br' | 'gzip' }> = [];
+      if (/\bbr\b/i.test(ae)) tryVariants.push({ suffix: '.br', enc: 'br' });
+      if (/\bgzip\b/i.test(ae)) tryVariants.push({ suffix: '.gz', enc: 'gzip' });
+
+      for (const variant of tryVariants) {
+        const encodedPath = `${fullPath}${variant.suffix}`;
+        if (fs.existsSync(encodedPath)) {
+          res.setHeader('Content-Encoding', variant.enc);
+          res.setHeader('Vary', 'Accept-Encoding');
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          res.sendFile(encodedPath);
+          return;
+        }
+      }
+      next();
+    });
 
     app.use(
       express.static(dist, {

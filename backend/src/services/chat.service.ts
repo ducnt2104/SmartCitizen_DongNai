@@ -83,12 +83,8 @@ export class ChatService {
     const scope = wardCode && WARD_BY_CODE[wardCode] ? `ward:${wardCode}` : 'city';
     const scopeLabel = scope === 'city' ? 'Toàn TP. Đồng Nai (95 xã, phường)' : WARD_BY_CODE[wardCode!].name;
     const directIntent = this.rag ? this.rag.matchDirectIntent(lastUserText, wardCode) : null;
-    const ragHits = (this.rag ? this.rag.retrieve(lastUserText, 3, wardCode) : []).map((h) => ({
-      title: h.doc.title,
-      content: h.doc.content,
-    }));
 
-    // Nếu câu hỏi là hướng dẫn phổ biến (đã khớp Direct Intent độ tin cậy cao), không cần chờ truy vấn DB!
+    // Nếu câu hỏi là hướng dẫn phổ biến (đã khớp Direct Intent độ tin cậy cao), trả lời ngay < 5ms không cần RAG/DB!
     if (directIntent && directIntent.confidence >= 0.9) {
       const emptyStats = computeStats([], scope);
       return {
@@ -97,13 +93,18 @@ export class ChatService {
         mine: [],
         scopeLabel,
         stats: emptyStats,
-        ragHits,
+        ragHits: [],
         directIntent,
       };
     }
 
-    // Đọc danh sách báo cáo với giới hạn thời gian 120ms (không bao giờ treo nếu kết nối mạng chậm)
-    const all = await withFastFallback(this.repos.reports.list(), 120, [] as Report[]);
+    const ragHits = (this.rag ? this.rag.retrieve(lastUserText, 3, wardCode) : []).map((h) => ({
+      title: h.doc.title,
+      content: h.doc.content,
+    }));
+
+    // Đọc tối đa 200 hồ sơ gần nhất với giới hạn thời gian 120ms (không quét vô hạn collection)
+    const all = await withFastFallback(this.repos.reports.list({ limit: 200 }), 120, [] as Report[]);
     const visible = all.filter((r) => canSee(user, r));
     const inScope = scope === 'city' ? all : all.filter((r) => r.wardCode === wardCode);
     const stats = computeStats(inScope.map(toClientReport), scope);

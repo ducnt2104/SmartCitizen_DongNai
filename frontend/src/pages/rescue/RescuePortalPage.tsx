@@ -597,6 +597,7 @@ export default function RescuePortalPage() {
                   alt={incomingMission.title}
                   width={80}
                   height={80}
+                  loading="lazy"
                   decoding="async"
                   className="h-16 w-16 shrink-0 rounded-2xl border border-slate-700 object-cover sm:h-20 sm:w-20"
                 />

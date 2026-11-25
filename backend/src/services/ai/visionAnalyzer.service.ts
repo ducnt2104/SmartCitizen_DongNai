@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
 import { env } from '../../config/env';
-import { computeSosPriorityScore, toSeverityLabel } from '../../shared/constants';
+import { computeSosPriorityScore } from '../../shared/constants';
 import { WARD_BY_CODE } from '../../shared/dongNaiWards';
 import type {
   AbuseRisk,

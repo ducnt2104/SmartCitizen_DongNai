@@ -1,5 +1,6 @@
 import { computeStats } from '@shared/report';
 import { DONG_NAI_WARDS } from '@shared/dongNaiWards';
+import { hydrateDongNaiWardZonesCache } from '../data/dongNaiBoundary';
 import { db, getSetting, putSetting } from './localDb';
 
 const SEED_VERSION = '2026-11-prod-v3';
@@ -30,6 +31,7 @@ export async function purgeLocalSeedReports(): Promise<number> {
  */
 export async function hydrate(): Promise<{ seeded: boolean; ms: number }> {
   const t0 = performance.now();
+  void hydrateDongNaiWardZonesCache();
   const version = await getSetting<string>('seedVersion', '');
   const wardsCount = await db.wards.count();
   if (version === SEED_VERSION && wardsCount >= DONG_NAI_WARDS.length) {

@@ -1,7 +1,50 @@
-import react from '@vitejs/plugin-react';
 import fs from 'node:fs';
 import path from 'node:path';
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib';
+import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
+
+const PRECOMPRESS_EXTS = new Set(['.js', '.mjs', '.css', '.html', '.svg', '.json']);
+const PRECOMPRESS_MIN_BYTES = 1024;
+
+function walkFiles(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkFiles(full));
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
+}
+
+/** Tạo sẵn file .br (Brotli q11) & .gz (Gzip level 9) sau khi Vite build xong */
+function staticPrecompressPlugin(): Plugin {
+  let outDir = path.resolve(process.cwd(), 'dist');
+  return {
+    name: 'static-precompress-br-gz',
+    apply: 'build',
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      for (const file of walkFiles(outDir)) {
+        if (!PRECOMPRESS_EXTS.has(path.extname(file).toLowerCase())) continue;
+        const raw = fs.readFileSync(file);
+        if (raw.byteLength < PRECOMPRESS_MIN_BYTES) continue;
+        const br = brotliCompressSync(raw, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 11,
+            [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.byteLength,
+          },
+        });
+        if (br.byteLength < raw.byteLength) fs.writeFileSync(`${file}.br`, br);
+        const gz = gzipSync(raw, { level: 9 });
+        if (gz.byteLength < raw.byteLength) fs.writeFileSync(`${file}.gz`, gz);
+      }
+    },
+  };
+}
 
 const DEFAULT_SITE_URL = 'https://smartcitizen-dongnai.onrender.com';
 const GOOGLE_VERIFICATION_FILE_NAME_RE = /^google[a-z0-9_-]+\.html$/i;
@@ -86,7 +129,11 @@ export default defineConfig(({ mode }) => {
   return {
     base: '/',
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
-    plugins: [react(), seoHtmlPlugin(siteUrl, verificationToken)],
+    plugins: [react(), seoHtmlPlugin(siteUrl, verificationToken), staticPrecompressPlugin()],
+    esbuild:
+      mode === 'production'
+        ? { drop: ['debugger'], pure: ['console.log', 'console.debug', 'console.info'] }
+        : undefined,
     resolve: {
       alias: {
         '@shared': path.resolve(__dirname, 'src/shared'),
@@ -109,6 +156,7 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             react: ['react', 'react-dom', 'react-router-dom'],
+            firebase: ['firebase/app', 'firebase/auth'],
             'google-maps': ['@vis.gl/react-google-maps', '@googlemaps/markerclusterer'],
             maplibre: ['maplibre-gl'],
             charts: ['recharts'],

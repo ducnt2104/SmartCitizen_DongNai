@@ -1,8 +1,11 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CitizenLogin } from '../components/CitizenLogin';
+import { createContext, lazy, Suspense, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Sheet } from '../components/ui';
 import { useI18n } from '../i18n';
 import { authStore } from '../lib/authStore';
+
+const CitizenLogin = lazy(() =>
+  import('../components/CitizenLogin').then((m) => ({ default: m.CitizenLogin })),
+);
 
 interface Ctx {
   /** Mở hộp thoại OTP nếu chưa đăng nhập. Resolve true khi đã có phiên hợp lệ. */
@@ -36,7 +39,11 @@ export function AuthGateProvider({ children }: { children: ReactNode }) {
       {children}
       <Sheet open={open} onClose={() => finish(false)} title={t('auth.gateTitle')}>
         <p className="mb-4 text-sm text-muted">{t('auth.gateText')}</p>
-        <CitizenLogin compact onDone={() => finish(true)} />
+        {open ? (
+          <Suspense fallback={<div className="h-44 animate-pulse rounded-2xl bg-surface-2" aria-busy="true" />}>
+            <CitizenLogin compact onDone={() => finish(true)} />
+          </Suspense>
+        ) : null}
       </Sheet>
     </AuthGateContext.Provider>
   );

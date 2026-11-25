@@ -232,8 +232,8 @@ async function connectMongooseWithDnsFallback(uri: string, opts: ConnectOptions)
 
 /**
  * Cấu hình Connection Pool chuẩn Cloud Production (Render -> MongoDB Atlas):
- * - serverSelectionTimeoutMS: 10000ms (chịu được độ trễ cold-start của container Render & cụm M0/M2 Atlas)
- * - connectTimeoutMS: 10000ms, socketTimeoutMS: 45000ms
+ * - maxPoolSize: 10, minPoolSize: 2 (tiết kiệm RAM & socket TLS trên Render 512MB)
+ * - serverSelectionTimeoutMS: 5000ms, connectTimeoutMS: 10000ms, socketTimeoutMS: 20000ms
  * - family: 4 (ép dùng IPv4 tránh lỗi dual-stack IPv6 DNS/TLS handshake treo trên Linux container)
  */
 export function buildMongoConnectOptions(uri?: string): ConnectOptions {
@@ -241,11 +241,11 @@ export function buildMongoConnectOptions(uri?: string): ConnectOptions {
   const explicitServerSel = parseExplicitTimeoutFromUri(uri, 'serverSelectionTimeoutMS');
   return {
     ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
-    maxPoolSize: 20,
+    maxPoolSize: 10,
     minPoolSize: 2,
     serverSelectionTimeoutMS: explicitServerSel ?? 5_000,
     connectTimeoutMS: 10_000,
-    socketTimeoutMS: 45_000,
+    socketTimeoutMS: 20_000,
     maxIdleTimeMS: 60_000,
     // Ép IPv4 để tránh lỗi DNS/TLS handshake chậm trên container Linux (Render / Docker)
     family: 4,

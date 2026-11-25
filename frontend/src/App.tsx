@@ -1,11 +1,15 @@
-import { Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { UserProfile } from '@shared/types';
 import { CommunityLayout } from './components/CommunityLayout';
 import { RoleGuard } from './components/RoleGuard';
 import { RouteErrorBoundary, RouteLoadingSkeleton } from './components/RouteErrorBoundary';
-import { SettingsDrawer } from './components/SettingsDrawer';
-import { SpotlightTour } from './components/SpotlightTour';
+const SettingsDrawer = lazy(() =>
+  import('./components/SettingsDrawer').then((m) => ({ default: m.SettingsDrawer })),
+);
+const SpotlightTour = lazy(() =>
+  import('./components/SpotlightTour').then((m) => ({ default: m.SpotlightTour })),
+);
 import { syncBus, type SyncEventDetail } from './db/sync';
 import { useI18n, type I18nKey } from './i18n';
 import { api, apiUrl, sessionTerminatedBus, type SessionTerminatedDetail } from './lib/api';
@@ -176,8 +180,10 @@ export default function App() {
           </Routes>
         </Suspense>
       </RouteErrorBoundary>
-      <SettingsDrawer />
-      <SpotlightTour />
+      <Suspense fallback={null}>
+        <SettingsDrawer />
+        <SpotlightTour />
+      </Suspense>
     </BrowserRouter>
   );
 }

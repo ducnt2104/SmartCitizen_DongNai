@@ -21,6 +21,7 @@ import type {
 } from '../shared/types';
 import { env } from '../config/env';
 import { Alert, Bulletin, ReportModel, WeatherSnapshot } from '../models';
+import { reportFromDoc } from '../repositories/mongoRepositories';
 import type { Repositories, UserRecord } from '../repositories/types';
 import { newId, sha256 } from '../utils/crypto';
 import { badRequest, notFound } from '../utils/errors';
@@ -726,6 +727,198 @@ export class AlertsAndWardsService {
     const pageSize = Math.min(Math.max(1, opts.pageSize ?? 20), 60);
     const statusFilter = opts.statusFilter ?? 'all';
     const since30dMs = Date.now() - 30 * DAY_MS;
+    const since30dIso = new Date(since30dMs).toISOString();
+
+    if (this.repos.mode === 'mongodb' && mongoose.connection.readyState === 1) {
+      const incidentStatusStage = {
+        $match:
+          statusFilter === 'open'
+            ? { normStatus: { $ne: 'resolved' } }
+            : statusFilter === 'resolved'
+              ? { normStatus: 'resolved' }
+              : {},
+      };
+      const [aggRows, alerts, bulletins, weatherSnapshots] = await Promise.all([
+        ReportModel.aggregate<{
+          statsSummary: Array<{
+            totalReports: number;
+            resolvedReports: number;
+            openReports: number;
+            emergencyReports: number;
+          }>;
+          resolvedDurations: Array<{ createdAt: string; resolvedAt?: string; updatedAt: string }>;
+          heatmapRows: Array<{ lat: number; lng: number; severity?: number; normStatus: string }>;
+          totalCount: Array<{ n: number }>;
+          paged: Array<Record<string, unknown>>;
+        }>([
+          {
+            $match: {
+              wardCode: ward.wardCode,
+              status: { $nin: ['quarantined', 'rejected'] },
+            },
+          },
+          {
+            $addFields: {
+              normStatus: {
+                $switch: {
+                  branches: [
+                    { case: { $eq: ['$status', 'PENDING'] }, then: 'received' },
+                    { case: { $eq: ['$status', 'VERIFIED'] }, then: 'verifying' },
+                    { case: { $in: ['$status', ['DISPATCHED', 'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS']] }, then: 'processing' },
+                    { case: { $eq: ['$status', 'RESOLVED'] }, then: 'resolved' },
+                  ],
+                  default: '$status',
+                },
+              },
+              emergRank: {
+                $switch: {
+                  branches: [
+                    { case: { $eq: ['$priority', 'emergency'] }, then: 2 },
+                    { case: { $eq: ['$priority', 'high'] }, then: 1 },
+                  ],
+                  default: 0,
+                },
+              },
+            },
+          },
+          {
+            $addFields: {
+              isOpen: { $ne: ['$normStatus', 'resolved'] },
+            },
+          },
+          {
+            $facet: {
+              statsSummary: [
+                { $match: { createdAt: { $gte: since30dIso } } },
+                {
+                  $group: {
+                    _id: null,
+                    totalReports: { $sum: 1 },
+                    resolvedReports: { $sum: { $cond: [{ $eq: ['$normStatus', 'resolved'] }, 1, 0] } },
+                    openReports: {
+                      $sum: {
+                        $cond: [{ $in: ['$normStatus', ['received', 'verifying', 'processing']] }, 1, 0],
+                      },
+                    },
+                    emergencyReports: {
+                      $sum: {
+                        $cond: [
+                          {
+                            $and: [
+                              { $in: ['$normStatus', ['received', 'verifying', 'processing']] },
+                              { $or: [{ $eq: ['$priority', 'emergency'] }, { $gte: ['$severity', 4] }] },
+                            ],
+                          },
+                          1,
+                          0,
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+              resolvedDurations: [
+                { $match: { createdAt: { $gte: since30dIso }, normStatus: 'resolved' } },
+                { $project: { _id: 0, createdAt: 1, resolvedAt: 1, updatedAt: 1 } },
+              ],
+              heatmapRows: [
+                { $match: { createdAt: { $gte: since30dIso }, lat: { $type: 'number' }, lng: { $type: 'number' } } },
+                { $limit: 300 },
+                { $project: { _id: 0, lat: 1, lng: 1, severity: 1, normStatus: 1 } },
+              ],
+              totalCount: [incidentStatusStage, { $count: 'n' }],
+              paged: [
+                incidentStatusStage,
+                { $sort: { isOpen: -1, emergRank: -1, createdAt: -1 } },
+                { $skip: (page - 1) * pageSize },
+                { $limit: pageSize },
+                { $project: { _id: 0, normStatus: 0, emergRank: 0, isOpen: 0, location: 0, imageHash: 0, syncId: 0, customCategoryLabel: 0 } },
+              ],
+            },
+          },
+        ]),
+        this.listAlerts({ wardId: ward.wardCode, status: 'active', limit: 30 }),
+        this.listBulletins({ wardId: ward.wardCode, limit: 20 }),
+        this.getLatestWeatherSnapshots(),
+      ]);
+
+      const agg = aggRows[0];
+      const sm = agg?.statsSummary?.[0];
+      const totalReports = sm?.totalReports ?? 0;
+      const resolvedReports = sm?.resolvedReports ?? 0;
+      const resolvedPct = totalReports > 0 ? Math.round((resolvedReports / totalReports) * 100) : 0;
+      const openReports = sm?.openReports ?? 0;
+      const emergencyReports = sm?.emergencyReports ?? 0;
+
+      let totalHours = 0;
+      let resolvedWithDuration = 0;
+      for (const r of agg?.resolvedDurations ?? []) {
+        const startMs = Date.parse(r.createdAt);
+        const endMs = Date.parse(r.resolvedAt || r.updatedAt);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+          totalHours += (endMs - startMs) / 3_600_000;
+          resolvedWithDuration += 1;
+        }
+      }
+      const avgResolutionHours =
+        resolvedWithDuration > 0 ? Math.round((totalHours / resolvedWithDuration) * 10) / 10 : null;
+      const areaStatus: WardOverviewStatus =
+        emergencyReports >= 2 || openReports >= 6
+          ? 'Điểm nóng'
+          : openReports >= 2 || emergencyReports >= 1
+            ? 'Cần chú ý'
+            : 'Ổn định';
+      const heatmapPoints: Array<[number, number, number]> = (agg?.heatmapRows ?? [])
+        .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng))
+        .map((r) => {
+          const base = Math.min(1, Math.max(0.25, (r.severity ?? 2) / 5));
+          const openBoost = r.normStatus === 'resolved' ? 0 : 0.2;
+          const intensity = Math.round(Math.min(1, base + openBoost) * 100) / 100;
+          return [r.lat, r.lng, intensity];
+        });
+      const totalFiltered = agg?.totalCount?.[0]?.n ?? 0;
+      const pagedIncidents = (agg?.paged ?? [])
+        .map((d) => reportFromDoc(d))
+        .filter((r): r is Report => Boolean(r));
+      const startIdx = (page - 1) * pageSize;
+
+      let matchedWeather: WeatherSnapshotItem | null =
+        weatherSnapshots.find((w) => w.wardCode === ward.wardCode) ?? null;
+      if (!matchedWeather && weatherSnapshots.length > 0) {
+        let bestDist = Infinity;
+        for (const w of weatherSnapshots) {
+          const d = haversineMeters(ward.centerLat, ward.centerLng, w.lat, w.lng);
+          if (d < bestDist) {
+            bestDist = d;
+            matchedWeather = w;
+          }
+        }
+      }
+
+      return {
+        ward,
+        stats30d: {
+          totalReports,
+          resolvedReports,
+          resolvedPct,
+          openReports,
+          emergencyReports,
+          avgResolutionHours,
+          areaStatus,
+        },
+        heatmapPoints,
+        incidents: {
+          items: pagedIncidents,
+          total: totalFiltered,
+          page,
+          pageSize,
+          hasMore: startIdx + pagedIncidents.length < totalFiltered,
+        },
+        alerts,
+        bulletins,
+        weather: matchedWeather,
+      };
+    }
 
     const [wardReportsAll, alerts, bulletins, weatherSnapshots] = await Promise.all([
       this.repos.reports.list({ wardCodes: [ward.wardCode], projection: 'full', limit: 500 }),

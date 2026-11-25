@@ -47,11 +47,11 @@ afterAll(async () => {
 describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', () => {
   it('cấu hình Connection Pool chuẩn Cloud (Render -> Atlas IPv4) và kiểm soát retry / fallback an toàn', async () => {
     const opts = buildMongoConnectOptions();
-    expect(opts.maxPoolSize).toBe(20);
+    expect(opts.maxPoolSize).toBe(10);
     expect(opts.minPoolSize).toBe(2);
     expect(opts.serverSelectionTimeoutMS).toBe(5_000);
     expect(opts.connectTimeoutMS).toBe(10_000);
-    expect(opts.socketTimeoutMS).toBe(45_000);
+    expect(opts.socketTimeoutMS).toBe(20_000);
     expect(opts.family).toBe(4);
     expect(opts.retryWrites).toBe(true);
     expect(opts.w).toBe('majority');

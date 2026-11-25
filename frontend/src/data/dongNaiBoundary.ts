@@ -206,11 +206,96 @@ function clipPolygonByBisector(
   return deduped;
 }
 
+const WARD_ZONES_IDB_NAME = 'sc_dongnai_geo_cache_v1';
+const WARD_ZONES_IDB_STORE = 'geojson';
+const WARD_ZONES_CACHE_KEY = 'dn_95_ward_zones_v1';
+
 let cachedWardZones: GeoJSON.FeatureCollection<GeoJSON.Polygon> | null = null;
+let hydratePromise: Promise<GeoJSON.FeatureCollection<GeoJSON.Polygon> | null> | null = null;
+
+function openGeoCacheDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(WARD_ZONES_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(WARD_ZONES_IDB_STORE)) {
+          db.createObjectStore(WARD_ZONES_IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function persistWardZonesToIdb(fc: GeoJSON.FeatureCollection<GeoJSON.Polygon>): void {
+  if (typeof indexedDB === 'undefined') return;
+  const run = () => {
+    void openGeoCacheDb().then((db) => {
+      if (!db) return;
+      try {
+        const tx = db.transaction(WARD_ZONES_IDB_STORE, 'readwrite');
+        tx.objectStore(WARD_ZONES_IDB_STORE).put(fc, WARD_ZONES_CACHE_KEY);
+        tx.oncomplete = () => db.close();
+        tx.onerror = () => db.close();
+      } catch {
+        db.close();
+      }
+    });
+  };
+  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+    (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(run);
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
+/** Nạp trước GeoJSON 95 xã/phường từ IndexedDB vào Memory Cache cho các lần mở trang sau (0ms) */
+export function hydrateDongNaiWardZonesCache(): Promise<GeoJSON.FeatureCollection<GeoJSON.Polygon> | null> {
+  if (cachedWardZones) return Promise.resolve(cachedWardZones);
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = openGeoCacheDb()
+    .then(
+      (db) =>
+        new Promise<GeoJSON.FeatureCollection<GeoJSON.Polygon> | null>((resolve) => {
+          if (!db) {
+            resolve(null);
+            return;
+          }
+          try {
+            const tx = db.transaction(WARD_ZONES_IDB_STORE, 'readonly');
+            const getReq = tx.objectStore(WARD_ZONES_IDB_STORE).get(WARD_ZONES_CACHE_KEY);
+            getReq.onsuccess = () => {
+              const val = getReq.result as GeoJSON.FeatureCollection<GeoJSON.Polygon> | undefined;
+              if (val && val.type === 'FeatureCollection' && Array.isArray(val.features) && val.features.length === 95) {
+                cachedWardZones = val;
+                resolve(val);
+              } else {
+                resolve(null);
+              }
+              db.close();
+            };
+            getReq.onerror = () => {
+              db.close();
+              resolve(null);
+            };
+          } catch {
+            db.close();
+            resolve(null);
+          }
+        }),
+    )
+    .catch(() => null);
+  return hydratePromise;
+}
 
 /**
  * Tạo lớp vùng 95 Đơn vị hành chính 2 cấp (33 Phường, 62 Xã) cắt khớp chính xác vào ranh giới thật
- * Thành phố Đồng Nai bằng phân hoạch Voronoi hiệu chỉnh theo vĩ độ trung tâm.
+ * Thành phố Đồng Nai bằng phân hoạch Voronoi hiệu chỉnh theo vĩ độ trung tâm (có IndexedDB + Memory Cache).
  */
 export function buildDongNaiWardZonesGeoJson(): GeoJSON.FeatureCollection<GeoJSON.Polygon> {
   if (cachedWardZones) return cachedWardZones;
@@ -257,5 +342,6 @@ export function buildDongNaiWardZonesGeoJson(): GeoJSON.FeatureCollection<GeoJSO
   }
 
   cachedWardZones = { type: 'FeatureCollection', features };
+  persistWardZonesToIdb(cachedWardZones);
   return cachedWardZones;
 }

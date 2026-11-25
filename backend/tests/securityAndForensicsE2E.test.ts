@@ -409,6 +409,7 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
     });
     expect(loginB.status).toBe(200);
     const tokenB = loginB.data.token as string;
+    expect(tokenB).toBeTruthy();
     const cookiesB = loginB.cookies;
 
     // Đọc thông báo đá phiên live từ SSE của Thiết bị A

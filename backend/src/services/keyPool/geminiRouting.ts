@@ -177,8 +177,9 @@ async function callSingleGeminiRequest(params: {
     config: params.config,
   });
 
+  const effectiveTimeoutMs = Math.min(params.timeoutMs, 8_000);
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), params.timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), effectiveTimeoutMs);
   try {
     let res: Response;
     try {
@@ -191,7 +192,7 @@ async function callSingleGeminiRequest(params: {
     } catch (err) {
       if (ctrl.signal.aborted) {
         throw Object.assign(
-          new Error(`${params.label} ${req.endpointLabel}(${params.modelId}) quá thời gian ${params.timeoutMs}ms`),
+          new Error(`${params.label} ${req.endpointLabel}(${params.modelId}) quá thời gian ${effectiveTimeoutMs}ms`),
           { status: 408 },
         );
       }

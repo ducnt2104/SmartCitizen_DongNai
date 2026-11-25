@@ -9,7 +9,6 @@ import type {
   AiEvaluationRepository,
   AtomicRescueClaimInput,
   AuditRepository,
-  DbHealthStats,
   FingerprintRepository,
   ImageFingerprintRecord,
   NearbyQuery,

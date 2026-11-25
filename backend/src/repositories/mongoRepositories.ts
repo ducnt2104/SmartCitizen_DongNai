@@ -89,7 +89,7 @@ const MONGO_TO_REPORT_STATUS: Record<string, ReportStatus> = {
   RESOLVED: 'resolved',
 };
 
-function expandMongoStatuses(statuses: ReportStatus[]): string[] {
+export function expandMongoStatuses(statuses: ReportStatus[]): string[] {
   const out = new Set<string>();
   for (const s of statuses) {
     out.add(s);
@@ -106,7 +106,7 @@ function expandMongoStatuses(statuses: ReportStatus[]): string[] {
   return [...out];
 }
 
-function reportFromDoc(doc: Doc | null): Report | null {
+export function reportFromDoc(doc: Doc | null): Report | null {
   if (!doc) return null;
   const { location, imageHash, syncId, customCategoryLabel, ...rest } = doc;
   void imageHash;

@@ -40,6 +40,8 @@ reportSchema.index({ status: 1, createdAt: -1 });
 reportSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 reportSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
 reportSchema.index({ wardCode: 1, category: 1, status: 1, createdAt: -1 });
+reportSchema.index({ category: 1, severity: -1, createdAt: -1 });
+reportSchema.index({ status: 1, severity: -1, createdAt: -1 });
 reportSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });

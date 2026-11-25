@@ -19,7 +19,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { WardOverviewResponse } from '@shared/types';
 import heroPhoto from '../assets/dongnai-hero.jpg';
 import { ReportCard } from '../components/ReportCard';
-import { WardInspectorDrawer } from '../components/WardInspectorDrawer';
+import { fastFetch } from '../lib/swrCache';
+
+const WardInspectorDrawer = lazy(() =>
+  import('../components/WardInspectorDrawer').then((m) => ({ default: m.WardInspectorDrawer })),
+);
 import { EmptyState, SkeletonBlock, SkeletonList } from '../components/ui';
 import { useScopedReports, useStats } from '../db/hooks';
 import { useI18n } from '../i18n';
@@ -116,8 +120,24 @@ export default function HomePage() {
       return;
     }
     let active = true;
+    const codes = followedCodes.slice(0, 4);
     void Promise.allSettled(
-      followedCodes.slice(0, 4).map((wc) => api<WardOverviewResponse>(`/api/wards/${encodeURIComponent(wc)}/overview?pageSize=1`)),
+      codes.map((wc) => {
+        const path = `/api/wards/${encodeURIComponent(wc)}/overview?pageSize=1`;
+        return fastFetch<WardOverviewResponse>(path, () => api<WardOverviewResponse>(path), {
+          staleMs: 45_000,
+          onUpdate: (fresh) => {
+            if (!active) return;
+            setPinnedOverviews((prev) => {
+              const idx = prev.findIndex((p) => p.ward.wardCode === fresh.ward.wardCode);
+              if (idx < 0) return [...prev, fresh];
+              const next = prev.slice();
+              next[idx] = fresh;
+              return next;
+            });
+          },
+        });
+      }),
     ).then((results) => {
       if (!active) return;
       const loaded = results
@@ -421,7 +441,11 @@ export default function HomePage() {
           <ReportDetail id={openId} onClose={() => setOpenId(null)} />
         </Suspense>
       )}
-      <WardInspectorDrawer wardCode={inspectWardCode} onClose={() => setInspectWardCode(null)} />
+      {inspectWardCode && (
+        <Suspense fallback={<div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl animate-pulse bg-surface shadow-2xl" />}>
+          <WardInspectorDrawer wardCode={inspectWardCode} onClose={() => setInspectWardCode(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

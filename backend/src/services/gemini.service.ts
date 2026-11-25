@@ -1,30 +1,20 @@
 import { z } from 'zod';
-
-interface GeminiRestGenerateParams {
-  model?: string;
-  contents: unknown;
-  config?: Record<string, unknown>;
-}
 import {
   computeSosPriorityScore,
   DEPARTMENT_BY_CATEGORY,
-  DEPARTMENTS,
   toSeverityLabel,
 } from '../shared/constants';
 import { hammingDistance } from '../shared/dhash';
 import { WARD_BY_CODE, DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { haversineMeters } from '../shared/geo';
 import {
-  CATEGORIES,
   type AiMode,
   type AlertCategory,
   type AlertSeverity,
   type Category,
   type CivicAlertItem,
-  type Department,
   type ForensicSignals,
   type OfficialBulletinItem,
-  type SeverityLabel,
   type TacticalBriefing,
   type VisionResult,
 } from '../shared/types';
@@ -60,6 +50,12 @@ import {
   type KeyPoolSummary,
 } from './keyPool';
 import type { LocalRagService } from './localRag.service';
+
+interface GeminiRestGenerateParams {
+  model?: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+}
 
 export interface EdgeStats {
   blurScore: number;
@@ -180,10 +176,6 @@ export interface AiDiagnosticResult {
   sampleBriefing: TacticalBriefing;
   detail: string;
 }
-
-const DEPT_ENUM = [...DEPARTMENTS] as [Department, ...Department[]];
-const CAT_ENUM = [...CATEGORIES] as [Category, ...Category[]];
-const SEV_LABEL_ENUM: [SeverityLabel, ...SeverityLabel[]] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 const TacticalBriefingZ = z.object({
   riskSummary: z.string().min(5).max(320),
@@ -315,10 +307,6 @@ export function sanitizeUserText(text: string, max = 1500): string {
 
 export function detectPromptInjection(text: string): boolean {
   return INJECTION_PATTERNS.some((p) => p.test(text));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -512,7 +500,7 @@ export class GeminiService {
       models,
       contents: (modelId: string) => buildParams(modelId).contents,
       config: (modelId: string) => (buildParams(modelId).config ?? {}) as GeminiRestConfig,
-      timeoutMs,
+      timeoutMs: Math.min(timeoutMs, 8_000),
       label,
       onModelNotFound: (modelId: string) => {
         console.warn(`[ai] Model "${modelId}" trả 404, tự động chuyển sang model dự phòng kế tiếp trên cùng key...`);
@@ -656,26 +644,35 @@ export class GeminiService {
         ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-3.5-flash-lite'
         : process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
-    const res = await withTimeout(
-      fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${params.apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          temperature: params.temperature,
-          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
-          messages: [
-            { role: 'system', content: params.systemInstruction },
-            { role: 'user', content: params.userContent },
-          ],
+    const effectiveTimeoutMs = Math.min(params.timeoutMs, 8_000);
+    const ctrl = new AbortController();
+    const abortTimer = setTimeout(() => ctrl.abort(), effectiveTimeoutMs);
+    let res: globalThis.Response;
+    try {
+      res = await withTimeout(
+        fetch(endpoint, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${params.apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: params.temperature,
+            ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {}),
+            messages: [
+              { role: 'system', content: params.systemInstruction },
+              { role: 'user', content: params.userContent },
+            ],
+          }),
         }),
-      }),
-      params.timeoutMs,
-      params.label,
-    );
+        effectiveTimeoutMs,
+        params.label,
+      );
+    } finally {
+      clearTimeout(abortTimer);
+    }
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -803,7 +800,7 @@ export class GeminiService {
                 userContent: userPrompt,
                 jsonMode: true,
                 temperature: 0.15,
-                timeoutMs: 14_000,
+                timeoutMs: 8_000,
                 label: `${meta.provider} TacticalBriefing`,
               });
               return safeParseStructuredJson(raw, TacticalBriefingZ);
@@ -821,7 +818,7 @@ export class GeminiService {
                   responseSchema: BRIEFING_SCHEMA as never,
                 },
               }),
-              14_000,
+              8_000,
               'Gemini TacticalBriefing',
             );
             return safeParseStructuredJson(text, TacticalBriefingZ);
@@ -1569,7 +1566,7 @@ export class GeminiService {
         ],
         jsonMode: true,
         temperature: 0.1,
-        timeoutMs: 25_000,
+        timeoutMs: 8_000,
         label: `${provider} Verify`,
       });
     } else {
@@ -1595,7 +1592,7 @@ export class GeminiService {
             responseSchema: VERIFY_SCHEMA as never,
           },
         }),
-        25_000,
+        8_000,
         'Gemini Verify',
       );
       rawText = out.text;
@@ -1887,7 +1884,7 @@ export class GeminiService {
                 userContent: promptTranscript,
                 jsonMode: false,
                 temperature: 0.3,
-                timeoutMs: 16_000,
+                timeoutMs: 8_000,
                 label: `${meta.provider} Chat`,
               });
               return { kind: 'full' as const, text: fullAnswer };
@@ -1903,7 +1900,7 @@ export class GeminiService {
                   .map((m) => ({ role: m.role, parts: [{ text: sanitizeUserText(m.text) }] })),
                 config: { systemInstruction: fullSystem, temperature: 0.3 },
               }),
-              16_000,
+              8_000,
               'Gemini Chat',
             );
             return { kind: 'full' as const, text };
@@ -2043,7 +2040,7 @@ export class GeminiService {
                 userContent: userPrompt,
                 jsonMode: true,
                 temperature: 0.1,
-                timeoutMs: 10_000,
+                timeoutMs: 8_000,
                 label: `${meta.provider} BulletinClassify`,
               });
               return safeParseStructuredJson(raw, BulletinClassificationZ);
@@ -2061,7 +2058,7 @@ export class GeminiService {
                   responseSchema: BULLETIN_SCHEMA as never,
                 },
               }),
-              10_000,
+              8_000,
               'Gemini BulletinClassify',
             );
             return safeParseStructuredJson(text, BulletinClassificationZ);
@@ -2146,7 +2143,7 @@ export class GeminiService {
                 userContent: prompt,
                 jsonMode: true,
                 temperature: 0.15,
-                timeoutMs: 12_000,
+                timeoutMs: 8_000,
                 label: `${meta.provider} DailyDigest`,
               });
               return safeParseStructuredJson(raw, DailyDigestZ);
@@ -2164,7 +2161,7 @@ export class GeminiService {
                   responseSchema: DAILY_DIGEST_SCHEMA as never,
                 },
               }),
-              12_000,
+              8_000,
               'Gemini DailyDigest',
             );
             return safeParseStructuredJson(text, DailyDigestZ);

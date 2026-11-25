@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import {
   CLUSTER_RADIUS_M,
   computeSosPriorityScore,
@@ -12,9 +13,9 @@ import { hammingDistance } from '../shared/dhash';
 import { WARD_BY_CODE } from '../shared/dongNaiWards';
 import { haversineMeters, inDongNaiBBox, matchArterial, maskPhone, nearestWard } from '../shared/geo';
 import { computeStats, toClientReport, toReportSummary } from '../shared/report';
-import type {
-  Category, ClientReport, Department, DispatchOrder, PaginatedReports, Photo, Report, ReportStatus, ReportSummary, ScopeStats, TimelineEvent,
-} from '../shared/types';
+import { CATEGORIES, type Category, type ClientReport, type Department, type DispatchOrder, type PaginatedReports, type Photo, type Report, type ReportStatus, type ReportSummary, type ScopeStats, type TimelineEvent } from '../shared/types';
+import { ReportModel } from '../models';
+import { expandMongoStatuses, reportFromDoc } from '../repositories/mongoRepositories';
 import type { BoundingBoxQuery, Repositories, UserRecord } from '../repositories/types';
 import { env } from '../config/env';
 import type { CreateReportInput } from '../validation/schemas';
@@ -128,6 +129,46 @@ export class ReportService {
         : undefined;
 
     if (dbStatuses !== undefined) {
+      if (user === null && this.repos.mode === 'mongodb' && mongoose.connection.readyState === 1) {
+        const expanded = expandMongoStatuses(dbStatuses);
+        const matchFilter: Record<string, unknown> = {
+          status: expanded.length === 1 ? expanded[0] : { $in: expanded },
+        };
+        if (wardCodes?.length) {
+          matchFilter.wardCode = wardCodes.length === 1 ? wardCodes[0] : { $in: wardCodes };
+        }
+        if (normCat) matchFilter.category = String(normCat);
+
+        const [agg] = await ReportModel.aggregate<{
+          total: Array<{ n: number }>;
+          items: Array<Record<string, unknown>>;
+        }>([
+          { $match: matchFilter },
+          {
+            $facet: {
+              total: [{ $count: 'n' }],
+              items: [
+                ...(opts.cursor ? [{ $match: { createdAt: { $lt: String(opts.cursor) } } }] : []),
+                { $sort: { createdAt: -1 } },
+                { $limit: opts.limit + 1 },
+                { $project: { _id: 0, location: 0, imageHash: 0, syncId: 0, customCategoryLabel: 0 } },
+              ],
+            },
+          },
+        ]);
+        const docs = (agg?.items ?? [])
+          .map((d) => reportFromDoc(d))
+          .filter((r): r is Report => Boolean(r));
+        const slice = docs.slice(0, opts.limit).map(toClientReport);
+        const hasMore = docs.length > opts.limit;
+        return {
+          items: slice,
+          nextCursor: hasMore && slice.length > 0 ? slice[slice.length - 1].createdAt : null,
+          hasMore,
+          total: agg?.total?.[0]?.n ?? 0,
+        };
+      }
+
       const fetchLimit = user === null || opts.status ? opts.limit + 1 : undefined;
       const [pageCandidates, countCandidates] = await Promise.all([
         this.repos.reports.list({
@@ -197,6 +238,135 @@ export class ReportService {
 
   async stats(scope: string): Promise<ScopeStats> {
     const wardCodes = scope.startsWith('ward:') ? [scope.slice(5)] : undefined;
+    if (this.repos.mode === 'mongodb' && mongoose.connection.readyState === 1) {
+      const nowDate = new Date();
+      const matchStage: Record<string, unknown> = wardCodes?.length
+        ? { wardCode: wardCodes.length === 1 ? wardCodes[0] : { $in: wardCodes } }
+        : {};
+      const [agg] = await ReportModel.aggregate<{
+        byCategory: Array<{ _id: string; count: number }>;
+        summary: Array<{
+          total: number;
+          resolved: number;
+          emergency: number;
+          quarantined: number;
+          slaOverdue: number;
+          sumMs: number;
+        }>;
+      }>([
+        { $match: matchStage },
+        {
+          $addFields: {
+            normStatus: {
+              $switch: {
+                branches: [
+                  { case: { $eq: ['$status', 'PENDING'] }, then: 'received' },
+                  { case: { $eq: ['$status', 'VERIFIED'] }, then: 'verifying' },
+                  { case: { $in: ['$status', ['DISPATCHED', 'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS']] }, then: 'processing' },
+                  { case: { $eq: ['$status', 'RESOLVED'] }, then: 'resolved' },
+                ],
+                default: '$status',
+              },
+            },
+          },
+        },
+        {
+          $facet: {
+            byCategory: [{ $group: { _id: '$category', count: { $sum: 1 } } }],
+            summary: [
+              {
+                $group: {
+                  _id: null,
+                  total: { $sum: 1 },
+                  resolved: {
+                    $sum: {
+                      $cond: [
+                        { $and: [{ $eq: ['$normStatus', 'resolved'] }, { $ifNull: ['$resolvedAt', false] }] },
+                        1,
+                        0,
+                      ],
+                    },
+                  },
+                  quarantined: { $sum: { $cond: [{ $eq: ['$normStatus', 'quarantined'] }, 1, 0] } },
+                  emergency: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $not: [{ $in: ['$normStatus', ['resolved', 'quarantined', 'rejected']] }] },
+                            { $eq: ['$isEmergency', true] },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
+                  },
+                  slaOverdue: {
+                    $sum: {
+                      $cond: [
+                        {
+                          $and: [
+                            { $not: [{ $in: ['$normStatus', ['resolved', 'quarantined', 'rejected']] }] },
+                            { $ifNull: ['$slaDueAt', false] },
+                            {
+                              $lt: [
+                                { $dateFromString: { dateString: '$slaDueAt', onError: nowDate, onNull: nowDate } },
+                                nowDate,
+                              ],
+                            },
+                          ],
+                        },
+                        1,
+                        0,
+                      ],
+                    },
+                  },
+                  sumMs: {
+                    $sum: {
+                      $cond: [
+                        { $and: [{ $eq: ['$normStatus', 'resolved'] }, { $ifNull: ['$resolvedAt', false] }] },
+                        {
+                          $subtract: [
+                            { $toLong: { $dateFromString: { dateString: '$resolvedAt', onError: nowDate, onNull: nowDate } } },
+                            { $toLong: { $dateFromString: { dateString: '$createdAt', onError: nowDate, onNull: nowDate } } },
+                          ],
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ]);
+
+      const byCategory = Object.fromEntries(CATEGORIES.map((c) => [c, 0])) as Record<Category, number>;
+      for (const row of agg?.byCategory ?? []) {
+        if (row._id in byCategory) {
+          byCategory[row._id as Category] = row.count;
+        }
+      }
+      const sm = agg?.summary?.[0];
+      const total = sm?.total ?? 0;
+      const resolved = sm?.resolved ?? 0;
+      const sumMs = sm?.sumMs ?? 0;
+      return {
+        scope,
+        total,
+        resolved,
+        open: total - resolved,
+        resolvedPct: total === 0 ? 0 : Math.round((resolved / total) * 1000) / 10,
+        avgDays: resolved === 0 ? 0 : Math.round((sumMs / resolved / 86400000) * 10) / 10,
+        byCategory,
+        emergency: sm?.emergency ?? 0,
+        quarantined: sm?.quarantined ?? 0,
+        slaOverdue: sm?.slaOverdue ?? 0,
+      };
+    }
+
     const rows = await this.repos.reports.list({ wardCodes, projection: 'stats' });
     return computeStats(rows, scope);
   }
@@ -649,8 +819,17 @@ export class ReportService {
   }
 
   private async nextCode(wardCode: string): Promise<string> {
-    const all = await this.repos.reports.list({ wardCodes: [wardCode], projection: 'code_only' });
     const prefix = `${wardCode}-2611-`;
+    if (this.repos.mode === 'mongodb' && mongoose.connection.readyState === 1) {
+      const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const latest = (await ReportModel.findOne({ wardCode, code: new RegExp(`^${escaped}`) })
+        .sort({ code: -1 })
+        .select('-_id code')
+        .lean()) as { code?: string } | null;
+      const max = latest?.code?.startsWith(prefix) ? parseInt(latest.code.slice(prefix.length), 10) || 0 : 0;
+      return `${prefix}${String(max + 1).padStart(3, '0')}`;
+    }
+    const all = await this.repos.reports.list({ wardCodes: [wardCode], projection: 'code_only' });
     const max = all.reduce((m, r) => (r.code.startsWith(prefix) ? Math.max(m, parseInt(r.code.slice(prefix.length), 10) || 0) : m), 0);
     return `${prefix}${String(max + 1).padStart(3, '0')}`;
   }

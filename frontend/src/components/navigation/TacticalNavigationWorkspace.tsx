@@ -761,6 +761,7 @@ export function TacticalNavigationWorkspace({
                 alt={mission.title}
                 width={64}
                 height={64}
+                loading="lazy"
                 decoding="async"
                 className="h-14 w-14 shrink-0 rounded-2xl border border-slate-700 object-cover sm:h-16 sm:w-16"
               />
@@ -880,6 +881,7 @@ export function TacticalNavigationWorkspace({
                 alt="Ảnh hiện trường sau xử lý"
                 width={640}
                 height={360}
+                loading="lazy"
                 decoding="async"
                 className="aspect-video w-full rounded-2xl border border-slate-700 object-cover"
               />

@@ -11,16 +11,20 @@ import {
   Thermometer,
   X,
 } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClientReport, WardOverviewResponse } from '@shared/types';
 import { useI18n } from '../i18n';
 import { api } from '../lib/api';
+import { fastFetch } from '../lib/swrCache';
 import { useFollowedWards } from '../lib/followedWards';
 import type { MapPoint } from '../lib/mapConfig';
 import { useToast } from '../state/toast';
 import { ReportCard } from './ReportCard';
 import { Spinner } from './ui';
-import { UnifiedMapCanvas } from './map/UnifiedMapCanvas';
+
+const UnifiedMapCanvas = lazy(() =>
+  import('./map/UnifiedMapCanvas').then((m) => ({ default: m.UnifiedMapCanvas })),
+);
 
 const ReportDetail = lazy(() =>
   import('./ReportDetail').then((m) => ({ default: m.ReportDetail })),
@@ -61,33 +65,48 @@ export function WardInspectorDrawer({ wardCode, onClose }: WardInspectorDrawerPr
   const [page, setPage] = useState(1);
   const [mapMode, setMapMode] = useState<'heat' | 'pins'>('heat');
   const [openReportId, setOpenReportId] = useState<string | null>(null);
+  const prevWardRef = useRef<string | null>(null);
 
   const loadOverview = useCallback(async (code: string, status: 'all' | 'open' | 'resolved', pg: number) => {
-    setLoading(true);
+    const path = `/api/wards/${encodeURIComponent(code)}/overview?status=${status}&page=${pg}&pageSize=12`;
+    let active = true;
     setError(null);
+    setLoading(true);
     try {
-      const res = await api<WardOverviewResponse>(
-        `/api/wards/${encodeURIComponent(code)}/overview?status=${status}&page=${pg}&pageSize=12`,
-      );
+      const res = await fastFetch<WardOverviewResponse>(path, () => api<WardOverviewResponse>(path), {
+        staleMs: 25_000,
+        onUpdate: (fresh) => {
+          if (active) setData(fresh);
+        },
+      });
       setData(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tải được hồ sơ xã/phường.');
     } finally {
       setLoading(false);
     }
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    if (!wardCode) return;
-    setPage(1);
-    setIncFilter('all');
-    setTab('incidents');
-    void loadOverview(wardCode, 'all', 1);
-  }, [wardCode, loadOverview]);
-
-  useEffect(() => {
-    if (!wardCode) return;
-    void loadOverview(wardCode, incFilter, page);
+    if (!wardCode) {
+      prevWardRef.current = null;
+      return;
+    }
+    const wardChanged = prevWardRef.current !== wardCode;
+    prevWardRef.current = wardCode;
+    if (wardChanged && (page !== 1 || incFilter !== 'all')) {
+      setPage(1);
+      setIncFilter('all');
+      setTab('incidents');
+      return;
+    }
+    if (wardChanged) {
+      setTab('incidents');
+    }
+    void loadOverview(wardCode, wardChanged ? 'all' : incFilter, wardChanged ? 1 : page);
   }, [wardCode, incFilter, page, loadOverview]);
 
   const mapPoints = useMemo<MapPoint[]>(() => {
@@ -265,19 +284,21 @@ export function WardInspectorDrawer({ wardCode, onClose }: WardInspectorDrawerPr
                     </button>
                   </div>
                 </div>
-                <UnifiedMapCanvas
-                  reports={mapPoints}
-                  mode={mapMode}
-                  initialCenter={[data.ward.centerLat, data.ward.centerLng]}
-                  initialZoom={13}
-                  onSelect={(pt) => {
-                    if (!pt.id.startsWith('wh-')) setOpenReportId(pt.id);
-                  }}
-                  showLayerSwitcher={false}
-                  showFitCityButton={false}
-                  className="h-52 rounded-xl"
-                  ariaLabel={`Bản đồ nhiệt ${data.ward.name}`}
-                />
+                <Suspense fallback={<div className="h-52 animate-pulse rounded-xl bg-surface-2" />}>
+                  <UnifiedMapCanvas
+                    reports={mapPoints}
+                    mode={mapMode}
+                    initialCenter={[data.ward.centerLat, data.ward.centerLng]}
+                    initialZoom={13}
+                    onSelect={(pt) => {
+                      if (!pt.id.startsWith('wh-')) setOpenReportId(pt.id);
+                    }}
+                    showLayerSwitcher={false}
+                    showFitCityButton={false}
+                    className="h-52 rounded-xl"
+                    ariaLabel={`Bản đồ nhiệt ${data.ward.name}`}
+                  />
+                </Suspense>
               </div>
 
               {/* Tabs */}

@@ -23,14 +23,13 @@ import type {
   RescueMissionsResponse,
   RescueReleaseEntry,
   RescueStageCode,
-  Role,
   ScopeStats,
   SessionInfo,
   TrustLevel,
   UserProfile,
   UserViolationEntry,
 } from '../shared/types';
-import type { Repositories, UserFilterQuery, UserRecord } from '../repositories/types';
+import type { Repositories, ReportProjection, UserFilterQuery, UserRecord } from '../repositories/types';
 import { badRequest, conflict, forbidden, notFound } from '../utils/errors';
 import { hashPassword, newId, validatePasswordStrength } from '../utils/crypto';
 import { assertScope, isAdminRole, loadStoredPhotoForVerification, parsePhotoDataUrl, type PhotoInput } from './access';
@@ -126,8 +125,11 @@ export class StaffService {
     return requested;
   }
 
-  private async scoped(scope: string): Promise<Report[]> {
-    return this.repos.reports.list({ wardCodes: scope.startsWith('ward:') ? [scope.slice(5)] : undefined });
+  private async scoped(scope: string, projection?: ReportProjection): Promise<Report[]> {
+    return this.repos.reports.list({
+      wardCodes: scope.startsWith('ward:') ? [scope.slice(5)] : undefined,
+      projection,
+    });
   }
 
   private async load(u: UserRecord, id: string): Promise<Report> {
@@ -143,7 +145,7 @@ export class StaffService {
     targetDays: number;
     ranking: Array<{ wardCode: string; name: string; total: number; resolved: number; avgDays: number }>;
   }> {
-    const rows = (await this.scoped(scope)).map(toClientReport);
+    const rows = await this.scoped(scope, 'stats');
     const byDay = new Map<string, { sum: number; n: number }>();
     for (const r of rows) {
       if (r.status !== 'resolved' || !r.resolvedAt) continue;
@@ -167,7 +169,7 @@ export class StaffService {
     return { stats: computeStats(rows, scope), trend, targetDays: 1.5, ranking };
   }
 
-  async queue(u: UserRecord, scope: string, tab: QueueTab): Promise<ClientReport[]> {
+  async queue(_u: UserRecord, scope: string, tab: QueueTab): Promise<ClientReport[]> {
     const rows = await this.scoped(scope);
     const open = (r: Report) => !['resolved', 'quarantined', 'rejected'].includes(r.status);
     const pick: Record<QueueTab, (r: Report) => boolean> = {

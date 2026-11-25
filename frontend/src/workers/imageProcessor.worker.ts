@@ -87,7 +87,7 @@ export type ImageProcessorResponse =
 const AI_MAX_EDGE = 640;
 const AI_QUALITY = 0.72;
 const DISPLAY_MAX_EDGE = 1280;
-const DISPLAY_QUALITY = 0.8;
+const DISPLAY_QUALITY = 0.82;
 
 function readAsciiString(view: DataView, start: number, len: number): string {
   const end = Math.min(view.byteLength, start + len);

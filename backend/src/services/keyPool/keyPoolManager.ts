@@ -1264,7 +1264,7 @@ export class KeyPoolManager {
     meta: SelectedKeyMeta,
   ): Promise<{ ok: boolean; detail?: string }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
+    const timer = setTimeout(() => controller.abort(), 8_000);
     try {
       if (meta.provider === 'openrouter') {
         const res = await fetch('https://openrouter.ai/api/v1/key', {
@@ -1305,7 +1305,7 @@ export class KeyPoolManager {
         models: modelsToTry,
         contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
         config: { maxOutputTokens: 5, temperature: 0 },
-        timeoutMs: 10_000,
+        timeoutMs: 8_000,
         label: 'KeyPool Probe',
       });
       const endpointLabel = endpointUsed === 'vertex' ? 'Vertex AI' : 'Google AI Studio';

@@ -236,13 +236,13 @@ describe('Helper findDuplicateIncident ($nearSphere + 64-bit dHash)', () => {
 });
 
 describe('Kết nối MongoDB Atlas & Bộ dữ liệu Seed Đồng Nai', () => {
-  it('cấu hình pool chuẩn Production (maxPoolSize=20, minPoolSize=2, serverSelectionTimeoutMS=5000, w=majority) và fail-loud khi thiếu MONGODB_URI', async () => {
+  it('cấu hình pool chuẩn Production (maxPoolSize=10, minPoolSize=2, serverSelectionTimeoutMS=5000, socketTimeoutMS=20000, w=majority) và fail-loud khi thiếu MONGODB_URI', async () => {
     const opts = buildMongoConnectOptions();
-    expect(opts.maxPoolSize).toBe(20);
+    expect(opts.maxPoolSize).toBe(10);
     expect(opts.minPoolSize).toBe(2);
     expect(opts.serverSelectionTimeoutMS).toBe(5_000);
     expect(opts.connectTimeoutMS).toBe(10_000);
-    expect(opts.socketTimeoutMS).toBe(45_000);
+    expect(opts.socketTimeoutMS).toBe(20_000);
     expect(opts.family).toBe(4);
     expect(opts.retryWrites).toBe(true);
     expect(opts.w).toBe('majority');

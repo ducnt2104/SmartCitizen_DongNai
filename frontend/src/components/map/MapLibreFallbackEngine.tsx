@@ -254,6 +254,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const vectorWatchdogRef = useRef<number | null>(null);
   const lastCmdSeqRef = useRef(0);
   const lastFitRouteSeqRef = useRef(0);
+  const moveEndTimerRef = useRef<number | null>(null);
 
   const clearVectorWatchdog = (): void => {
     if (vectorWatchdogRef.current !== null) {
@@ -416,15 +417,27 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     };
     el.addEventListener('pointerdown', onPointerInterrupt, { passive: true });
 
-    map.on('movestart', () => dragRef.current?.(true));
+    map.on('movestart', () => {
+      if (moveEndTimerRef.current !== null) {
+        window.clearTimeout(moveEndTimerRef.current);
+        moveEndTimerRef.current = null;
+      }
+      dragRef.current?.(true);
+    });
     map.on('moveend', () => {
       dragRef.current?.(false);
       if (crosshairActiveRef.current) {
         const c = map.getCenter();
         crosshairRef.current?.(c.lat, c.lng);
       }
-      setZoomTick((n) => n + 1);
-      emitViewport();
+      if (moveEndTimerRef.current !== null) {
+        window.clearTimeout(moveEndTimerRef.current);
+      }
+      moveEndTimerRef.current = window.setTimeout(() => {
+        moveEndTimerRef.current = null;
+        setZoomTick((n) => n + 1);
+        emitViewport();
+      }, 180);
     });
 
     map.on('mousemove', (ev) => {
@@ -495,6 +508,10 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     return () => {
       vectorDisposed = true;
       clearVectorWatchdog();
+      if (moveEndTimerRef.current !== null) {
+        window.clearTimeout(moveEndTimerRef.current);
+        moveEndTimerRef.current = null;
+      }
       vectorAbort.abort();
       ro?.disconnect();
       window.removeEventListener('resize', handleResize);
@@ -1215,7 +1232,20 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     const destReport = p.activeDestinationId ? p.reports.find((r) => r.id === p.activeDestinationId) : undefined;
     const normalReports = destReport ? p.reports.filter((r) => r.id !== destReport.id) : p.reports;
 
-    const buckets = clusterPointsByZoom(normalReports, map.getZoom());
+    // Chỉ render marker nằm trong khung nhìn hiện tại (+25% vùng đệm mượt) để không tạo hàng nghìn DOM node ẩn
+    const bounds = map.getBounds();
+    let visibleReports = normalReports;
+    if (bounds) {
+      const latPad = Math.max(0.015, (bounds.getNorth() - bounds.getSouth()) * 0.25);
+      const lngPad = Math.max(0.015, (bounds.getEast() - bounds.getWest()) * 0.25);
+      const s = bounds.getSouth() - latPad;
+      const n = bounds.getNorth() + latPad;
+      const w = bounds.getWest() - lngPad;
+      const e = bounds.getEast() + lngPad;
+      visibleReports = normalReports.filter((r) => r.lat >= s && r.lat <= n && r.lng >= w && r.lng <= e);
+    }
+
+    const buckets = clusterPointsByZoom(visibleReports, map.getZoom());
     for (const b of buckets) {
       if (b.items.length === 1) {
         const r = b.items[0];

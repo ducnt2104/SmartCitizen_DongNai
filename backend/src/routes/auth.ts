@@ -7,14 +7,7 @@ import { validateBody } from '../middleware/validate';
 import type { Services } from '../services/container';
 import { parseVnPhone } from '../services/otp';
 import type { OtpPurpose } from '../services/otpDelivery.service';
-import { badRequest, HttpError } from '../utils/errors';
-
-function maskEmailAddress(email: string): string {
-  const [user = '', domain = ''] = email.trim().split('@');
-  if (!domain) return email;
-  const visible = user.slice(0, Math.min(2, user.length));
-  return `${visible}***@${domain}`;
-}
+import { badRequest } from '../utils/errors';
 
 const wardCodeSchema = z.string().regex(/^DN-[A-Z]{2,4}$/);
 

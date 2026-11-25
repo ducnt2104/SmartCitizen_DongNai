@@ -1,35 +1,58 @@
-# SmartCitizen Đồng Nai 2.0 — Phản ánh Hiện trường & Đô thị Thông minh (Team Victer)
+# SmartCitizen Đồng Nai
 
-> 🌐 **Cổng Trực tuyến Chính thức:** [https://smartcitizen-dongnai.onrender.com/](https://smartcitizen-dongnai.onrender.com/)  
-> 🔗 Truy cập nhanh: [Trang chủ](https://smartcitizen-dongnai.onrender.com/) · [Bản đồ sự cố 95 Phường/Xã](https://smartcitizen-dongnai.onrender.com/map) · [Gửi phản ánh 3 bước](https://smartcitizen-dongnai.onrender.com/report) · [Tra cứu hồ sơ](https://smartcitizen-dongnai.onrender.com/mine) · [Giới thiệu & Team Victer](https://smartcitizen-dongnai.onrender.com/gioi-thieu)
+> **Cổng Trực tuyến:** [https://smartcitizen-dongnai.onrender.com/](https://smartcitizen-dongnai.onrender.com/)  
+> **Truy cập nhanh:** [Trang chủ](https://smartcitizen-dongnai.onrender.com/) · [Bản đồ 95 Phường/Xã](https://smartcitizen-dongnai.onrender.com/map) · [Gửi phản ánh](https://smartcitizen-dongnai.onrender.com/report) · [Tra cứu hồ sơ](https://smartcitizen-dongnai.onrender.com/mine) · [Giới thiệu](https://smartcitizen-dongnai.onrender.com/gioi-thieu)
 
-Nền tảng **SmartCitizen Đồng Nai** (**Phản ánh hiện trường Đồng Nai** & **Đô thị thông minh Đồng Nai**) do **Team Victer** phát triển, phục vụ toàn bộ **95 Phường/Xã Thành phố Đồng Nai** (**33 Phường** và **62 Xã**) trên kiến trúc **Hybrid Local-First AI**, **Rust/Sharp + ONNX CV**, **SMS OTP thật (+84)** và **MongoDB Atlas**.
-
----
-
-## 1. Kiến trúc Nâng cấp Toàn diện
-
-1. **Rust High-Speed Computer Vision & ONNX Engine (`engine/` — cổng `127.0.0.1:8001`):**
-   - **Kiểm định ảnh thật / Chặn ảnh chụp màn hình 3 tầng (`POST /cv/check-authenticity`):** Kết hợp EXIF Forensics (`kamadak-exif` + bảng độ phân giải màn hình thiết bị), phân tích dải thanh trạng thái/điều hướng UI 8% đầu–cuối + phổ **2D FFT Moiré** (`rustfft`) phát hiện chụp lại màn hình, và mô hình **ONNX Neural Classifier** cục bộ (`models/authenticity_defect_v1.onnx`).
-   - **Phát hiện Ảnh Cắt (Crop Sub-image) & Trùng lặp (`POST /cv/check-duplicate`):** Lưới băm đa tỷ lệ (`dHash`, `2D-DCT pHash`, `3×3 Grid`, `Center-Crop`) kết hợp trích xuất đặc trưng góc đa tầng **5-Octave ORB + kiểm chứng hình học RANSAC (`>= 15` inliers)** song song bằng `rayon` POPCNT (< 20ms).
-   - **Nghiệm thu Trước – Sau bất biến ánh sáng & góc chụp (`POST /cv/verify-resolution`):** Tách bạch **Điểm đúng hiện trường (`scene_match_score` ≥ 65%)** dùng chuẩn hóa sáng **8×8 CLAHE + RANSAC Alignment** và **Điểm khắc phục sự cố (`resolution_score` ≥ 75%)** trên vùng ROI đã căn chỉnh.
-
-2. **Local-First LLM Router, Streaming SSE & BM25 Local RAG (`backend/`):**
-   - Kết nối trực tiếp **Ollama** (`http://127.0.0.1:11434`, mặc định `qwen2.5:3b`) hoặc **llama.cpp** với **Streaming SSE (`text/event-stream`)**.
-   - Tích hợp **Okapi BM25 Local RAG** đánh chỉ mục toàn bộ **95 Phường/Xã TP. Đồng Nai**, quy trình xử lý 5 nhóm sự cố (gồm cả **`khac` / `OTHER`** kèm `aiSuggestedLabel`) và bộ nhớ đệm `LruCache` (< 3ms).
-   - Chỉ gọi Cloud Gemini khi Quản trị viên bật tường minh `ALLOW_CLOUD_AI_FALLBACK=true`.
-
-3. **MongoDB Atlas Real Persistence (`backend/src/repositories/` & `models/`):**
-   - Nạp `.env` đa đường dẫn (`root/.env` & `backend/.env`), kết nối `MONGODB_URI` với cơ chế retry 3 lần và **chặn hoàn toàn việc âm thầm rơi về mock/RAM giả** (`ALLOW_JSON_FALLBACK=false`).
-   - Lưu bền vững đầy đủ các collection: `reports` (GeoJSON `2dsphere`), `app_users`, `image_fingerprints`, `ai_evaluations`, `ai_configs`, `audit_logs` (chuỗi băm SHA-256 bất biến).
-
-4. **Hệ thống Super Admin, RBAC 5 Cấp & Admin Console (`backend/` + `frontend/`):**
-   - 5 cấp vai trò: `SUPER_ADMIN`, `ADMIN` (`city_admin`), `OFFICER` (`ward_officer` gắn với 1 trong 95 Phường/Xã), `YOUTH_UNION` (`volunteer`), `CITIZEN`.
-   - Giao diện **Quản trị Hệ thống** trên IOC Command Center: CRUD tài khoản, đổi quyền, khóa/mở khóa tức thì, reset mật khẩu, theo dõi ping/số bản ghi thực tế của MongoDB + Rust CV + Local LLM và thanh trượt tinh chỉnh ngưỡng AI động không cần restart server.
+Nền tảng **SmartCitizen Đồng Nai** (**Phản ánh hiện trường & Đô thị thông minh TP. Đồng Nai**) do **Team Victer** phát triển, phục vụ **95 Phường/Xã** (**33 Phường**, **62 Xã**) trên kiến trúc **Local-First AI**, **Rust CV/ONNX Engine**, **MongoDB Atlas**, **Multi-Key Gemini Rotation Pool** và **Xác thực OTP Email / SMS (+84)**.
 
 ---
 
-## 2. Khởi chạy Nhanh (1 Lệnh cho Toàn bộ Hệ thống)
+## 1. Cấu trúc Thư mục
+
+```text
+SmartCitizen_DongNai/
+├── backend/                 # Express + TypeScript API, MongoDB Atlas & SQLite/JSON persistence, Local RAG, KeyPool, OTP, RBAC
+│   ├── src/
+│   │   ├── config/          # Nạp env, kết nối MongoDB Atlas & graceful shutdown
+│   │   ├── controllers/     # REST controllers (báo cáo, AI, cảnh báo, điều phối, quản trị)
+│   │   ├── middleware/      # Auth JWT/Cookie, PoW/anti-bot, rate limit, multer upload, Zod validate
+│   │   ├── models/          # Mongoose schemas & immutable audit log
+│   │   ├── repositories/    # Tầng truy xuất dữ liệu (MongoDB Atlas + SQLite/JSON local persistence)
+│   │   ├── routes/          # Khai báo endpoints (/api/*, /api/auth/*, /api/admin/api-keys/*)
+│   │   ├── scripts/         # CLI seed, verifyDb, migrateIndexes, purgeDemo
+│   │   ├── seed/            # Dữ liệu khởi tạo chuẩn 95 Phường/Xã & tài khoản quản trị
+│   │   ├── services/        # Nghiệp vụ AI, Rust CV client, KeyPool AES-256-GCM, OTP/SMS, Staff/Rescue
+│   │   ├── shared/          # Hằng số, tọa độ, 95 Phường/Xã, types dùng chung
+│   │   └── utils/           # Crypto, nén Brotli/Gzip, LRU cache, sanitize, SSR/SEO
+│   └── tests/               # Bộ kiểm thử tích hợp & E2E (Vitest)
+├── frontend/                # React 18 + Vite + TypeScript + Tailwind CSS + Dexie IndexedDB + Google Maps/MapLibre
+│   ├── public/              # Tài nguyên tĩnh, manifest PWA, Service Worker, Google verification
+│   └── src/
+│       ├── components/      # UI components, bản đồ GIS, xác thực OTP, điều hướng cứu hộ
+│       ├── db/              # IndexedDB (Dexie) & Outbox đồng bộ
+│       ├── hooks/           # GPS & định vị trực tiếp
+│       ├── i18n/            # Song ngữ Việt / Anh
+│       ├── lib/             # API client, local CV/vision, navigation engine, SEO meta
+│       ├── pages/           # Trang công dân, cổng cứu hộ (/rescue) & IOC Admin (/ioc, /admin)
+│       ├── shared/          # Hằng số, địa giới 95 Phường/Xã & types đồng bộ với backend
+│       ├── state/           # Providers (AuthGate, Settings, Toast)
+│       ├── tests/           # Unit tests Frontend (Vitest)
+│       └── workers/         # Web Workers xử lý ảnh & edge CV
+├── engine/                  # Rust High-Speed CV & ONNX Engine (127.0.0.1:8001)
+├── models/                  # Thư mục lưu trọng số ONNX cục bộ (tạo bởi scripts/download_models.*)
+├── scripts/                 # download_models.ps1/.sh, start_all.ps1, render-compat.mjs
+├── client/ & server/        # Compatibility shims cho cấu hình build/start cũ trên Render
+├── .github/workflows/       # keepalive.yml giữ Render Free Service luôn ấm
+├── .env.example             # Mẫu biến môi trường tổng hợp
+├── render.yaml              # Blueprint cấu hình deploy Single-Service trên Render
+└── package.json             # Scripts điều phối toàn workspace
+```
+
+> Tài liệu chi tiết API xem tại [`backend/API_DOCS.md`](backend/API_DOCS.md).
+
+---
+
+## 2. Hướng dẫn Chạy Local
 
 **Yêu cầu:** Node.js `>= 20`, npm `>= 10`, Rust `cargo >= 1.75` (tùy chọn cài thêm `Ollama` cho Local LLM).
 
@@ -37,43 +60,67 @@ Nền tảng **SmartCitizen Đồng Nai** (**Phản ánh hiện trường Đồn
 # 1. Cài dependencies cho Backend & Frontend
 npm run install:all
 
-# 2. Tạo file cấu hình môi trường và điền MONGODB_URI, SUPER_ADMIN_PASSWORD, INITIAL_STAFF_PASSWORD
+# 2. Tạo file cấu hình môi trường từ mẫu và điền thông số (MONGODB_URI, JWT_SECRET, ...)
 Copy-Item .env.example .env
 
-# 3. Biên dịch Rust CV Engine (release) & khởi tạo model ONNX cục bộ vào thư mục models/
+# 3. Biên dịch Rust CV Engine (release) & khởi tạo model ONNX cục bộ vào models/
 powershell -ExecutionPolicy Bypass -File scripts/download_models.ps1
 
-# 4. Nạp dữ liệu chuẩn Idempotent (Super Admin + 95 Phường/Xã + Hồ sơ mẫu Đồng Nai)
+# 4. Nạp dữ liệu chuẩn Idempotent (tài khoản khởi tạo + 95 Phường/Xã)
 npm run seed
 
-# 5. Khởi chạy đồng thời toàn bộ hệ thống (Rust CV :8001 + Backend :8080 + Frontend :5173)
+# 5. Khởi chạy đồng thời Backend (:8080 + Rust CV :8001) và Frontend (:5173)
 powershell -ExecutionPolicy Bypass -File scripts/start_all.ps1
 ```
 
-*(Hoặc chạy từng dịch vụ riêng biệt: `npm run dev:engine`, `npm run dev:backend`, `npm run dev:frontend`).*
+Hoặc chạy từng dịch vụ riêng biệt:
 
-### Tùy chọn bật Local LLM tiếng Việt với Ollama:
 ```bash
-ollama pull qwen2.5:3b
-ollama serve
+npm run dev:engine    # Rust CV Engine (:8001)
+npm run dev:backend   # Backend API (:8080)
+npm run dev:frontend  # Frontend Vite (:5173)
 ```
+
+*(Tùy chọn bật Local LLM tiếng Việt với Ollama: `ollama pull qwen2.5:3b && ollama serve`.)*
 
 ---
 
-## 3. Kiểm thử & Xác minh Chất lượng
+## 3. Kiểm thử & Build Production
 
 ```bash
 # Kiểm tra kiểu tĩnh TypeScript (Backend + Frontend)
 npm run typecheck
 
-# Chạy Unit Test của Rust CV & ONNX Engine
-npm run test:engine
-
-# Chạy toàn bộ Integration & Unit Test (Backend + Rust Live Binary + Frontend)
+# Chạy toàn bộ bộ kiểm thử (Backend + Frontend)
 npm test
 
-# Build bản Production hoàn chỉnh
+# Kiểm tra Unit Test của Rust CV Engine
+npm run test:engine
+
+# Build bản Production hoàn chỉnh (Backend + Frontend + Render Compat Bridge)
 npm run build
 ```
+
+---
+
+## 4. Hướng dẫn Deploy trên Render
+
+Dự án cấu hình theo mô hình **Single Web Service** trong [`render.yaml`](render.yaml) (Backend phục vụ API và `frontend/dist` tĩnh):
+
+- **Build Command:**
+  ```bash
+  npm install --include=dev --prefix backend && npm install --include=dev --prefix frontend && npm run build
+  ```
+- **Start Command:**
+  ```bash
+  npm start
+  ```
+- **Health Check Path:** `/healthz`
+- **Biến môi trường chính trên Render Dashboard:**
+  - Tự sinh qua `render.yaml`: `JWT_SECRET`, `OTP_PEPPER`, `KEY_ENCRYPTION_SECRET`
+  - Bắt buộc cấu hình bảo mật trên Dashboard: `MONGODB_URI`, `SUPER_ADMIN_PASSWORD`, `INITIAL_STAFF_PASSWORD`
+  - Tùy chọn AI / Maps / OTP: `GEMINI_API_KEYS` (hoặc `GEMINI_API_KEY`), `VITE_GOOGLE_MAPS_API_KEY`, `RESEND_API_KEY` / `BREVO_API_KEY` / `SMTP_*`, `TEXTBEE_*` / `FIREBASE_*` / `VONAGE_*`.
+
+---
 
 *Phát triển bởi **Team Victer** — Thành phố Đồng Nai.*

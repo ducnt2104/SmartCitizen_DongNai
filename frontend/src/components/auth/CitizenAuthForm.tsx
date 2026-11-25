@@ -20,13 +20,23 @@ import { authStore } from '../../lib/authStore';
 import { useToast } from '../../state/toast';
 import { Spinner } from '../ui';
 import {
-  clearFirebaseRecaptcha,
-  confirmFirebaseOtpAndGetIdToken,
   isFirebasePhoneClientConfigured,
-  sendFirebasePhoneSms,
   setRuntimeFirebaseClientConfig,
   type FirebaseClientEnv,
-} from './firebasePhoneAuth';
+} from './firebaseConfigClient';
+
+let firebasePhoneAuthPromise: Promise<typeof import('./firebasePhoneAuth')> | null = null;
+let loadedFirebasePhoneAuth: typeof import('./firebasePhoneAuth') | null = null;
+
+async function loadFirebasePhoneAuth() {
+  if (!firebasePhoneAuthPromise) {
+    firebasePhoneAuthPromise = import('./firebasePhoneAuth').then((mod) => {
+      loadedFirebasePhoneAuth = mod;
+      return mod;
+    });
+  }
+  return firebasePhoneAuthPromise;
+}
 import { OtpSixDigitInput } from './OtpSixDigitInput';
 import { validateVnPhoneLive, VnPhoneInput } from './VnPhoneInput';
 
@@ -117,7 +127,7 @@ export function CitizenAuthForm({
       });
     return () => {
       active = false;
-      clearFirebaseRecaptcha();
+      loadedFirebasePhoneAuth?.clearFirebaseRecaptcha();
     };
   }, []);
 
@@ -183,6 +193,7 @@ export function CitizenAuthForm({
               ...(honeypot ? { website: honeypot } : {}),
             },
           });
+          const { sendFirebasePhoneSms } = await loadFirebasePhoneAuth();
           const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
           firebaseConfirmationRef.current = confirmation;
           setActiveProvider('firebase');
@@ -210,6 +221,7 @@ export function CitizenAuthForm({
               'Dịch vụ xác thực SMS qua Firebase chưa hoàn tất cấu hình trình duyệt. Vui lòng chuyển sang nhận mã qua Email hoặc thử lại sau.',
             );
           }
+          const { sendFirebasePhoneSms } = await loadFirebasePhoneAuth();
           const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
           firebaseConfirmationRef.current = confirmation;
         }
@@ -259,6 +271,7 @@ export function CitizenAuthForm({
       if (defaultWardCode) profileExtras.defaultWardCode = defaultWardCode;
 
       if (channelTab === 'phone' && firebaseConfirmationRef.current) {
+        const { confirmFirebaseOtpAndGetIdToken } = await loadFirebasePhoneAuth();
         const firebaseIdToken = await confirmFirebaseOtpAndGetIdToken(
           firebaseConfirmationRef.current,
           otpCode,

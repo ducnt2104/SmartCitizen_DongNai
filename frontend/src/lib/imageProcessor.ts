@@ -178,7 +178,7 @@ async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Prom
     const disp = makeScaled(1280);
     const ai = makeScaled(640);
     const [dispEnc, aiEnc] = await Promise.all([
-      encodeCanvasFallback(disp.canvas, 0.8),
+      encodeCanvasFallback(disp.canvas, 0.82),
       encodeCanvasFallback(ai.canvas, 0.72),
     ]);
     const t1 = performance.now();

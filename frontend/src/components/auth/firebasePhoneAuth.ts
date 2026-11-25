@@ -6,48 +6,19 @@ import {
   type Auth,
   type ConfirmationResult,
 } from 'firebase/auth';
+import {
+  isFirebasePhoneClientConfigured,
+  resolveFirebaseClientConfig,
+  setRuntimeFirebaseClientConfig,
+  type FirebaseClientEnv,
+} from './firebaseConfigClient';
+
+export { isFirebasePhoneClientConfigured, setRuntimeFirebaseClientConfig, type FirebaseClientEnv };
 
 const FIREBASE_APP_NAME = 'smartcitizen-dongnai-phone-auth';
 
-export interface FirebaseClientEnv {
-  apiKey: string;
-  authDomain: string;
-  projectId: string;
-  appId?: string;
-}
-
-let runtimeFirebaseConfig: FirebaseClientEnv | null = null;
-
-export function setRuntimeFirebaseClientConfig(cfg: FirebaseClientEnv | null | undefined): void {
-  if (cfg?.apiKey && cfg?.projectId) {
-    runtimeFirebaseConfig = {
-      apiKey: cfg.apiKey,
-      projectId: cfg.projectId,
-      authDomain: cfg.authDomain || `${cfg.projectId}.firebaseapp.com`,
-      appId: cfg.appId,
-    };
-  }
-}
-
-function readFirebaseEnv(): FirebaseClientEnv | null {
-  if (runtimeFirebaseConfig) return runtimeFirebaseConfig;
-  const apiKey = (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined)?.trim() ?? '';
-  const projectId = (import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined)?.trim() ?? '';
-  const authDomain =
-    (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined)?.trim() ||
-    (projectId ? `${projectId}.firebaseapp.com` : '');
-  const appId = (import.meta.env.VITE_FIREBASE_APP_ID as string | undefined)?.trim() || undefined;
-
-  if (!apiKey || !projectId) return null;
-  return { apiKey, authDomain, projectId, appId };
-}
-
-export function isFirebasePhoneClientConfigured(): boolean {
-  return readFirebaseEnv() !== null;
-}
-
 function getFirebaseAuthInstance(): Auth {
-  const cfg = readFirebaseEnv();
+  const cfg = resolveFirebaseClientConfig();
   if (!cfg) {
     throw new Error(
       'Dịch vụ xác thực SMS qua Firebase chưa sẵn sàng. Vui lòng chuyển sang nhận mã qua Email hoặc đăng nhập bằng mật khẩu.',

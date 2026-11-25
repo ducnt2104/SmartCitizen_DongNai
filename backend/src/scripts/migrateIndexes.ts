@@ -14,7 +14,6 @@ import {
   Bulletin,
   DailyDigest,
   Incident,
-  MediaAsset,
   OtpModel,
   OtpToken,
   ReportModel,

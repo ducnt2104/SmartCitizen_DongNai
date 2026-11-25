@@ -93,6 +93,7 @@ export default function PublicReportPage() {
             alt={report.title}
             width={800}
             height={500}
+            loading="lazy"
             decoding="async"
             className="aspect-[16/10] w-full rounded-2xl border border-line object-cover"
           />

@@ -542,7 +542,7 @@ export default function ReportPage() {
 
           {photo && (
             <div className="card space-y-3 p-3">
-              <img src={photo.previewUrl} alt={t('report.photoAlt')} width={640} height={480} decoding="async" className="aspect-[4/3] w-full rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt={t('report.photoAlt')} width={640} height={480} loading="lazy" decoding="async" className="aspect-[4/3] w-full rounded-xl object-cover" />
               <p className="text-xs text-muted">
                 Ảnh WebP tối ưu ({photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB / AI {(photo.aiBytes / 1024).toFixed(0)} KB,{' '}
                 {t('report.saved', { p: Math.max(0, Math.round((1 - photo.bytes / photo.originalBytes) * 100)) })})
@@ -745,7 +745,7 @@ export default function ReportPage() {
           </h2>
           <div className="card space-y-3 p-3">
             <div className="flex gap-3">
-              <img src={photo.previewUrl} alt="" width={96} height={96} decoding="async" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt="" width={96} height={96} loading="lazy" decoding="async" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
               <div className="min-w-0">
                 <p className="break-words font-bold [overflow-wrap:anywhere]">{title}</p>
                 <p className="text-sm font-semibold" style={{ color: CATEGORY_META[category].color }}>

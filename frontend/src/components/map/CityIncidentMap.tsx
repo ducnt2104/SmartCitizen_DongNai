@@ -146,6 +146,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
   const [inspectorWardCode, setInspectorWardCode] = useState<string | null>(null);
 
   const bboxAbortRef = useRef<AbortController | null>(null);
+  const bboxTimerRef = useRef<number | null>(null);
   const inspectAbortRef = useRef<AbortController | null>(null);
   const liveGeoAbortRef = useRef<AbortController | null>(null);
   const liveGeoTimerRef = useRef<number | null>(null);
@@ -277,6 +278,10 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
       if (embedded || externalReports || !online) return;
       bboxAbortRef.current?.abort();
+      if (bboxTimerRef.current !== null) {
+        window.clearTimeout(bboxTimerRef.current);
+        bboxTimerRef.current = null;
+      }
       const bboxParam = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
       const cacheKey = `map:${settings.scope}:${bboxParam}`;
       const cached = getSwrEntry<ReportSummary[]>(cacheKey);
@@ -284,20 +289,23 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         setBboxPoints(cached.data);
         if (!cached.isStale) return;
       }
-      const ctrl = new AbortController();
-      bboxAbortRef.current = ctrl;
-      api<ReportSummary[]>(`/api/incidents/map?scope=${encodeURIComponent(settings.scope)}&bbox=${bboxParam}`, {
-        signal: ctrl.signal,
-      })
-        .then((rows) => {
-          if (!ctrl.signal.aborted) {
-            setSwrEntry(cacheKey, rows, 15_000);
-            setBboxPoints(rows);
-          }
+      bboxTimerRef.current = window.setTimeout(() => {
+        bboxTimerRef.current = null;
+        const ctrl = new AbortController();
+        bboxAbortRef.current = ctrl;
+        api<ReportSummary[]>(`/api/incidents/map?scope=${encodeURIComponent(settings.scope)}&bbox=${bboxParam}`, {
+          signal: ctrl.signal,
         })
-        .catch(() => {
-          /* Giữ bản lưu IndexedDB cục bộ */
-        });
+          .then((rows) => {
+            if (!ctrl.signal.aborted) {
+              setSwrEntry(cacheKey, rows, 15_000);
+              setBboxPoints(rows);
+            }
+          })
+          .catch(() => {
+            /* Giữ bản lưu IndexedDB cục bộ */
+          });
+      }, 180);
     },
     [embedded, externalReports, online, settings.scope],
   );

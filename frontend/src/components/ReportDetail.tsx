@@ -113,7 +113,7 @@ export function ReportDetail({
       <div className="space-y-4">
         {photos.length > 0 && (
           <div>
-            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} width={800} height={500} decoding="async" className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
+            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} width={800} height={500} loading="lazy" decoding="async" className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
             {photos.length > 1 && (
               <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={t('detail.gallery')}>
                 {photos.map((p, i) => (

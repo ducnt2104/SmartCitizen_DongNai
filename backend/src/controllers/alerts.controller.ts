@@ -37,6 +37,27 @@ export function alertsController(s: Services) {
       .catch(() => undefined);
   };
 
+  const sendAlertCached = async (
+    req: Request,
+    res: Response,
+    cacheKey: string,
+    ttlMs: number,
+    cacheControl: string,
+    loader: () => Promise<unknown>,
+  ) => {
+    let entry = s.cache.getAlertCached(cacheKey);
+    if (!entry) {
+      entry = s.cache.setAlertCached(cacheKey, await loader(), ttlMs);
+    }
+    res.set('ETag', entry.etag);
+    res.set('Cache-Control', cacheControl);
+    if (req.headers['if-none-match'] === entry.etag) {
+      res.status(304).end();
+      return;
+    }
+    res.json(entry.body);
+  };
+
   return {
     wardOverview: async (req: Request, res: Response) => {
       const wardId = String(req.params.wardId || '').trim();
@@ -44,16 +65,32 @@ export function alertsController(s: Services) {
       const statusFilter = rawFilter === 'open' || rawFilter === 'resolved' ? rawFilter : 'all';
       const page = Math.max(1, Number(req.query.page) || 1);
       const pageSize = Math.min(Math.max(1, Number(req.query.pageSize) || 20), 60);
-      res.json(await s.alerts.getWardOverview(wardId, { statusFilter, page, pageSize }));
+      await sendAlertCached(
+        req,
+        res,
+        `ward_overview:${wardId.toUpperCase()}:${statusFilter}:${page}:${pageSize}`,
+        30_000,
+        'public, max-age=15, stale-while-revalidate=30',
+        () => s.alerts.getWardOverview(wardId, { statusFilter, page, pageSize }),
+      );
     },
 
-    listWeather: async (_req: Request, res: Response) => {
-      const items = await s.alerts.getLatestWeatherSnapshots();
-      res.json({
-        items,
-        lastSyncAt: s.aggregator.status.lastSyncSummary?.finishedAt ?? items[0]?.fetchedAt ?? null,
-        source: 'Open-Meteo API (Miễn phí)',
-      });
+    listWeather: async (req: Request, res: Response) => {
+      await sendAlertCached(
+        req,
+        res,
+        'weather:latest',
+        120_000,
+        'public, max-age=60, stale-while-revalidate=120',
+        async () => {
+          const items = await s.alerts.getLatestWeatherSnapshots();
+          return {
+            items,
+            lastSyncAt: s.aggregator.status.lastSyncSummary?.finishedAt ?? items[0]?.fetchedAt ?? null,
+            source: 'Open-Meteo API (Miễn phí)',
+          };
+        },
+      );
     },
 
     listBulletins: async (req: Request, res: Response) => {
@@ -61,7 +98,14 @@ export function alertsController(s: Services) {
       const rawCat = typeof req.query.category === 'string' ? (req.query.category as AlertCategory) : undefined;
       const category = rawCat && VALID_ALERT_CATS.has(rawCat) ? rawCat : undefined;
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 30), 100);
-      res.json({ items: await s.alerts.listBulletins({ wardId, category, limit }) });
+      await sendAlertCached(
+        req,
+        res,
+        `bulletins:${wardId ?? ''}:${category ?? ''}:${limit}`,
+        120_000,
+        'public, max-age=60, stale-while-revalidate=120',
+        async () => ({ items: await s.alerts.listBulletins({ wardId, category, limit }) }),
+      );
     },
 
     listAlerts: async (req: Request, res: Response) => {
@@ -73,7 +117,14 @@ export function alertsController(s: Services) {
       const rawStatus = typeof req.query.status === 'string' ? req.query.status : 'active';
       const status = rawStatus === 'resolved' || rawStatus === 'all' ? rawStatus : 'active';
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 80), 200);
-      res.json({ items: await s.alerts.listAlerts({ wardId, category, severity, status, limit }) });
+      await sendAlertCached(
+        req,
+        res,
+        `alerts:${wardId ?? ''}:${category ?? ''}:${severity ?? ''}:${status}:${limit}`,
+        30_000,
+        'public, max-age=15, stale-while-revalidate=30',
+        async () => ({ items: await s.alerts.listAlerts({ wardId, category, severity, status, limit }) }),
+      );
     },
 
     routeCheck: async (req: Request, res: Response) => {
@@ -81,28 +132,54 @@ export function alertsController(s: Services) {
       if (!road.trim()) {
         throw badRequest('Thiếu tham số tên tuyến đường (?road=...).');
       }
-      res.json(await s.alerts.checkRouteSafety(road));
+      await sendAlertCached(
+        req,
+        res,
+        `route_check:${road.trim().toLowerCase()}`,
+        30_000,
+        'public, max-age=15, stale-while-revalidate=30',
+        () => s.alerts.checkRouteSafety(road),
+      );
     },
 
-    dailyDigest: async (_req: Request, res: Response) => {
-      res.json(await s.aggregator.getDailyDigest());
+    dailyDigest: async (req: Request, res: Response) => {
+      const cacheKey = 'ai:daily_digest';
+      let entry = s.cache.getAlertCached(cacheKey);
+      if (!entry) {
+        const digest = await s.aggregator.getDailyDigest();
+        const stored = s.cache.setAlertCached(cacheKey, { ...digest, cached: true }, 300_000);
+        res.set('ETag', stored.etag);
+        res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+        res.json(digest);
+        return;
+      }
+      res.set('ETag', entry.etag);
+      res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+      if (req.headers['if-none-match'] === entry.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json(entry.body);
     },
 
     createCommunityAlert: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.createCommunityAlert>;
       const created = await s.alerts.createCommunityAlert(req.user!, b);
+      s.cache.invalidateAlerts();
       res.status(201).json(created);
     },
 
     confirmAlert: async (req: Request, res: Response) => {
       const id = String(req.params.id);
       const updated = await s.alerts.confirmAlert(req.user!.id, id);
+      s.cache.invalidateAlerts();
       res.json(updated);
     },
 
     adminCreateAlert: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.createAlert>;
       const created = await s.alerts.createAdminOrRescueAlert(req.user!, b);
+      s.cache.invalidateAlerts();
       secAudit(req, 'admin.alert_create', 'alert', created.id, null, {
         title: created.title,
         category: created.category,
@@ -117,6 +194,7 @@ export function alertsController(s: Services) {
       const id = String(req.params.id);
       const b = req.body as z.infer<typeof schemas.updateAlert>;
       const { before, after } = await s.alerts.updateAlert(id, b);
+      s.cache.invalidateAlerts();
       secAudit(
         req,
         'admin.alert_update',
@@ -131,12 +209,14 @@ export function alertsController(s: Services) {
     adminDeleteAlert: async (req: Request, res: Response) => {
       const id = String(req.params.id);
       const before = await s.alerts.deleteAlert(id);
+      s.cache.invalidateAlerts();
       secAudit(req, 'admin.alert_delete', 'alert', id, { title: before.title, status: before.status }, { deleted: true });
       res.json({ ok: true, id });
     },
 
     adminTriggerSync: async (req: Request, res: Response) => {
       const out = await s.aggregator.syncAll();
+      s.cache.invalidateAlerts();
       secAudit(req, 'admin.aggregator_sync', 'aggregator', 'manual', null, out);
       res.json(out);
     },
@@ -146,7 +226,9 @@ export function alertsController(s: Services) {
       if (!rawSecret || !safeEqualHex(sha256(rawSecret), sha256(env.cronSecret))) {
         throw unauthorized('Thiếu hoặc sai X-Cron-Secret cho tác vụ nội bộ.', 'invalid_cron_secret');
       }
-      res.json(await s.aggregator.syncAll());
+      const out = await s.aggregator.syncAll();
+      s.cache.invalidateAlerts();
+      res.json(out);
     },
 
     updateFollowedWards: async (req: Request, res: Response) => {

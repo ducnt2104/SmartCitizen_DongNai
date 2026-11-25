@@ -1,7 +1,10 @@
+import { api } from './api';
+import { fastFetch } from './swrCache';
+
 /**
  * Prefetch theo hành vi người dùng (hover/focus vào link hoặc tab):
  *  - Nạp trước JS chunk của route đích (Vite lazy chunk cache)
- *  - Kích hoạt warm fetch cho API công khai hay truy cập (/api/incidents/map, /api/stats, /api/reports)
+ *  - Kích hoạt warm fetch qua fastFetch cho API công khai hay truy cập (/api/incidents/map, /api/stats, /api/alerts)
  */
 const prefetchedRoutes = new Set<string>();
 const prefetchedApis = new Set<string>();
@@ -33,7 +36,7 @@ export function prefetchRouteChunk(pathname: string): void {
 export function prefetchPublicApi(url: string): void {
   if (typeof fetch === 'undefined' || !navigator.onLine || prefetchedApis.has(url)) return;
   prefetchedApis.add(url);
-  void fetch(url, { credentials: 'include' }).catch(() => {
+  void fastFetch(url, () => api(url), { staleMs: 30_000 }).catch(() => {
     prefetchedApis.delete(url);
   });
   window.setTimeout(() => prefetchedApis.delete(url), 15_000);
@@ -43,6 +46,9 @@ export function onIntentPrefetch(pathname: string): void {
   prefetchRouteChunk(pathname);
   if (pathname === '/map') {
     prefetchPublicApi('/api/incidents/map?scope=city');
+  } else if (pathname === '/alerts') {
+    prefetchPublicApi('/api/alerts?status=active&limit=100');
+    prefetchPublicApi('/api/weather');
   } else if (pathname === '/') {
     prefetchPublicApi('/api/stats?scope=city');
   }
