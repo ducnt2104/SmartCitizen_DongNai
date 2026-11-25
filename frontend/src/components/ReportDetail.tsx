@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Camera, Clock, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
+import { Camera, Clock, ExternalLink, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { hammingDistance } from '@shared/dhash';
 import type { ClientReport } from '@shared/types';
@@ -8,6 +8,7 @@ import { db } from '../db/localDb';
 import { useI18n } from '../i18n';
 import { edge } from '../lib/edgeClient';
 import { useSession } from '../lib/authStore';
+import { googleMapsPlaceUrl } from '../lib/mapConfig';
 import { CATEGORY_META, DEPT_KEY } from '../lib/meta';
 import { attachAngle, confirmedIds, confirmReport, rateReport } from '../lib/submitReport';
 import { useAuthGate } from '../state/authGate';
@@ -137,7 +138,22 @@ export function ReportDetail({
         <dl className="grid grid-cols-2 gap-2 text-sm">
           <div className="rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.code')}</dt><dd className="mono break-all font-semibold">{r.code}</dd></div>
           <div className="rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.category')}</dt><dd className="font-semibold" style={{ color: meta.color }}>{t(meta.labelKey)}{r.aiSuggestedLabel ? ` · ${r.aiSuggestedLabel}` : ''}</dd></div>
-          <div className="col-span-2 rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.location')}</dt><dd className="break-words font-semibold">{r.address}</dd><dd className="mono text-xs text-muted">{r.lat.toFixed(5)}, {r.lng.toFixed(5)} · {ward?.name}</dd></div>
+          <div className="col-span-2 rounded-xl bg-surface-2 p-3">
+            <dt className="text-xs text-muted">{t('detail.location')}</dt>
+            <dd className="break-words font-semibold">{r.address}</dd>
+            <dd className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="mono text-muted">{r.lat.toFixed(5)}, {r.lng.toFixed(5)} · {ward?.name}</span>
+              <a
+                href={googleMapsPlaceUrl(r.lat, r.lng)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-semibold text-brand underline"
+              >
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                {t('map.openGoogleMaps')}
+              </a>
+            </dd>
+          </div>
           {r.slaDueAt && r.status !== 'resolved' && (
             <div className="col-span-2 flex items-center justify-between rounded-xl bg-surface-2 p-3"><dt className="flex items-center gap-1 text-xs text-muted"><Clock className="h-3.5 w-3.5" aria-hidden />{t('detail.sla')}</dt><dd><SlaClock iso={r.slaDueAt} /></dd></div>
           )}

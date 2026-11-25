@@ -244,7 +244,80 @@ function isGoogleMapsAvailableSnapshot(): boolean {
   return Boolean(GOOGLE_MAPS_API_KEY) && !googleRuntimeFailed;
 }
 
-/** Cấu hình Style cho MapLibre GL JS (hỗ trợ Retina @2x sắc nét + Hybrid Vệ tinh kèm lớp nhãn tên đường). */
+/** Liên kết mở đúng tọa độ trên Google Maps để đối chiếu trực tiếp. */
+export function googleMapsPlaceUrl(lat: number, lng: number): string {
+  return `https://www.google.com/maps/search/?api=1&query=${lat.toFixed(6)},${lng.toFixed(6)}`;
+}
+
+export const OPENFREEMAP_VECTOR_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+
+let cachedVectorStylePromise: Promise<StyleSpecification | null> | null = null;
+
+function cloneAndLocalizeVectorStyle(base: StyleSpecification, lang: 'vi' | 'en'): StyleSpecification {
+  const nameExpr: unknown =
+    lang === 'en'
+      ? ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name:latin'], ['get', 'name']]
+      : ['coalesce', ['get', 'name:vi'], ['get', 'name'], ['get', 'name:latin']];
+
+  return {
+    ...base,
+    layers: base.layers.map((layer) => {
+      if (layer.type !== 'symbol') return layer;
+      const layout = layer.layout as Record<string, unknown> | undefined;
+      if (!layout || !('text-field' in layout) || layer.id.includes('shield')) return layer;
+      return {
+        ...layer,
+        layout: {
+          ...layout,
+          'text-field': nameExpr,
+        },
+      } as typeof layer;
+    }),
+  };
+}
+
+/**
+ * Nạp Vector Tile Style chi tiết (đường hẻm, tòa nhà 3D, POI trường/chợ/bệnh viện, tên đường tiếng Việt)
+ * tương đương độ chi tiết Google Maps; tự động trả về null để rơi về Esri Street Map nếu offline/CSP chặn.
+ */
+export async function loadDetailedVectorRoadmapStyle(
+  lang: 'vi' | 'en',
+  signal?: AbortSignal,
+): Promise<StyleSpecification | null> {
+  if (typeof fetch === 'undefined') return null;
+  if (!cachedVectorStylePromise) {
+    const ctrl = new AbortController();
+    const timer = typeof window !== 'undefined' ? window.setTimeout(() => ctrl.abort(), 3500) : null;
+    cachedVectorStylePromise = fetch(OPENFREEMAP_VECTOR_STYLE_URL, {
+      headers: { Accept: 'application/json' },
+      signal: ctrl.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const json = (await res.json()) as StyleSpecification;
+        if (!json || !Array.isArray(json.layers) || !json.sources) return null;
+        return json;
+      })
+      .catch(() => {
+        cachedVectorStylePromise = null;
+        return null;
+      })
+      .finally(() => {
+        if (timer !== null) window.clearTimeout(timer);
+      });
+  }
+
+  const base = await cachedVectorStylePromise;
+  if (!base || signal?.aborted) return null;
+  return cloneAndLocalizeVectorStyle(base, lang);
+}
+
+/**
+ * Cấu hình Style cho MapLibre GL JS:
+ *  - `roadmap`: Esri World Street Map (chi tiết tên đường, hẻm, địa danh, zoom 0-19) — CSP-safe & dự phòng cho Vector.
+ *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation + Nhãn địa danh tiếng Việt.
+ *  - `dark`: Carto Dark Matter @2x cho chế độ tối / Trung tâm điều hành IOC.
+ */
 export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification {
   if (surface === 'hybrid') {
     return {
@@ -256,6 +329,15 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
           tileSize: 256,
           maxzoom: 19,
           attribution: '© Esri, Maxar, Earthstar Geographics',
+        },
+        'esri-transport': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: '© Esri',
         },
         'carto-labels': {
           type: 'raster',
@@ -271,6 +353,7 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
       },
       layers: [
         { id: 'esri-sat-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-transport-layer', type: 'raster', source: 'esri-transport', minzoom: 0, maxzoom: 22 },
         { id: 'carto-labels-layer', type: 'raster', source: 'carto-labels', minzoom: 0, maxzoom: 22 },
       ],
     };
@@ -299,18 +382,14 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
   return {
     version: 8,
     sources: {
-      'carto-voyager': {
+      'esri-street': {
         type: 'raster',
-        tiles: [
-          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        ],
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'],
         tileSize: 256,
-        maxzoom: 20,
-        attribution: '© OpenStreetMap © CARTO',
+        maxzoom: 19,
+        attribution: '© Esri, HERE, Garmin, OpenStreetMap contributors',
       },
     },
-    layers: [{ id: 'carto-voyager-layer', type: 'raster', source: 'carto-voyager', minzoom: 0, maxzoom: 22 }],
+    layers: [{ id: 'esri-street-layer', type: 'raster', source: 'esri-street', minzoom: 0, maxzoom: 22 }],
   };
 }

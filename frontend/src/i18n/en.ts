@@ -234,6 +234,7 @@ export const en: Record<keyof typeof vi, string> = {
   'map.layer.satellite': 'Hybrid Satellite',
   'map.fallbackBadge': 'Vector Fallback',
   'map.fallbackHint': 'Running MapLibre fallback mode (VITE_GOOGLE_MAPS_API_KEY not configured or restricted)',
+  'map.openGoogleMaps': 'Open in Google Maps',
   'map.errorTitle': 'Unable to render map frame',
   'map.errorHint': 'Switched to safe recovery mode. Tap retry to reload the map view.',
   'map.fitCity': 'All Dong Nai City',

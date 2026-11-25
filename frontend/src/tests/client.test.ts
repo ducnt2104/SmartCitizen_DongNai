@@ -14,6 +14,7 @@ import {
   createGeoJsonCircle,
   DONG_NAI_GOOGLE_BOUNDS,
   getPinState,
+  googleMapsPlaceUrl,
   isGoogleMapsHealthy,
   markGoogleMapsFailed,
 } from '../lib/mapConfig';
@@ -66,7 +67,11 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     expect(haversineMeters(10.9465, 106.8243, 10.9465, 106.8243)).toBe(0);
     expect(haversineMeters(10.9465, 106.8243, 10.9468, 106.8243)).toBeLessThan(50);
     expect(nearestWard(10.9465, 106.8243).wardCode).toBe('DN-TB');
-    expect(matchArterial(10.9465, 106.8243)?.name).toBe('Nguyễn Ái Quốc');
+    expect(matchArterial(10.9465, 106.8243)?.name).toBe('Võ Thị Sáu');
+    expect(matchArterial(10.95605, 106.8235)?.name).toBe('Nguyễn Ái Quốc');
+    for (const w of DONG_NAI_WARDS) {
+      expect(inDongNaiBBox(w.centerLat, w.centerLng), `${w.wardCode} ngoài bbox`).toBe(true);
+    }
     expect(searchWards('loc ninh').some((w) => w.wardCode === 'DN-LNI')).toBe(true);
     expect(resolveAdminUnit({ lat: 10.7906, lng: 106.9512, rawAddressText: 'Thị trấn Long Thành, Huyện Long Thành' }).wardCode).toBe('DN-LTH');
   });
@@ -107,8 +112,9 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     const hybrid = buildMapLibreStyle('hybrid');
     const dark = buildMapLibreStyle('dark');
     expect(roadmap.layers.length).toBe(1);
-    expect(hybrid.layers.length).toBe(2); // Vệ tinh + Nhãn tên đường
+    expect(hybrid.layers.length).toBe(3); // Vệ tinh + Mạng lưới đường + Nhãn tên đường
     expect(dark.layers.length).toBe(1);
+    expect(googleMapsPlaceUrl(10.9465, 106.8243)).toBe('https://www.google.com/maps/search/?api=1&query=10.946500,106.824300');
 
     const circle = createGeoJsonCircle(10.9465, 106.8243, 25, 32);
     expect(circle.geometry.coordinates[0]).toHaveLength(33);

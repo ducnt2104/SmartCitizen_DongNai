@@ -232,6 +232,7 @@ export const vi = {
   'map.layer.satellite': 'Vệ tinh + Đường',
   'map.fallbackBadge': 'Dự phòng Vector',
   'map.fallbackHint': 'Chế độ bản đồ dự phòng MapLibre (chưa cấu hình hoặc giới hạn VITE_GOOGLE_MAPS_API_KEY)',
+  'map.openGoogleMaps': 'Mở Google Maps',
   'map.errorTitle': 'Không tải được khung bản đồ',
   'map.errorHint': 'Đã chuyển sang chế độ an toàn. Bấm thử lại để làm mới khung bản đồ.',
   'map.fitCity': 'Toàn TP. Đồng Nai',
