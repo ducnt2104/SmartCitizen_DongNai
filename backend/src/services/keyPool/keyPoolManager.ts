@@ -6,12 +6,12 @@ import { newId } from '../../utils/crypto';
 import { badRequest, notFound } from '../../utils/errors';
 import {
   decryptApiKey,
-  detectGeminiKeyKind,
   detectKeyProvider,
   encryptApiKey,
   fingerprintApiKey,
   maskApiKey,
   parseBulkApiKeys,
+  parseGeminiKeyRouting,
   shortMaskApiKey,
 } from './cryptoVault';
 import {
@@ -19,8 +19,12 @@ import {
   computeCooldownMs,
   computeNextMidnightMs,
   DEFAULT_COOLDOWN_STEPS_MS,
-  sanitizeUpstreamErrorReason,
 } from './errorClassifier';
+import {
+  buildGeminiModelChain,
+  executeGeminiWithModelFallback,
+  normalizeGeminiModelName,
+} from './geminiRouting';
 import {
   API_KEY_PROVIDERS,
   type AddApiKeyInputItem,
@@ -29,6 +33,7 @@ import {
   type BulkAddApiKeysInput,
   type BulkAddApiKeysResult,
   type ExecuteWithRotationOptions,
+  type GeminiEndpointKind,
   type KeyHealthProbeFn,
   type KeyPoolSummary,
   type MaskedApiKeyInfo,
@@ -83,6 +88,7 @@ interface StoredEncryptedRecord {
   keyId: string;
   label: string;
   provider: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   encryptedKey: string;
   iv: string;
   authTag: string;
@@ -150,9 +156,9 @@ export class KeyPoolManager {
     this.defaultMaxAttempts = Math.max(1, options.defaultMaxAttempts ?? 10);
     this.nowFn = options.nowFn ?? Date.now;
     this.logger = options.logger ?? DEFAULT_LOGGER;
-    const rawDefaultModel =
-      (options.defaultGeminiModel ?? this.envSource.GEMINI_MODEL ?? 'gemini-2.5-flash').trim();
-    this.defaultGeminiModel = /^gemini-3\.5/i.test(rawDefaultModel) ? 'gemini-2.5-flash' : rawDefaultModel;
+    this.defaultGeminiModel = normalizeGeminiModelName(
+      options.defaultGeminiModel ?? this.envSource.GEMINI_MODEL,
+    );
     this.probeFn = options.probeFn ?? ((apiKey, meta) => this.defaultLiveProbe(apiKey, meta));
 
     this.loadEnvKeys();
@@ -194,32 +200,43 @@ export class KeyPoolManager {
 
   /**
    * Nạp tự động toàn bộ API key từ `.env`:
-   * 1. `GEMINI_API_KEYS="k1,k2,..."` (phân tách dấu phẩy/xuống dòng)
-   * 2. `GEMINI_API_KEY_1..N` (sắp xếp đúng thứ tự số học)
-   * 3. Fallback `GEMINI_API_KEY`
-   * Đồng thời hỗ trợ `OPENROUTER_API_KEYS`/`OPENROUTER_API_KEY_*` và `GROQ_API_KEYS`/`GROQ_API_KEY_*`.
+   * 1. `GEMINI_API_KEYS="k1,k2,..."` (phân tách dấu phẩy/xuống dòng), `GEMINI_API_KEY_1..N`, `GEMINI_API_KEY`
+   *    -> Mặc định định tuyến tới Google AI Studio (bao gồm cả `AQ.*` và `AIzaSy*`), trừ khi có tiền tố `vertex:`.
+   * 2. `VERTEX_API_KEYS` / `VERTEX_API_KEY_1..N` / `VERTEX_API_KEY` -> định tuyến tường minh tới Vertex AI.
+   * 3. `OPENROUTER_API_KEYS`/`OPENROUTER_API_KEY_*` và `GROQ_API_KEYS`/`GROQ_API_KEY_*`.
    */
   private loadEnvKeys(): void {
     const providerSpecs: Array<{
       provider: ApiKeyProvider;
+      defaultEndpoint: GeminiEndpointKind;
       pluralVar: string;
       numberedPrefix: string;
       singleVar: string;
     }> = [
       {
         provider: 'gemini',
+        defaultEndpoint: 'ai_studio',
         pluralVar: 'GEMINI_API_KEYS',
         numberedPrefix: 'GEMINI_API_KEY_',
         singleVar: 'GEMINI_API_KEY',
       },
       {
+        provider: 'gemini',
+        defaultEndpoint: 'vertex',
+        pluralVar: 'VERTEX_API_KEYS',
+        numberedPrefix: 'VERTEX_API_KEY_',
+        singleVar: 'VERTEX_API_KEY',
+      },
+      {
         provider: 'openrouter',
+        defaultEndpoint: 'ai_studio',
         pluralVar: 'OPENROUTER_API_KEYS',
         numberedPrefix: 'OPENROUTER_API_KEY_',
         singleVar: 'OPENROUTER_API_KEY',
       },
       {
         provider: 'groq',
+        defaultEndpoint: 'ai_studio',
         pluralVar: 'GROQ_API_KEYS',
         numberedPrefix: 'GROQ_API_KEY_',
         singleVar: 'GROQ_API_KEY',
@@ -264,10 +281,17 @@ export class KeyPoolManager {
       }
 
       for (const entry of collected) {
+        const provider = detectKeyProvider(entry.rawKey, spec.provider);
+        const routing =
+          provider === 'gemini'
+            ? parseGeminiKeyRouting(entry.rawKey, spec.defaultEndpoint)
+            : { cleanKey: entry.rawKey.trim(), geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+        if (!routing.cleanKey || routing.cleanKey.length < 8) continue;
         this.registerInMemoryKey({
-          rawKey: entry.rawKey,
+          rawKey: routing.cleanKey,
           label: entry.label,
-          provider: detectKeyProvider(entry.rawKey, spec.provider),
+          provider,
+          geminiEndpoint: routing.geminiEndpoint,
           source: 'env',
           weight: 1,
         });
@@ -279,7 +303,7 @@ export class KeyPoolManager {
     let otherCount = 0;
     for (const k of this.keys.values()) {
       if (k.provider === 'gemini') {
-        if (detectGeminiKeyKind(k.rawKey) === 'vertex') vertexCount += 1;
+        if (k.geminiEndpoint === 'vertex') vertexCount += 1;
         else aiStudioCount += 1;
       } else {
         otherCount += 1;
@@ -296,6 +320,7 @@ export class KeyPoolManager {
     rawKey: string;
     label: string;
     provider: ApiKeyProvider;
+    geminiEndpoint?: GeminiEndpointKind;
     source: 'env' | 'db';
     weight?: number;
     isEnabled?: boolean;
@@ -331,6 +356,7 @@ export class KeyPoolManager {
       slotNumber,
       label: params.label || `Key #${slotNumber}`,
       provider: params.provider,
+      geminiEndpoint: params.geminiEndpoint ?? 'ai_studio',
       source: params.source,
       rawKey: cleanKey,
       maskedKey: maskApiKey(cleanKey),
@@ -377,6 +403,7 @@ export class KeyPoolManager {
         keyId: d.keyId,
         label: d.label,
         provider: d.provider,
+        geminiEndpoint: d.geminiEndpoint === 'vertex' ? 'vertex' : 'ai_studio',
         encryptedKey: d.encryptedKey,
         iv: d.iv,
         authTag: d.authTag,
@@ -414,15 +441,24 @@ export class KeyPoolManager {
           { encryptedKey: row.encryptedKey, keyFingerprint: row.keyFingerprint },
           this.encryptionSecret,
         );
-        this.registerInMemoryKey({
+        const routing =
+          row.provider === 'gemini'
+            ? parseGeminiKeyRouting(decrypted, row.geminiEndpoint === 'vertex' ? 'vertex' : 'ai_studio')
+            : { cleanKey: decrypted, geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+        // Tự động khôi phục các key bị đánh dấu INVALID oan do lỗi 404 model cũ trước đây
+        const healedFromOld404 =
+          row.status === 'INVALID' &&
+          Boolean(row.lastError && /\b404\b|not[_ -]?found/i.test(row.lastError));
+        const registered = this.registerInMemoryKey({
           id: row.keyId,
-          rawKey: decrypted,
+          rawKey: routing.cleanKey,
           label: row.label,
           provider: row.provider,
+          geminiEndpoint: routing.geminiEndpoint,
           source: 'db',
           weight: row.weight,
           isEnabled: row.isEnabled,
-          status: row.status,
+          status: healedFromOld404 ? 'HEALTHY' : row.status,
           totalRequests: row.totalRequests,
           successCount: row.successCount,
           errorCount: row.errorCount,
@@ -434,10 +470,13 @@ export class KeyPoolManager {
             ? Date.parse(row.dailyQuotaExhaustedAt)
             : null,
           quotaResetAt: row.quotaResetAt ? Date.parse(row.quotaResetAt) : null,
-          lastError: row.lastError,
+          lastError: healedFromOld404 ? null : row.lastError,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
         });
+        if (healedFromOld404 && registered) {
+          this.persistRecordStateAsync(registered);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.error(
@@ -631,6 +670,7 @@ export class KeyPoolManager {
       slotNumber: record.slotNumber,
       label: record.label,
       provider: record.provider,
+      geminiEndpoint: record.geminiEndpoint,
       maskedKey: record.maskedKey,
       shortMask: record.shortMask,
     };
@@ -646,6 +686,7 @@ export class KeyPoolManager {
       slotNumber: record.slotNumber,
       label: record.label,
       provider: record.provider,
+      geminiEndpoint: record.provider === 'gemini' ? record.geminiEndpoint : undefined,
       source: record.source,
       maskedKey: record.maskedKey,
       weight: record.weight,
@@ -749,6 +790,12 @@ export class KeyPoolManager {
           candidate.cooldownUntil = failNow + cooldownMs;
           hitDesc = '429';
           stateActionDesc = `Cooldown ${Math.round(cooldownMs / 1000)}s`;
+        } else if (classified.kind === 'OVERLOADED_503') {
+          const cooldownMs = this.cooldownStepsMs[0] ?? 60_000;
+          candidate.status = 'COOLDOWN';
+          candidate.cooldownUntil = failNow + cooldownMs;
+          hitDesc = '503 (Overloaded)';
+          stateActionDesc = `Cooldown ${Math.round(cooldownMs / 1000)}s`;
         } else if (classified.kind === 'DAILY_QUOTA_EXHAUSTED') {
           candidate.error429Count += 1;
           candidate.consecutive429 += 1;
@@ -759,6 +806,11 @@ export class KeyPoolManager {
           candidate.quotaResetAt = resetMs;
           hitDesc = '429 (RPD Daily Quota)';
           stateActionDesc = `EXHAUSTED until ${new Date(resetMs).toISOString()}`;
+        } else if (classified.kind === 'MODEL_NOT_FOUND_404') {
+          candidate.status = 'HEALTHY';
+          candidate.cooldownUntil = null;
+          hitDesc = '404 (Model Not Found)';
+          stateActionDesc = 'Kept HEALTHY';
         } else if (classified.kind === 'INVALID_KEY') {
           candidate.status = 'INVALID';
           candidate.cooldownUntil = null;
@@ -912,6 +964,7 @@ export class KeyPoolManager {
             apiKey: parsed,
             label: item.label,
             provider: item.provider ?? input.provider,
+            geminiEndpoint: item.geminiEndpoint ?? input.geminiEndpoint,
             weight: item.weight ?? input.weight,
           });
         }
@@ -922,6 +975,7 @@ export class KeyPoolManager {
         normalizedItems.push({
           apiKey: parsed,
           provider: input.provider,
+          geminiEndpoint: input.geminiEndpoint,
           weight: input.weight,
         });
       }
@@ -931,6 +985,7 @@ export class KeyPoolManager {
         normalizedItems.push({
           apiKey: parsed,
           provider: input.provider,
+          geminiEndpoint: input.geminiEndpoint,
           weight: input.weight,
         });
       }
@@ -940,6 +995,7 @@ export class KeyPoolManager {
         normalizedItems.push({
           apiKey: parsed,
           provider: input.provider,
+          geminiEndpoint: input.geminiEndpoint,
           weight: input.weight,
         });
       }
@@ -961,7 +1017,12 @@ export class KeyPoolManager {
 
     for (let i = 0; i < normalizedItems.length; i++) {
       const item = normalizedItems[i];
-      const clean = item.apiKey.trim();
+      const provider = detectKeyProvider(item.apiKey, item.provider);
+      const routing =
+        provider === 'gemini'
+          ? parseGeminiKeyRouting(item.apiKey, item.geminiEndpoint ?? 'ai_studio')
+          : { cleanKey: item.apiKey.trim(), geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+      const clean = routing.cleanKey;
       if (clean.length < 8 || /\s/.test(clean)) {
         invalidFormatCount += 1;
         continue;
@@ -975,7 +1036,6 @@ export class KeyPoolManager {
 
       const encrypted = encryptApiKey(clean, this.encryptionSecret);
       const keyId = newId('ak');
-      const provider = detectKeyProvider(clean, item.provider);
       const weight = Math.max(1, Math.min(20, Math.round(item.weight ?? 1)));
       const nextSlotPreview = this.nextSlotNumber;
       const label =
@@ -988,6 +1048,7 @@ export class KeyPoolManager {
         keyId,
         label,
         provider,
+        geminiEndpoint: routing.geminiEndpoint,
         encryptedKey: encrypted.encryptedKey,
         iv: encrypted.iv,
         authTag: encrypted.authTag,
@@ -1020,6 +1081,7 @@ export class KeyPoolManager {
         rawKey: clean,
         label,
         provider,
+        geminiEndpoint: routing.geminiEndpoint,
         source: 'db',
         weight,
         isEnabled: true,
@@ -1166,11 +1228,17 @@ export class KeyPoolManager {
         record.status = 'COOLDOWN';
         record.cooldownUntil =
           endMs + computeCooldownMs(record.consecutive429, this.cooldownStepsMs);
+      } else if (classified.kind === 'OVERLOADED_503') {
+        record.status = 'COOLDOWN';
+        record.cooldownUntil = endMs + (this.cooldownStepsMs[0] ?? 60_000);
       } else if (classified.kind === 'DAILY_QUOTA_EXHAUSTED') {
         record.error429Count += 1;
         record.status = 'EXHAUSTED';
         record.dailyQuotaExhaustedAt = endMs;
         record.quotaResetAt = computeNextMidnightMs(endMs, this.quotaResetTimeZone);
+      } else if (classified.kind === 'MODEL_NOT_FOUND_404') {
+        record.status = 'HEALTHY';
+        record.cooldownUntil = null;
       } else if (classified.kind === 'INVALID_KEY') {
         record.status = 'INVALID';
         record.cooldownUntil = null;
@@ -1230,82 +1298,21 @@ export class KeyPoolManager {
         return { ok: true, detail: 'Groq API Key hợp lệ.' };
       }
 
-      const cleanKey = apiKey.trim();
-      const modelsToTry = Array.from(
-        new Set([this.defaultGeminiModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']),
-      );
-      let lastModelErr: unknown = null;
-
-      if (/^AQ\./.test(cleanKey)) {
-        for (const modelId of modelsToTry) {
-          const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
-              generationConfig: { maxOutputTokens: 5, temperature: 0 },
-            }),
-            signal: controller.signal,
-          });
-          if (res.ok) {
-            const data = (await res.json().catch(() => ({}))) as {
-              candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-            };
-            const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-            return {
-              ok: true,
-              detail: `Vertex AI (${modelId}) phản hồi thành công${replyText ? `: "${replyText.trim().slice(0, 24)}"` : ''}.`,
-            };
-          }
-          const errBody = await res.text().catch(() => '');
-          lastModelErr = Object.assign(
-            new Error(`Vertex AI (${modelId}) ${sanitizeUpstreamErrorReason(errBody, res.status)}`),
-            { status: res.status },
-          );
-          if (res.status === 404) {
-            continue;
-          }
-          throw lastModelErr;
-        }
-        throw lastModelErr ?? new Error('Không tìm thấy model khả dụng trên Vertex AI.');
-      }
-
-      for (const modelId of modelsToTry) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': cleanKey,
-          },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
-            generationConfig: { maxOutputTokens: 5, temperature: 0 },
-          }),
-          signal: controller.signal,
-        });
-        if (res.ok) {
-          const data = (await res.json().catch(() => ({}))) as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-          };
-          const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-          return {
-            ok: true,
-            detail: `Google AI Studio (${modelId}) phản hồi thành công${replyText ? `: "${replyText.trim().slice(0, 24)}"` : ''}.`,
-          };
-        }
-        const errBody = await res.text().catch(() => '');
-        lastModelErr = Object.assign(
-          new Error(`Google AI Studio (${modelId}) ${sanitizeUpstreamErrorReason(errBody, res.status)}`),
-          { status: res.status },
-        );
-        if (res.status === 404) {
-          continue;
-        }
-        throw lastModelErr;
-      }
-      throw lastModelErr ?? new Error('Không tìm thấy model Gemini khả dụng.');
+      const modelsToTry = buildGeminiModelChain(this.defaultGeminiModel);
+      const { text, modelUsed, endpointUsed } = await executeGeminiWithModelFallback({
+        apiKey,
+        geminiEndpoint: meta.geminiEndpoint ?? 'ai_studio',
+        models: modelsToTry,
+        contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
+        config: { maxOutputTokens: 5, temperature: 0 },
+        timeoutMs: 10_000,
+        label: 'KeyPool Probe',
+      });
+      const endpointLabel = endpointUsed === 'vertex' ? 'Vertex AI' : 'Google AI Studio';
+      return {
+        ok: true,
+        detail: `${endpointLabel} (${modelUsed}) phản hồi thành công${text ? `: "${text.trim().slice(0, 24)}"` : ''}.`,
+      };
     } finally {
       clearTimeout(timer);
     }

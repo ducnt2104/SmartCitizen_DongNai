@@ -10,6 +10,9 @@
 import { performance } from 'node:perf_hooks';
 import sharp from 'sharp';
 import { hammingDistance } from '../shared/dhash';
+
+sharp.cache(false);
+sharp.concurrency(2);
 import { haversineMeters } from '../shared/geo';
 import type { Category } from '../shared/types';
 import type { ImageFingerprintRecord } from '../repositories/types';

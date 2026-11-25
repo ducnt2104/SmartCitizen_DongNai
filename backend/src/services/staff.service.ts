@@ -15,6 +15,7 @@ import type {
   ClientReport,
   Department,
   DispatchOrder,
+  Photo,
   Report,
   RescueLiveLocation,
   RescueMissionItem,
@@ -29,9 +30,11 @@ import type {
 import type { Repositories, UserFilterQuery, UserRecord } from '../repositories/types';
 import { badRequest, conflict, forbidden, notFound } from '../utils/errors';
 import { hashPassword, newId } from '../utils/crypto';
-import { assertScope, isAdminRole, parsePhotoDataUrl, type PhotoInput } from './access';
+import { assertScope, isAdminRole, loadStoredPhotoForVerification, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { AuditService } from './audit.service';
+import type { CacheService } from './cache.service';
 import type { EdgeStats, GeminiService } from './gemini.service';
+import type { MediaService } from './media.service';
 import { slaHoursFor } from './report.service';
 import { toProfile, type TrustService } from './trust.service';
 
@@ -54,12 +57,53 @@ function csvCell(v: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+function extractStaffPhoto(p: PhotoInput): { mime: string; base64: string } {
+  if (p.dataUrl) {
+    const parsed = parsePhotoDataUrl(p.dataUrl);
+    return { mime: parsed.mime, base64: parsed.base64 };
+  }
+  const buf = p.aiBuffer ?? p.buffer;
+  if (buf && buf.byteLength > 0) {
+    return { mime: 'image/webp', base64: buf.toString('base64') };
+  }
+  throw badRequest('Thiếu dữ liệu ảnh nghiệm thu (multipart hoặc dataUrl).', 'invalid_photo');
+}
+
+async function persistStaffPhoto(
+  media: MediaService | undefined,
+  p: PhotoInput,
+  kind: Photo['kind'],
+  by: string,
+  reportId: string,
+): Promise<Photo> {
+  const now = new Date().toISOString();
+  if (p.buffer && p.buffer.byteLength > 0 && media) {
+    const stored = await media.storeIncidentImage({ buffer: p.buffer, dHash: p.dHash, reportId });
+    return {
+      id: newId('ph'),
+      url: stored.url,
+      thumbnailUrl: stored.thumbnailUrl,
+      mediaId: stored.mediaId,
+      dHash: p.dHash,
+      width: stored.width,
+      height: stored.height,
+      bytes: stored.displayBytes,
+      kind,
+      takenBy: by,
+      createdAt: now,
+    };
+  }
+  return { id: newId('ph'), url: p.dataUrl ?? '', dHash: p.dHash, kind, takenBy: by, createdAt: now };
+}
+
 export class StaffService {
   constructor(
     private readonly repos: Repositories,
     private readonly gemini: GeminiService,
     private readonly trust: TrustService,
     private readonly audit: AuditService,
+    private readonly cache?: CacheService,
+    private readonly media?: MediaService,
   ) {}
 
   private actor(u: UserRecord) {
@@ -144,6 +188,7 @@ export class StaffService {
     r.timeline.push({ stage: 'processing', at: now, note: `Giao ${department}, hạn SLA ${slaHours} giờ` });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'report.assign', r.id, before, snap(r));
     return toClientReport(r);
   }
@@ -160,6 +205,7 @@ export class StaffService {
     r.timeline.push({ stage: status, at: now, note: status === 'verifying' ? 'Cán bộ xác minh thông tin' : 'Bắt đầu xử lý' });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'report.status', r.id, before, snap(r));
     return toClientReport(r);
   }
@@ -186,6 +232,7 @@ export class StaffService {
     r.timeline.push({ stage: 'dispatched', at: now, note: `Chi viện sang ${targets.join(', ')}` });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'dispatch.manual', r.id, before, { ...snap(r), order });
     return toClientReport(r);
   }
@@ -201,6 +248,7 @@ export class StaffService {
     r.timeline.push({ stage: 'received', at: now, note: 'Cán bộ khôi phục đơn (nhận diện nhầm)' });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'report.restore', r.id, before, snap(r));
     return toClientReport(r);
   }
@@ -214,6 +262,7 @@ export class StaffService {
     r.timeline.push({ stage: 'quarantined', at: now, note: `Đánh dấu Spam / Tin giả. ${reason}`.trim() });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.trust.penalizeSpam(r.reporterId);
     await this.audit.log(this.actor(u), 'report.mark_spam', r.id, before, { ...snap(r), reason });
     return toClientReport(r);
@@ -226,11 +275,10 @@ export class StaffService {
       throw badRequest('Không thể nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
     }
     const before = r.photos[0];
-    const a = parsePhotoDataUrl(afterPhoto.dataUrl);
-    const svgBefore = before.url.startsWith('data:image/svg');
-    const b = svgBefore ? { mime: a.mime, base64: '' } : parsePhotoDataUrl(before.url);
+    const a = extractStaffPhoto(afterPhoto);
+    const b = await loadStoredPhotoForVerification(before);
 
-    const verdict = svgBefore
+    const verdict = b.isSvg
       ? this.gemini.fallbackVerify({
           reportId: r.id,
           beforeBase64: '',
@@ -270,13 +318,14 @@ export class StaffService {
       mode: verdict.mode,
       at: now,
     };
-    r.afterPhoto = { id: newId('ph'), url: afterPhoto.dataUrl, dHash: afterPhoto.dHash, kind: 'after', takenBy: u.id, createdAt: now };
+    r.afterPhoto = await persistStaffPhoto(this.media, afterPhoto, 'after', u.id, r.id);
 
     const accepted = verdict.resolutionVerified || override;
     if (!accepted) {
       r.timeline.push({ stage: 'processing', at: now, note: `Nghiệm thu KHÔNG đạt: ${verdict.summary}` });
       r.updatedAt = now;
       await this.repos.reports.update(r);
+      this.cache?.invalidateReports();
       await this.audit.log(this.actor(u), 'report.resolve_rejected', r.id, prev, { ...snap(r), resolution: r.resolution });
       return { report: toClientReport(r), accepted: false };
     }
@@ -289,6 +338,7 @@ export class StaffService {
     });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), override && !verdict.resolutionVerified ? 'report.resolve_override' : 'report.resolve', r.id, prev, {
       ...snap(r),
       resolution: r.resolution,
@@ -563,6 +613,7 @@ export class StaffService {
     });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'report.transfer_ward', r.id, before, { wardCode: targetWard.wardCode, note });
     return toClientReport(r);
   }
@@ -642,7 +693,7 @@ export class StaffService {
     const r = await this.repos.reports.get(id);
     if (!r || !r.needsFieldVerification) throw notFound('Nhiệm vụ không tồn tại.');
     if (r.assignedVolunteerId !== u.id) throw forbidden('Hãy tiếp nhận nhiệm vụ trước khi gửi kết quả xác minh.');
-    if (photo) parsePhotoDataUrl(photo.dataUrl);
+    if (photo && !photo.buffer && photo.dataUrl) parsePhotoDataUrl(photo.dataUrl);
     const before = snap(r);
     const now = new Date().toISOString();
     r.verification = {
@@ -651,7 +702,7 @@ export class StaffService {
       volunteerId: u.id,
       volunteerName: u.name,
       at: now,
-      photo: photo ? { id: newId('ph'), url: photo.dataUrl, dHash: photo.dHash, kind: 'verify', takenBy: u.id, createdAt: now } : null,
+      photo: photo ? await persistStaffPhoto(this.media, photo, 'verify', u.id, r.id) : null,
     };
     r.needsFieldVerification = false;
     if (verdict === 'true') {
@@ -671,6 +722,7 @@ export class StaffService {
     }
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     const me = await this.repos.users.get(u.id);
     if (me) {
       me.volunteerHours = Math.round((me.volunteerHours + 0.5) * 10) / 10;
@@ -1012,6 +1064,7 @@ export class StaffService {
       ),
     );
 
+    this.cache?.invalidateReports();
     const reporter = await this.repos.users.get(claimed.reporterId);
     return this.enrichRescueItem(claimed, safeCoords, reporter);
   }
@@ -1101,6 +1154,7 @@ export class StaffService {
     r.updatedAt = now;
 
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'rescue.release', r.id, before, {
       status: r.status,
       rescueStatus: r.rescueStatus,
@@ -1265,6 +1319,7 @@ export class StaffService {
       r.updatedAt = now;
 
       await this.repos.reports.update(r);
+      this.cache?.invalidateReports();
       await this.audit.log(this.actor(u), 'rescue.resolved', r.id, before, {
         status: r.status,
         rescueStatus: r.rescueStatus,
@@ -1363,6 +1418,7 @@ export class StaffService {
     r.updatedAt = now;
 
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), `rescue.${step}`, r.id, before, {
       status: r.status,
       rescueStatus: r.rescueStatus,
@@ -1415,11 +1471,10 @@ export class StaffService {
     }
 
     const before = r.photos[0];
-    const a = parsePhotoDataUrl(afterPhoto.dataUrl);
-    const svgBefore = before.url.startsWith('data:image/svg');
-    const b = svgBefore ? { mime: a.mime, base64: '' } : parsePhotoDataUrl(before.url);
+    const a = extractStaffPhoto(afterPhoto);
+    const b = await loadStoredPhotoForVerification(before);
 
-    const verdict = svgBefore
+    const verdict = b.isSvg
       ? this.gemini.fallbackVerify({
           reportId: r.id,
           beforeBase64: '',
@@ -1461,14 +1516,7 @@ export class StaffService {
       mode: verdict.mode,
       at: now,
     };
-    r.afterPhoto = {
-      id: newId('ph'),
-      url: afterPhoto.dataUrl,
-      dHash: afterPhoto.dHash,
-      kind: 'after',
-      takenBy: u.id,
-      createdAt: now,
-    };
+    r.afterPhoto = await persistStaffPhoto(this.media, afterPhoto, 'after', u.id, r.id);
 
     const reporter = await this.repos.users.get(r.reporterId);
     const accepted = verdict.resolutionVerified || override;
@@ -1480,6 +1528,7 @@ export class StaffService {
       });
       r.updatedAt = now;
       await this.repos.reports.update(r);
+      this.cache?.invalidateReports();
       await this.audit.log(this.actor(u), 'rescue.complete_rejected', r.id, prev, {
         ...snap(r),
         resolution: r.resolution,
@@ -1522,6 +1571,7 @@ export class StaffService {
     });
     r.updatedAt = now;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log(this.actor(u), 'rescue.complete', r.id, prev, {
       ...snap(r),
       resolution: r.resolution,

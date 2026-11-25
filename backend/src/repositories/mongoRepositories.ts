@@ -37,6 +37,7 @@ import type {
   NearbyQuery,
   OtpRecord,
   OtpRepository,
+  ReportProjection,
   ReportQuery,
   ReportRepository,
   Repositories,
@@ -46,6 +47,21 @@ import type {
   UserRecord,
   UserRepository,
 } from './types';
+
+function projectionSelect(projection?: ReportProjection): string | null {
+  switch (projection) {
+    case 'code_only':
+      return '-_id id code createdAt status';
+    case 'stats':
+      return '-_id id status category createdAt resolvedAt isEmergency slaDueAt wardCode';
+    case 'dedup':
+      return '-_id id code category title status wardCode lat lng location clusterCount createdAt reporterId contributors photos.id photos.dHash photos.mediaId photos.thumbnailUrl ai.priorityScore';
+    case 'summary':
+      return '-_id id code category title severity severityLabel priorityScore isEmergency emergencyLevel priority status wardCode lat lng location clusterCount confirmCount contributorCount confirmations contributors photos.id photos.mediaId photos.thumbnailUrl photos.url photos.dHash photos.kind photos.takenBy photos.createdAt ai.priorityScore ai.severityLabel createdAt resolvedAt slaDueAt rescueStatus assignedRescueId assignedRescueName reporterId';
+    default:
+      return null;
+  }
+}
 
 type Doc = Record<string, unknown>;
 
@@ -190,7 +206,9 @@ class MongoReportRepo implements ReportRepository {
       filter.createdAt = { $lt: String(q.cursor) };
     }
 
+    const sel = projectionSelect(q.projection);
     let cursor = ReportModel.find(filter).sort({ createdAt: -1 });
+    if (sel) cursor = cursor.select(sel);
     if (q.limit) cursor = cursor.limit(q.limit);
     const docs = (await cursor.lean()) as Doc[];
     return docs.map((d) => reportFromDoc(d)!);
@@ -333,12 +351,19 @@ class MongoReportRepo implements ReportRepository {
       },
     };
     if (q.category) filter.category = String(q.category);
-    const docs = (await ReportModel.find(filter).limit(150).lean()) as Doc[];
+    if (q.sinceIso) filter.createdAt = { $gte: String(q.sinceIso) };
+    let cursor = ReportModel.find(filter);
+    const sel = projectionSelect(q.projection);
+    if (sel) cursor = cursor.select(sel);
+    const docs = (await cursor.limit(q.limit ?? 150).lean()) as Doc[];
     return docs.map((d) => reportFromDoc(d)!);
   }
 
-  async findSince(sinceIso: string): Promise<Report[]> {
-    const docs = (await ReportModel.find({ createdAt: { $gte: sinceIso } }).sort({ createdAt: -1 }).lean()) as Doc[];
+  async findSince(sinceIso: string, projection?: ReportProjection): Promise<Report[]> {
+    let cursor = ReportModel.find({ createdAt: { $gte: sinceIso } }).sort({ createdAt: -1 });
+    const sel = projectionSelect(projection);
+    if (sel) cursor = cursor.select(sel);
+    const docs = (await cursor.lean()) as Doc[];
     return docs.map((d) => reportFromDoc(d)!);
   }
 

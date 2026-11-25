@@ -21,9 +21,12 @@ import type { CreateReportInput } from '../validation/schemas';
 import { badRequest, forbidden, notFound, tooMany } from '../utils/errors';
 import { newId } from '../utils/crypto';
 import { canSee, isOwner, parsePhotoDataUrl, type PhotoInput } from './access';
+import type { Stage2PostProcessorService } from './ai';
 import { SYSTEM_ACTOR, type AuditService } from './audit.service';
+import type { CacheService } from './cache.service';
 import type { CvEngineService } from './cvEngine.service';
 import type { GeminiService } from './gemini.service';
+import type { MediaService } from './media.service';
 import { decideTriage, type KnownReport } from './triage.service';
 import type { TrustService } from './trust.service';
 
@@ -51,8 +54,31 @@ function unitsFor(category: Category, hazards: string[]): Department[] {
   return [...units];
 }
 
-function mkPhoto(p: PhotoInput, kind: Photo['kind'], by: string): Photo {
-  return { id: newId('ph'), url: p.dataUrl, dHash: p.dHash, kind, takenBy: by, createdAt: new Date().toISOString() };
+async function persistPhoto(
+  media: MediaService | undefined,
+  p: PhotoInput,
+  kind: Photo['kind'],
+  by: string,
+  reportId?: string,
+): Promise<Photo> {
+  const now = new Date().toISOString();
+  if (p.buffer && p.buffer.byteLength > 0 && media) {
+    const stored = await media.storeIncidentImage({ buffer: p.buffer, dHash: p.dHash, reportId });
+    return {
+      id: newId('ph'),
+      url: stored.url,
+      thumbnailUrl: stored.thumbnailUrl,
+      mediaId: stored.mediaId,
+      dHash: p.dHash,
+      width: stored.width,
+      height: stored.height,
+      bytes: stored.displayBytes,
+      kind,
+      takenBy: by,
+      createdAt: now,
+    };
+  }
+  return { id: newId('ph'), url: p.dataUrl ?? '', dHash: p.dHash, kind, takenBy: by, createdAt: now };
 }
 
 function known(r: Report): KnownReport {
@@ -72,6 +98,9 @@ export class ReportService {
     private readonly trust: TrustService,
     private readonly audit: AuditService,
     private readonly cvEngine?: CvEngineService,
+    private readonly cache?: CacheService,
+    private readonly media?: MediaService,
+    private readonly stage2?: Stage2PostProcessorService,
   ) {}
 
   async list(user: UserRecord | null, scope: string, category?: string): Promise<ClientReport[]> {
@@ -116,6 +145,7 @@ export class ReportService {
       statuses,
       bbox: opts.bbox,
       limit: opts.limit ?? 1500,
+      projection: 'summary',
     });
     return rows.filter((r) => canSee(user, r)).map(toReportSummary);
   }
@@ -128,8 +158,8 @@ export class ReportService {
 
   async stats(scope: string): Promise<ScopeStats> {
     const wardCodes = scope.startsWith('ward:') ? [scope.slice(5)] : undefined;
-    const rows = await this.repos.reports.list({ wardCodes });
-    return computeStats(rows.map(toClientReport), scope);
+    const rows = await this.repos.reports.list({ wardCodes, projection: 'stats' });
+    return computeStats(rows, scope);
   }
 
   async mine(user: UserRecord): Promise<ClientReport[]> {
@@ -150,8 +180,12 @@ export class ReportService {
     return r && canSee(user, r) ? [toClientReport(r)] : [];
   }
 
-  // ── Tạo mới + Rust CV Forensics + Crop/ORB Dedup + AI Triage ───────────────
-  async create(user: UserRecord, input: CreateReportInput, proxyVolunteerId: string | null = null): Promise<CreateResult> {
+  // ── Tạo mới + 3-Stage AI Cascade + Crop/ORB Dedup + Binary WebP Storage ───
+  async create(
+    user: UserRecord,
+    input: CreateReportInput & { photoInput?: PhotoInput; rateLimitKey?: string },
+    proxyVolunteerId: string | null = null,
+  ): Promise<CreateResult> {
     const id = `rp_${input.idempotencyKey}`;
     const existing = await this.repos.reports.get(id);
     if (existing && existing.reporterId === user.id) {
@@ -174,33 +208,64 @@ export class ReportService {
     if (!normPin.inDongNai || !inDongNaiBBox(pinLat, pinLng)) {
       throw badRequest('Vị trí nằm ngoài địa bàn Thành phố Đồng Nai.', 'out_of_bounds');
     }
-    const { mime, base64 } = parsePhotoDataUrl(input.photo.dataUrl);
+
+    let resolvedPhoto: PhotoInput;
+    let isLegacyJsonStub = false;
+    if (input.photoInput) {
+      resolvedPhoto = input.photoInput;
+      isLegacyJsonStub = Boolean(resolvedPhoto.dataUrl);
+    } else if (input.photo?.dataUrl) {
+      const parsed = parsePhotoDataUrl(input.photo.dataUrl);
+      resolvedPhoto = {
+        dataUrl: input.photo.dataUrl,
+        buffer: parsed.buffer,
+        dHash: input.photo.dHash ?? input.dHash ?? '0000000000000000',
+      };
+      isLegacyJsonStub = true;
+    } else {
+      throw badRequest('Thiếu ảnh hiện trường (multipart binary hoặc dataUrl).', 'invalid_photo');
+    }
+
+    const aiBuf = resolvedPhoto.aiBuffer ?? resolvedPhoto.buffer;
+    const base64ForCv = aiBuf ? aiBuf.toString('base64') : '';
+    const legacyParsed = resolvedPhoto.dataUrl ? parsePhotoDataUrl(resolvedPhoto.dataUrl) : null;
+    const mime = resolvedPhoto.aiBuffer ? 'image/webp' : legacyParsed?.mime ?? 'image/webp';
+
     const category = normalizeCategoryInput(input.category) ?? 'khac';
     const ward = (input.wardCode && WARD_BY_CODE[input.wardCode]) || nearestWard(pinLat, pinLng);
     const arterial = matchArterial(pinLat, pinLng);
-    const firstPhoto = mkPhoto(input.photo, 'before', user.id);
+    const pendingPhotoId = newId('ph');
 
     const dynCfg = this.cvEngine ? await this.cvEngine.getConfig() : null;
 
-    // Chạy song song: (A) Phân tích Vision + Authenticity 3 tầng, (B) Quét ảnh cắt / trùng lặp ORB + RANSAC trong bán kính 200m
+    // Chạy song song: (A) 3-Stage AI Cascade, (B) Quét ảnh cắt / trùng lặp ORB + RANSAC trong bán kính 200m
     const [analysis, rustDup] = await Promise.all([
       this.gemini.analyzeImage({
-        imageBase64: base64,
+        imageBuffer: aiBuf,
+        imageBase64: base64ForCv,
         mimeType: mime,
-        dHash: input.photo.dHash,
+        dHash: resolvedPhoto.dHash,
         hintCategory: category,
         hintText: `${input.title}. ${input.description}`,
         edge: input.edge,
+        exif: input.exif,
+        lat: pinLat,
+        lng: pinLng,
         reportId: id,
         onArterial: arterial !== null,
         wardCode: ward.wardCode,
+        rateLimitKey: input.rateLimitKey ?? `rp_user:${user.id}`,
+        trustScore: user.trustScore,
+        reportsRepo: this.repos.reports,
+        allowTinyTestStub: process.env.NODE_ENV === 'test' && isLegacyJsonStub,
+        skipCache: true,
       }),
       this.cvEngine
         ? this.cvEngine.checkAndRegisterDuplicate({
-            imageBase64: base64,
-            dHash: input.photo.dHash,
+            imageBase64: base64ForCv,
+            dHash: resolvedPhoto.dHash,
             reportId: id,
-            photoId: firstPhoto.id,
+            photoId: pendingPhotoId,
             wardCode: ward.wardCode,
             category,
             lat: pinLat,
@@ -219,8 +284,10 @@ export class ReportService {
     const gpsWarn = !exempt && gpsDistM !== null && gpsDistM > GPS_WARN_M;
 
     const nowIso = new Date().toISOString();
-    const recent = (await this.repos.reports.findSince(new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString())).map(known);
-    const nearby = (await this.repos.reports.findNearby({ lat: pinLat, lng: pinLng, radiusM: CLUSTER_RADIUS_M, category }))
+    const recent = (await this.repos.reports.findSince(new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString(), 'dedup')).map(known);
+    const nearby = (
+      await this.repos.reports.findNearby({ lat: pinLat, lng: pinLng, radiusM: CLUSTER_RADIUS_M, category, projection: 'dedup' })
+    )
       .filter((r) => ['received', 'verifying', 'processing'].includes(r.status))
       .map(known);
 
@@ -233,7 +300,7 @@ export class ReportService {
         analysis.isAuthentic === false && analysis.fraudFlags.length
           ? `Hệ thống CV chặn ảnh nghi chụp màn hình / giả mạo (${analysis.fraudFlags.join(', ')})`
           : undefined,
-      photoHash: input.photo.dHash,
+      photoHash: resolvedPhoto.dHash,
       recent,
       nearby,
       gpsDistanceM: gpsDistM,
@@ -258,7 +325,7 @@ export class ReportService {
     if (decision.action === 'merge') {
       const mother = (await this.repos.reports.get(decision.motherId))!;
       const before = { clusterCount: mother.clusterCount, priority: mother.priority, severity: mother.severity };
-      mother.photos.push(mkPhoto(input.photo, 'angle', user.id));
+      mother.photos.push(await persistPhoto(this.media, resolvedPhoto, 'angle', user.id, mother.id));
       mother.contributors.push({ userId: user.id, phoneMasked, at: nowIso });
       mother.clusterCount += 1;
       if (mother.priority === 'normal') mother.priority = 'high';
@@ -273,6 +340,7 @@ export class ReportService {
       });
       mother.updatedAt = nowIso;
       await this.repos.reports.update(mother);
+      this.cache?.invalidateReports();
       await this.audit.log(SYSTEM_ACTOR, 'report.cluster_merge', mother.id, before, {
         clusterCount: mother.clusterCount,
         priority: mother.priority,
@@ -280,6 +348,8 @@ export class ReportService {
       });
       return { outcome: 'merged', messageCode: 'merged', report: toClientReport(mother) };
     }
+
+    const firstPhoto = await persistPhoto(this.media, resolvedPhoto, 'before', user.id, id);
 
     const emergency = analysis.isEmergency;
     const level1 = emergency && arterial !== null;
@@ -369,6 +439,15 @@ export class ReportService {
         isDuplicateCrop: Boolean(rustDup?.is_duplicate),
         duplicateSimilarity: rustDup?.similarity_score ?? null,
         inlierCount: rustDup?.inlier_count ?? null,
+        relevanceScore: analysis.relevanceScore,
+        abuseRisk: analysis.abuseRisk,
+        isScreenCaptureOrFake: analysis.isScreenCaptureOrFake,
+        forensicFlags: analysis.forensicFlags ?? analysis.fraudFlags,
+        keyEvidenceTags: analysis.keyEvidenceTags,
+        decision: quarantined && analysis.decision === 'AUTO_REJECT' ? 'AUTO_REJECT' : analysis.decision,
+        citizenFeedback: analysis.citizenFeedback,
+        officerReviewNotes: analysis.officerReviewNotes,
+        latencyMs: analysis.latencyMs,
         mode: analysis.mode,
       },
       gpsMismatchWarning: gpsWarn,
@@ -407,6 +486,17 @@ export class ReportService {
     }
 
     await this.repos.reports.insert(report);
+    this.cache?.invalidateReports();
+    this.stage2?.schedulePostProcess({
+      userId: user.id,
+      reportId: report.id,
+      decision: quarantined && analysis.decision === 'AUTO_REJECT' ? 'AUTO_REJECT' : analysis.decision,
+      authenticityScore: analysis.authenticityScore,
+      fraudFlags: analysis.fraudFlags,
+      engineMode: analysis.mode,
+      latencyMs: analysis.latencyMs ?? 0,
+      summary: analysis.citizenFeedback || analysis.officerReviewNotes || analysis.description,
+    });
     await this.audit.log(actor, 'report.create', report.id, null, {
       code: report.code,
       category: report.category,
@@ -431,7 +521,7 @@ export class ReportService {
   }
 
   private async nextCode(wardCode: string): Promise<string> {
-    const all = await this.repos.reports.list({ wardCodes: [wardCode] });
+    const all = await this.repos.reports.list({ wardCodes: [wardCode], projection: 'code_only' });
     const prefix = `${wardCode}-2611-`;
     const max = all.reduce((m, r) => (r.code.startsWith(prefix) ? Math.max(m, parseInt(r.code.slice(prefix.length), 10) || 0) : m), 0);
     return `${prefix}${String(max + 1).padStart(3, '0')}`;
@@ -452,6 +542,7 @@ export class ReportService {
     }
     r.updatedAt = new Date().toISOString();
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.confirm', r.id, before, {
       confirmCount: r.confirmations.length,
       priority: r.priority,
@@ -464,13 +555,13 @@ export class ReportService {
     if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
       throw badRequest('Hồ sơ này không nhận thêm ảnh.', 'not_attachable');
     }
-    parsePhotoDataUrl(photo.dataUrl);
+    if (!photo.buffer && photo.dataUrl) parsePhotoDataUrl(photo.dataUrl);
     if (r.photos.length >= 8) throw badRequest('Hồ sơ đã đủ số ảnh tối đa (8).', 'photo_limit');
     const min = r.photos.reduce((m, p) => Math.min(m, hammingDistance(photo.dHash, p.dHash)), 64);
     if (min <= 5) throw badRequest(`Ảnh này trùng với ảnh đã có (dHash distance = ${min}). Hãy chụp từ góc khác.`, 'duplicate_photo');
     const newPerson = !isOwner(user, r);
     const nowIso = new Date().toISOString();
-    r.photos.push(mkPhoto(photo, 'angle', user.id));
+    r.photos.push(await persistPhoto(this.media, photo, 'angle', user.id, r.id));
     if (newPerson) {
       r.contributors.push({ userId: user.id, phoneMasked: user.phone ? maskPhone(user.phone) : '***', at: nowIso });
       r.clusterCount += 1;
@@ -479,6 +570,7 @@ export class ReportService {
     }
     r.updatedAt = nowIso;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.attach_photo', r.id, null, {
       photos: r.photos.length,
       clusterCount: r.clusterCount,
@@ -494,6 +586,7 @@ export class ReportService {
     r.rating = { stars: stars as 1 | 2 | 3 | 4 | 5, comment, at: new Date().toISOString() };
     r.updatedAt = r.rating.at;
     await this.repos.reports.update(r);
+    this.cache?.invalidateReports();
     await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.rate', r.id, null, r.rating);
     return toClientReport(r);
   }

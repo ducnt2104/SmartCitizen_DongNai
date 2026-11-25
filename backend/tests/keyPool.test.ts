@@ -241,3 +241,178 @@ describe('Admin API `/api/admin/api-keys` — Bảo mật RBAC, Bulk Import AES-
     expect(auditVerify.data).toMatchObject({ valid: true, brokenAtSeq: null });
   });
 });
+
+describe('Cloud AI Routing & Fallback Chain (AQ.* AI Studio, 404 Model Chain, 503 Cooldown)', () => {
+  it('GeminiService & VisionAnalyzerService dùng key AQ.* qua AI Studio (x-goog-api-key), đổi model khi 404, cooldown khi 503, giữ responseSchema và bỏ thinkingBudget', async () => {
+    const { KeyPoolManager } = await import('../src/services/keyPool');
+    const { GeminiService } = await import('../src/services/gemini.service');
+
+    const prevFetch = globalThis.fetch;
+    const prevAllowCloud = process.env.ALLOW_CLOUD_AI_FALLBACK;
+    process.env.ALLOW_CLOUD_AI_FALLBACK = 'true';
+
+    const requests: Array<{ url: string; headerKey: string | null; body: Record<string, any> }> = [];
+    let attempt = 0;
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes('googleapis.com')) {
+        return prevFetch(input, init);
+      }
+      const headers = new Headers(init?.headers);
+      const parsedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, any>;
+      requests.push({
+        url,
+        headerKey: headers.get('x-goog-api-key'),
+        body: parsedBody,
+      });
+      attempt += 1;
+
+      // Request 1: key #1 (AQ.*) chạm 503 Overloaded -> cooldown 60s và xoay sang key #2 (AIzaSy*)
+      if (attempt === 1) {
+        return new Response(
+          JSON.stringify({ error: { code: 503, message: 'Model overloaded', status: 'UNAVAILABLE' } }),
+          { status: 503 },
+        );
+      }
+      // Request 2: key #2 (AIzaSy*) gặp 404 trên gemini-3.5-flash-lite -> giữ nguyên key #2, chuyển sang gemini-3.6-flash
+      if (url.includes('gemini-3.5-flash-lite')) {
+        return new Response(
+          JSON.stringify({ error: { code: 404, message: 'models/gemini-3.5-flash-lite is not found', status: 'NOT_FOUND' } }),
+          { status: 404 },
+        );
+      }
+      // Request 3: key #2 (AIzaSy*) thành công trên gemini-3.6-flash
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      riskSummary: 'Ngập cục bộ trên Quốc lộ 1A cần cảnh giới ngay.',
+                      equipmentAndCrew: '01 Tổ Thoát nước đô thị + máy bơm dã chiến.',
+                      safetyWarning: 'Cắm cọc tiêu quanh miệng hố ga bị ngập.',
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const pool = new KeyPoolManager({
+        persistenceMode: 'memory',
+        envSource: {
+          GEMINI_API_KEYS: 'AQ.Ab8RN6TestStudioKey_001,AIzaSyTestStudioKey_002',
+          GEMINI_MODEL: 'gemini-3.5-flash-lite',
+        },
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      });
+      const svc = new GeminiService(pool);
+
+      const briefing = await svc.generateTacticalBriefing({
+        category: 'ngap_nuoc',
+        title: 'Ngập nước trên Quốc lộ 1A',
+        severity: 4,
+        wardCode: 'DN-TB',
+        forceRefresh: true,
+      });
+
+      expect(briefing.mode).toBe('gemini');
+      expect(requests.length).toBe(3);
+      // Key #1 (AQ.*) phải gọi AI Studio (generativelanguage.googleapis.com) với x-goog-api-key
+      expect(requests[0].url).toContain('generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent');
+      expect(requests[0].headerKey).toBe('AQ.Ab8RN6TestStudioKey_001');
+      expect(requests[0].body.generationConfig.responseMimeType).toBe('application/json');
+      expect(requests[0].body.generationConfig.responseSchema).toBeDefined();
+      expect(requests[0].body.generationConfig.thinkingConfig).toBeUndefined();
+
+      // Key #2 (AIzaSy*) gặp 404 ở 3.5-flash-lite -> chuyển sang 3.6-flash trên CÙNG Key #2
+      expect(requests[1].headerKey).toBe('AIzaSyTestStudioKey_002');
+      expect(requests[1].url).toContain('gemini-3.5-flash-lite');
+      expect(requests[2].headerKey).toBe('AIzaSyTestStudioKey_002');
+      expect(requests[2].url).toContain('gemini-3.6-flash');
+
+      const snap = await pool.listMaskedKeys();
+      expect(snap.keys[0].status).toBe('COOLDOWN');
+      expect(snap.keys[1].status).toBe('HEALTHY');
+
+      // Kiểm chứng thêm Stage1 VisionAnalyzerService (gọi Gemini Vision qua AQ.* hoặc AIzaSy* sau khi reset cooldown)
+      await pool.updateKey(snap.keys[0].id, { resetCooldown: true });
+      const prevCount = requests.length;
+      const visionPayload = {
+        authenticity: { authenticity_score: 95, is_screen_capture_or_fake: false, forensic_flags: [] },
+        moderation: { relevance_score: 92, abuse_risk: 'NONE' },
+        classification: {
+          standardized_category: 'NGAP_UNG_THOAT_NUOC',
+          severity: 'HIGH',
+          priority_score: 82,
+          suggested_unit: 'Tổ Thoát nước Phường Trấn Biên',
+          is_emergency: false,
+          safety_hazards: ['Ngập mặt đường'],
+        },
+        auto_fill: {
+          suggested_title: 'Ngập cục bộ mặt đường QL1A',
+          suggested_description: 'Nước đọng sâu trên làn xe máy gây ùn ứ nhẹ.',
+          key_evidence_tags: ['ngap_nuoc', 'ql1a'],
+        },
+      };
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (!url.includes('googleapis.com')) return prevFetch(input, init);
+        const headers = new Headers(init?.headers);
+        const parsedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, any>;
+        requests.push({ url, headerKey: headers.get('x-goog-api-key'), body: parsedBody });
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(visionPayload) }] } }] }),
+          { status: 200 },
+        );
+      }) as typeof fetch;
+
+      const sharp = (await import('sharp')).default;
+      const validJpegBuf = await sharp({
+        create: { width: 240, height: 240, channels: 3, background: { r: 145, g: 130, b: 120 } },
+      })
+        .composite([
+          {
+            input: await sharp({
+              create: { width: 80, height: 80, channels: 3, background: { r: 30, g: 45, b: 60 } },
+            })
+              .png()
+              .toBuffer(),
+            left: 60,
+            top: 60,
+          },
+        ])
+        .jpeg({ quality: 80 })
+        .toBuffer();
+
+      const visionOut = await svc.analyzeImage({
+        imageBuffer: validJpegBuf,
+        imageBase64: validJpegBuf.toString('base64'),
+        mimeType: 'image/jpeg',
+        dHash: '0123456789abcdef',
+        skipDedup: true,
+        skipCache: true,
+        wardCode: 'DN-TB',
+      });
+      expect(visionOut.mode).toBe('gemini');
+      expect(requests.length).toBe(prevCount + 1);
+      expect(requests[prevCount].url).toContain('generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent');
+      expect(requests[prevCount].headerKey).toBe('AQ.Ab8RN6TestStudioKey_001');
+      expect(requests[prevCount].body.generationConfig.responseMimeType).toBe('application/json');
+      expect(requests[prevCount].body.generationConfig.responseSchema).toBeDefined();
+      expect(requests[prevCount].body.generationConfig.thinkingConfig).toBeUndefined();
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevAllowCloud === undefined) delete process.env.ALLOW_CLOUD_AI_FALLBACK;
+      else process.env.ALLOW_CLOUD_AI_FALLBACK = prevAllowCloud;
+    }
+  });
+});

@@ -1,10 +1,11 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   buildMongoConnectOptions,
   connectDatabase,
   diagnoseMongoError,
   disconnectDatabase,
+  ensureDatabaseIndexes,
   getDatabaseHealth,
   maskMongoUri,
 } from '../src/config/database';
@@ -16,6 +17,7 @@ import {
   incidentSchema,
   operationalAuditLogSchema,
   OTP_TOKEN_GRACE_TTL_SECONDS,
+  OtpToken,
   otpTokenSchema,
   User,
   Ward,
@@ -29,7 +31,9 @@ let mongod: MongoMemoryServer;
 let mongoUri = '';
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  mongod = await MongoMemoryServer.create({
+    instance: { launchTimeout: 30_000 },
+  });
   mongoUri = mongod.getUri('smartcitizen_persistence_test');
 }, 60_000);
 
@@ -44,8 +48,8 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
   it('cấu hình Connection Pool chuẩn Cloud (Render -> Atlas IPv4) và kiểm soát retry / fallback an toàn', async () => {
     const opts = buildMongoConnectOptions();
     expect(opts.maxPoolSize).toBe(20);
-    expect(opts.minPoolSize).toBe(5);
-    expect(opts.serverSelectionTimeoutMS).toBe(10_000);
+    expect(opts.minPoolSize).toBe(2);
+    expect(opts.serverSelectionTimeoutMS).toBe(5_000);
     expect(opts.connectTimeoutMS).toBe(10_000);
     expect(opts.socketTimeoutMS).toBe(45_000);
     expect(opts.family).toBe(4);
@@ -200,5 +204,30 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
     expect(report.nearSphereMatchedCount).toBeGreaterThanOrEqual(1);
     expect(report.used2dsphereIndex).toBe(true);
     expect(report.cleanedUp).toBe(true);
+  }, 30_000);
+
+  it('ensureDatabaseIndexes tự xử lý IndexOptionsConflict TTL trên otp_tokens mà không spam cảnh báo khi khởi động', async () => {
+    await connectDatabase({ uri: mongoUri, ensureIndexes: false });
+    try {
+      await OtpToken.collection.dropIndex('expiresAt_1').catch(() => undefined);
+      await OtpToken.collection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 3600 });
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await ensureDatabaseIndexes();
+        const otpWarnings = warnSpy.mock.calls.filter((args) =>
+          String(args[0] ?? '').includes('otp_tokens'),
+        );
+        expect(otpWarnings).toHaveLength(0);
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const idxs = await OtpToken.collection.indexes();
+      const ttlIdx = idxs.find((i) => JSON.stringify(i.key) === JSON.stringify({ expiresAt: 1 }));
+      expect(ttlIdx?.expireAfterSeconds).toBe(0);
+    } finally {
+      await disconnectDatabase();
+    }
   }, 30_000);
 });

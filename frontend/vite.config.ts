@@ -66,6 +66,7 @@ export default defineConfig(({ mode }) => {
             maplibre: ['maplibre-gl'],
             charts: ['recharts'],
             db: ['dexie', 'dexie-react-hooks'],
+            icons: ['lucide-react'],
           },
         },
       },

@@ -1,6 +1,9 @@
 export type ApiKeyProvider = 'gemini' | 'openrouter' | 'groq';
 export const API_KEY_PROVIDERS: readonly ApiKeyProvider[] = ['gemini', 'openrouter', 'groq'] as const;
 
+export type GeminiEndpointKind = 'ai_studio' | 'vertex';
+export const GEMINI_ENDPOINT_KINDS: readonly GeminiEndpointKind[] = ['ai_studio', 'vertex'] as const;
+
 export type ApiKeyStatus = 'HEALTHY' | 'COOLDOWN' | 'EXHAUSTED' | 'INVALID';
 export const API_KEY_STATUSES: readonly ApiKeyStatus[] = [
   'HEALTHY',
@@ -16,6 +19,7 @@ export interface PoolKeyRecord {
   slotNumber: number;
   label: string;
   provider: ApiKeyProvider;
+  geminiEndpoint: GeminiEndpointKind;
   source: ApiKeySource;
   rawKey: string;
   maskedKey: string;
@@ -46,6 +50,7 @@ export interface MaskedApiKeyInfo {
   slotNumber: number;
   label: string;
   provider: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   source: ApiKeySource;
   maskedKey: string;
   weight: number;
@@ -84,6 +89,7 @@ export interface SelectedKeyMeta {
   slotNumber: number;
   label: string;
   provider: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   maskedKey: string;
   shortMask: string;
 }
@@ -101,6 +107,7 @@ export interface AddApiKeyInputItem {
   apiKey: string;
   label?: string;
   provider?: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   weight?: number;
 }
 
@@ -110,6 +117,7 @@ export interface BulkAddApiKeysInput {
   keysText?: string;
   items?: AddApiKeyInputItem[];
   provider?: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   labelPrefix?: string;
   weight?: number;
   addedBy?: string | null;

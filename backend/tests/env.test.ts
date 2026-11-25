@@ -75,4 +75,27 @@ describe('parseEnv — kiểm tra biến môi trường', () => {
     expect(parsed.cookieSecure).toBe(false);
     expect(parsed.jwtSecret.length).toBeGreaterThanOrEqual(64);
   });
+
+  it('chuẩn hóa GEMINI_MODEL sang chuỗi 2026 ổn định (mặc định gemini-3.5-flash-lite) và nhận diện đủ key pool', () => {
+    const def = parseEnv({ NODE_ENV: 'development' });
+    expect(def.geminiModel).toBe('gemini-3.5-flash-lite');
+    expect(def.geminiFastModel).toBe('gemini-3.5-flash-lite');
+
+    const deprecated = parseEnv({ NODE_ENV: 'development', GEMINI_MODEL: 'gemini-2.5-flash' });
+    expect(deprecated.geminiModel).toBe('gemini-3.5-flash-lite');
+
+    const custom38 = parseEnv({
+      NODE_ENV: 'development',
+      GEMINI_MODEL: 'gemini-3.8-flash',
+      GEMINI_API_KEY_1: 'AQ.Ab8RN6MockEnvStudioKey1234',
+    });
+    expect(custom38.geminiModel).toBe('gemini-3.8-flash');
+    expect(custom38.allowCloudAiFallback).toBe(true);
+
+    const vertexOnly = parseEnv({
+      NODE_ENV: 'development',
+      VERTEX_API_KEYS: 'AQ.Ab8RN6MockEnvVertexKey5678',
+    });
+    expect(vertexOnly.allowCloudAiFallback).toBe(true);
+  });
 });

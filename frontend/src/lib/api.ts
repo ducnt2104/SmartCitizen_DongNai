@@ -72,6 +72,44 @@ async function tryRefreshSession(): Promise<boolean> {
   return refreshingPromise;
 }
 
+export interface MultipartOptions {
+  method?: 'POST' | 'PUT' | 'PATCH';
+  body: FormData;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  _retried?: boolean;
+}
+
+async function parseJsonResponse<T>(
+  path: string,
+  res: Response,
+  alreadyRetried: boolean | undefined,
+  retry: () => Promise<T>,
+): Promise<T> {
+  if (res.status === 401 && !alreadyRetried && !path.startsWith('/api/auth/')) {
+    const refreshed = await tryRefreshSession();
+    if (refreshed) {
+      return retry();
+    }
+  }
+
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new ApiError(res.status, 'bad_response', 'Máy chủ trả về dữ liệu không hợp lệ');
+    }
+  }
+  if (!res.ok) {
+    const e = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
+    if (res.status === 401 && authStore.token()) authStore.clear();
+    throw new ApiError(res.status, e?.code ?? 'error', e?.message ?? `Lỗi ${res.status}`, e?.details);
+  }
+  return data as T;
+}
+
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
@@ -91,29 +129,29 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     window.clearTimeout(timeout);
   }
 
-  // Tự động xoay vòng phiên bằng HTTP-only Refresh Cookie khi Access Token hết hạn
-  if (res.status === 401 && !opts._retried && !path.startsWith('/api/auth/')) {
-    const refreshed = await tryRefreshSession();
-    if (refreshed) {
-      return api<T>(path, { ...opts, _retried: true });
-    }
+  return parseJsonResponse<T>(path, res, opts._retried, () => api<T>(path, { ...opts, _retried: true }));
+}
+
+export async function apiMultipart<T>(path: string, opts: MultipartOptions): Promise<T> {
+  const ctrl = new AbortController();
+  const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30000);
+  opts.signal?.addEventListener('abort', () => ctrl.abort());
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(path), {
+      method: opts.method ?? 'POST',
+      credentials: 'include',
+      headers: authHeaders(),
+      body: opts.body,
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    throw new NetworkError(err instanceof Error && err.name === 'AbortError' ? 'Máy chủ phản hồi quá chậm' : undefined);
+  } finally {
+    window.clearTimeout(timeout);
   }
 
-  const text = await res.text();
-  let data: unknown = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new ApiError(res.status, 'bad_response', 'Máy chủ trả về dữ liệu không hợp lệ');
-    }
-  }
-  if (!res.ok) {
-    const e = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
-    if (res.status === 401 && authStore.token()) authStore.clear();
-    throw new ApiError(res.status, e?.code ?? 'error', e?.message ?? `Lỗi ${res.status}`, e?.details);
-  }
-  return data as T;
+  return parseJsonResponse<T>(path, res, opts._retried, () => apiMultipart<T>(path, { ...opts, _retried: true }));
 }
 
 export async function downloadFile(path: string, filename: string): Promise<void> {

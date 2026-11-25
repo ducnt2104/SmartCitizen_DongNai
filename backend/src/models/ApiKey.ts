@@ -2,14 +2,17 @@ import mongoose, { Schema, type HydratedDocument, type Model } from 'mongoose';
 import {
   API_KEY_PROVIDERS,
   API_KEY_STATUSES,
+  GEMINI_ENDPOINT_KINDS,
   type ApiKeyProvider,
   type ApiKeyStatus,
+  type GeminiEndpointKind,
 } from '../services/keyPool/types';
 
 export interface IApiKey {
   keyId: string;
   label: string;
   provider: ApiKeyProvider;
+  geminiEndpoint?: GeminiEndpointKind;
   /** Bản mã AES-256-GCM dạng `v1:<ivBase64>:<authTagBase64>:<cipherBase64>` */
   encryptedKey: string;
   iv: string;
@@ -67,6 +70,11 @@ const apiKeySchema = new Schema<IApiKey>(
       default: 'gemini',
       required: true,
       index: true,
+    },
+    geminiEndpoint: {
+      type: String,
+      enum: GEMINI_ENDPOINT_KINDS,
+      default: 'ai_studio',
     },
     encryptedKey: {
       type: String,

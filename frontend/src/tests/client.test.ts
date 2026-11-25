@@ -11,6 +11,7 @@ import { vi } from '../i18n/vi';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard, resolveAdminUnit } from '../lib/dongNaiGeo';
 import { localVision } from '../lib/localVision';
 import { isChunkLoadError } from '../utils/lazyWithRetry';
+import { extractExifMetadata } from '../workers/imageProcessor.worker';
 import {
   buildMapLibreStyle,
   createGeoJsonCircle,
@@ -245,5 +246,49 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
       ],
     );
     expect(offProj.minDistanceM).toBeGreaterThan(500);
+  });
+
+  it('Worker EXIF Parser trích xuất đúng GPS, Camera Make, Software & Timestamp từ ảnh JPEG', () => {
+    // Tạo gói JPEG + APP1 Exif nhỏ gọn với IFD0 (Make + Software) & DateTime
+    const buf = new ArrayBuffer(256);
+    const view = new DataView(buf);
+    const bytes = new Uint8Array(buf);
+    const writeAscii = (off: number, s: string) => {
+      for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i);
+    };
+    view.setUint16(0, 0xffd8, false); // SOI
+    view.setUint16(2, 0xffe1, false); // APP1
+    view.setUint16(4, 180, false); // segLen
+    writeAscii(6, 'Exif\0\0');
+    const tiff = 12;
+    view.setUint16(tiff, 0x4949, false); // Little endian 'II'
+    view.setUint16(tiff + 2, 42, true);
+    view.setUint32(tiff + 4, 8, true); // firstIFD = 8 -> offset 20
+    const ifd0 = tiff + 8;
+    view.setUint16(ifd0, 3, true); // 3 entries
+    // Entry 0: Make (0x010f), type=2 ASCII, count=8, valOffset=56
+    view.setUint16(ifd0 + 2, 0x010f, true);
+    view.setUint16(ifd0 + 4, 2, true);
+    view.setUint32(ifd0 + 6, 8, true);
+    view.setUint32(ifd0 + 10, 56, true);
+    writeAscii(tiff + 56, 'Samsung\0');
+    // Entry 1: Software (0x0131), type=2 ASCII, count=10, valOffset=72
+    view.setUint16(ifd0 + 14, 0x0131, true);
+    view.setUint16(ifd0 + 16, 2, true);
+    view.setUint32(ifd0 + 18, 10, true);
+    view.setUint32(ifd0 + 22, 72, true);
+    writeAscii(tiff + 72, 'Photoshop\0');
+    // Entry 2: DateTime (0x0132), type=2 ASCII, count=20, valOffset=96
+    view.setUint16(ifd0 + 26, 0x0132, true);
+    view.setUint16(ifd0 + 28, 2, true);
+    view.setUint32(ifd0 + 30, 20, true);
+    view.setUint32(ifd0 + 34, 96, true);
+    writeAscii(tiff + 96, '2026:11:25 08:30:00\0');
+    view.setUint16(200, 0xffd9, false); // EOI
+
+    const exif = extractExifMetadata(buf);
+    expect(exif.cameraMake).toBe('Samsung');
+    expect(exif.software).toBe('Photoshop');
+    expect(exif.capturedAt).toContain('2026-11-25');
   });
 });

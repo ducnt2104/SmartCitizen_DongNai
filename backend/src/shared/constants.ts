@@ -9,9 +9,10 @@ export const DUPLICATE_SCAN_RADIUS_M = 100;
 export const GPS_WARN_M = 2000;
 export const GPS_QUARANTINE_M = 5000;
 export const AUTHENTICITY_MIN = 45;
-export const TRUST_START = 70;
-export const TRUST_SUPERVISED_BELOW = 30;
+export const TRUST_START = 50;
+export const TRUST_SUPERVISED_BELOW = 25;
 export const TRUST_VERIFIED_BONUS = 5;
+export const TRUST_AUTO_APPROVE_BONUS = 3;
 export const TRUST_SPAM_PENALTY = 20;
 export const DUPLICATE_WINDOW_MS = 24 * 3600 * 1000;
 

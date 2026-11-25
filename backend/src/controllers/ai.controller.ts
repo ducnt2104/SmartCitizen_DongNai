@@ -2,7 +2,12 @@ import type { Request, Response } from 'express';
 import type { z } from 'zod';
 import type { AiMode } from '../shared/types';
 import type { Services } from '../services/container';
-import { assertScope, parsePhotoDataUrl } from '../services/access';
+import {
+  assertScope,
+  loadStoredPhotoForVerification,
+  parsePhotoDataUrl,
+  resolvePhotoInputFromRequest,
+} from '../services/access';
 import { sanitizeUserText } from '../services/gemini.service';
 import { badRequest, notFound } from '../utils/errors';
 import type { schemas } from '../validation/schemas';
@@ -11,14 +16,30 @@ export function aiController(s: Services) {
   return {
     analyzeImage: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.analyzeImage>;
-      const { mime, base64 } = parsePhotoDataUrl(b.image.dataUrl);
+      const photo = await resolvePhotoInputFromRequest(req, b.image, b.dHash);
+      const aiBuf = photo.aiBuffer ?? photo.buffer;
+      const base64 = aiBuf ? aiBuf.toString('base64') : '';
+      const legacyMime = photo.dataUrl ? parsePhotoDataUrl(photo.dataUrl).mime : 'image/webp';
+      const mimeType = photo.aiBuffer ? 'image/webp' : legacyMime;
+      const deviceFp = typeof req.headers['x-device-fp'] === 'string' ? req.headers['x-device-fp'] : '';
+      const rateLimitKey = `vision:${req.ip ?? 'ip'}:${req.user?.id ?? 'anon'}:${deviceFp}`;
+
       const result = await s.gemini.analyzeImage({
+        imageBuffer: aiBuf,
         imageBase64: base64,
-        mimeType: mime,
-        dHash: b.image.dHash,
+        mimeType,
+        dHash: photo.dHash,
         hintCategory: b.category,
         hintText: b.hintText,
         edge: b.edge,
+        exif: b.exif,
+        lat: b.lat,
+        lng: b.lng,
+        wardCode: b.wardCode,
+        rateLimitKey,
+        trustScore: req.user?.trustScore,
+        reportsRepo: s.repos.reports,
+        allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.image?.dataUrl),
       });
       res.json(result);
     },
@@ -29,31 +50,33 @@ export function aiController(s: Services) {
       if (!r) throw notFound('Không tìm thấy hồ sơ.');
       assertScope(req.user!, r);
       const before = r.photos[0];
-      const after = parsePhotoDataUrl(b.afterPhoto.dataUrl);
-      const svgBefore = before.url.startsWith('data:image/svg');
-      const out = svgBefore
+      const afterPhoto = await resolvePhotoInputFromRequest(req, b.afterPhoto, b.dHash);
+      const afterBuf = afterPhoto.aiBuffer ?? afterPhoto.buffer;
+      const afterBase64 = afterBuf ? afterBuf.toString('base64') : '';
+      const afterMime = afterPhoto.dataUrl ? parsePhotoDataUrl(afterPhoto.dataUrl).mime : 'image/webp';
+      const loadedBefore = await loadStoredPhotoForVerification(before);
+
+      const out = loadedBefore.isSvg
         ? s.gemini.fallbackVerify({
             reportId: r.id,
             beforeBase64: '',
-            beforeMime: after.mime,
+            beforeMime: afterMime,
             beforeHash: before.dHash,
-            afterBase64: after.base64,
-            afterMime: after.mime,
-            afterHash: b.afterPhoto.dHash,
+            afterBase64,
+            afterMime,
+            afterHash: afterPhoto.dHash,
             category: r.category,
             title: r.title,
             afterEdge: b.edge,
           })
         : await s.gemini.verifyResolution({
             reportId: r.id,
-            ...(() => {
-              const p = parsePhotoDataUrl(before.url);
-              return { beforeBase64: p.base64, beforeMime: p.mime };
-            })(),
+            beforeBase64: loadedBefore.base64,
+            beforeMime: loadedBefore.mime,
             beforeHash: before.dHash,
-            afterBase64: after.base64,
-            afterMime: after.mime,
-            afterHash: b.afterPhoto.dHash,
+            afterBase64,
+            afterMime,
+            afterHash: afterPhoto.dHash,
             category: r.category,
             title: r.title,
             beforeLat: r.lat,

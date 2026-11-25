@@ -214,13 +214,15 @@ class JsonReportRepo implements ReportRepository {
     return structuredClone(next);
   }
   async findNearby(q: NearbyQuery): Promise<Report[]> {
-    return structuredClone(
-      this.s.data.reports.filter(
-        (r) => (!q.category || r.category === q.category) && haversineMeters(q.lat, q.lng, r.lat, r.lng) <= q.radiusM,
-      ),
+    const out = this.s.data.reports.filter(
+      (r) =>
+        (!q.category || r.category === q.category) &&
+        (!q.sinceIso || r.createdAt >= q.sinceIso) &&
+        haversineMeters(q.lat, q.lng, r.lat, r.lng) <= q.radiusM,
     );
+    return structuredClone(q.limit ? out.slice(0, q.limit) : out);
   }
-  async findSince(sinceIso: string): Promise<Report[]> {
+  async findSince(sinceIso: string, _projection?: import('./types').ReportProjection): Promise<Report[]> {
     return structuredClone(this.s.data.reports.filter((r) => r.createdAt >= sinceIso));
   }
   async countByReporterSince(reporterId: string, sinceIso: string): Promise<number> {

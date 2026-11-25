@@ -4,6 +4,7 @@ import type { AuditEntry, ClientReport, ScopeStats } from '@shared/types';
 import { inScope, isStaffRole } from '../../db/hooks';
 import { db } from '../../db/localDb';
 import { api, ApiError, NetworkError } from '../../lib/api';
+import { getSwrEntry, setSwrEntry } from '../../lib/swrCache';
 
 export type QueueTab = 'emergency' | 'high' | 'open' | 'quarantine';
 
@@ -21,6 +22,7 @@ export interface LoadState<T> {
   /** true khi đang hiển thị dữ liệu IndexedDB do không gọi được máy chủ */
   stale: boolean;
   reload: () => void;
+  mutate: (updater: (prev: T | null) => T | null) => void;
 }
 
 const open = (r: ClientReport): boolean => !['resolved', 'quarantined', 'rejected'].includes(r.status);
@@ -37,18 +39,35 @@ export function localQueue(rows: ClientReport[], scope: string, tab: QueueTab): 
 }
 
 function useLoader<T>(key: string, fetcher: () => Promise<T>, local: () => Promise<T>, refreshMs = 0): LoadState<T> {
-  const [state, setState] = useState<Omit<LoadState<T>, 'reload'>>({ data: null, loading: true, error: null, stale: false });
+  const [state, setState] = useState<Omit<LoadState<T>, 'reload' | 'mutate'>>(() => {
+    const cached = getSwrEntry<T>(key);
+    return {
+      data: cached ? cached.data : null,
+      loading: !cached,
+      error: null,
+      stale: false,
+    };
+  });
   const seq = useRef(0);
   const fetchRef = useRef(fetcher);
   const localRef = useRef(local);
   fetchRef.current = fetcher;
   localRef.current = local;
 
+  useEffect(() => {
+    const cached = getSwrEntry<T>(key);
+    if (cached) {
+      setState({ data: cached.data, loading: false, error: null, stale: false });
+    }
+  }, [key]);
+
   const run = useCallback(async () => {
     const id = ++seq.current;
-    setState((s) => ({ ...s, loading: s.data === null }));
+    const cached = getSwrEntry<T>(key);
+    setState((s) => ({ ...s, loading: s.data === null && !cached }));
     try {
       const data = await fetchRef.current();
+      setSwrEntry(key, data, 15_000);
       if (id === seq.current) setState({ data, loading: false, error: null, stale: false });
     } catch (e) {
       if (id !== seq.current) return;
@@ -63,7 +82,18 @@ function useLoader<T>(key: string, fetcher: () => Promise<T>, local: () => Promi
         setState((s) => ({ ...s, loading: false, error: e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Error' }));
       }
     }
-  }, []);
+  }, [key]);
+
+  const mutate = useCallback(
+    (updater: (prev: T | null) => T | null) => {
+      setState((s) => {
+        const nextData = updater(s.data);
+        if (nextData !== null) setSwrEntry(key, nextData, 15_000);
+        return { ...s, data: nextData };
+      });
+    },
+    [key],
+  );
 
   useEffect(() => {
     void run();
@@ -72,7 +102,7 @@ function useLoader<T>(key: string, fetcher: () => Promise<T>, local: () => Promi
     return () => window.clearInterval(t);
   }, [key, run, refreshMs]);
 
-  return { ...state, reload: () => void run() };
+  return { ...state, reload: () => void run(), mutate };
 }
 
 export function useOverview(scope: string): LoadState<Overview> {

@@ -91,7 +91,7 @@ export function ReportDetail({
         toast('error', t('detail.attachDup'), t('detail.attachDupText', { d: m.matches[0].distance }));
         return;
       }
-      await attachAngle(r, { dataUrl: p.dataUrl, dHash: p.dHash });
+      await attachAngle(r, { displayBlob: p.displayBlob, aiBlob: p.aiBlob, dHash: p.dHash });
       toast('success', t('detail.attachOk'), t('detail.attachOkText'));
     } catch (err) {
       toast('error', t('detail.attachFail'), err instanceof Error ? err.message : undefined);
@@ -113,12 +113,12 @@ export function ReportDetail({
       <div className="space-y-4">
         {photos.length > 0 && (
           <div>
-            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
+            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} decoding="async" className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
             {photos.length > 1 && (
               <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={t('detail.gallery')}>
                 {photos.map((p, i) => (
                   <button key={p.id} type="button" role="tab" aria-selected={i === photoIdx} onClick={() => setPhotoIdx(i)} className={`h-14 w-20 shrink-0 overflow-hidden rounded-lg border-2 ${i === photoIdx ? 'border-brand' : 'border-line'}`}>
-                    <img src={p.url} alt={`${t('detail.angle')} ${i + 1}`} className="h-full w-full object-cover" />
+                    <img src={p.thumbnailUrl ?? p.url} alt={`${t('detail.angle')} ${i + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                   </button>
                 ))}
               </div>

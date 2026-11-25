@@ -26,8 +26,9 @@ import { WARD_BY_CODE } from '../../data/dongNaiWards';
 import { db } from '../../db/localDb';
 import type { LiveNavPosition } from '../../hooks/useLiveNavigationGps';
 import { useI18n } from '../../i18n';
-import { api, ApiError } from '../../lib/api';
+import { api, apiMultipart, ApiError } from '../../lib/api';
 import { edge } from '../../lib/edgeClient';
+import type { EdgeStatsMsg } from '../../lib/imageProcessor';
 import { googleMapsDirectionsUrl } from '../../lib/mapConfig';
 import { CATEGORY_META } from '../../lib/meta';
 import {
@@ -41,7 +42,6 @@ import {
 import { playMissionSuccessChime } from '../../lib/rescueChime';
 import { speak, speechSynthesisSupported, stopSpeaking } from '../../lib/speech';
 import { useToast } from '../../state/toast';
-import type { EdgeStatsMsg } from '../../workers/edgeProcessor.worker';
 import type { CameraCommand } from '../map/GoogleMapEngine';
 import { UnifiedMapCanvas } from '../map/UnifiedMapCanvas';
 import { TacticalBriefingCard } from '../TacticalBriefingCard';
@@ -151,11 +151,23 @@ export function TacticalNavigationWorkspace({
 
   // Nghiệm thu & cập nhật trạng thái tác chiến
   const [actionBusy, setActionBusy] = useState<string | null>(null);
-  const [afterPhoto, setAfterPhoto] = useState<{ dataUrl: string; dHash: string; stats: EdgeStatsMsg } | null>(null);
+  const [afterPhoto, setAfterPhoto] = useState<{
+    previewUrl: string;
+    displayBlob: Blob;
+    aiBlob: Blob;
+    dHash: string;
+    stats: EdgeStatsMsg;
+  } | null>(null);
   const [completeNote, setCompleteNote] = useState('');
   const [overrideAi, setOverrideAi] = useState(false);
   const [verifyFeedback, setVerifyFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    return () => {
+      if (afterPhoto?.previewUrl.startsWith('blob:')) URL.revokeObjectURL(afterPhoto.previewUrl);
+    };
+  }, [afterPhoto]);
 
   const dragStartYRef = useRef<number | null>(null);
   const lastSpokenKeyRef = useRef<string>('');
@@ -378,7 +390,13 @@ export function TacticalNavigationWorkspace({
     setCompletionOpen(true);
     try {
       const p = await edge.processImage(file);
-      setAfterPhoto({ dataUrl: p.dataUrl, dHash: p.dHash, stats: p.stats });
+      setAfterPhoto({
+        previewUrl: p.previewUrl,
+        displayBlob: p.displayBlob,
+        aiBlob: p.aiBlob,
+        dHash: p.dHash,
+        stats: p.stats,
+      });
       setVerifyFeedback(null);
     } catch (e) {
       toast('error', 'Không xử lý được ảnh nghiệm thu', e instanceof Error ? e.message : undefined);
@@ -395,18 +413,25 @@ export function TacticalNavigationWorkspace({
     }
     setActionBusy('complete');
     try {
-      const res = await api<{ report: RescueMissionItem; accepted: boolean }>(
+      const fd = new FormData();
+      fd.append('displayImage', afterPhoto.displayBlob, 'display.webp');
+      fd.append('aiImage', afterPhoto.aiBlob, 'ai.webp');
+      fd.append(
+        'metadata',
+        JSON.stringify({
+          dHash: afterPhoto.dHash,
+          note: completeNote.trim(),
+          override: overrideAi,
+          edge: afterPhoto.stats,
+          lat: livePos.lat,
+          lng: livePos.lng,
+        }),
+      );
+      const res = await apiMultipart<{ report: RescueMissionItem; accepted: boolean }>(
         `/api/rescue/missions/${mission.id}/complete`,
         {
           method: 'POST',
-          body: {
-            afterPhoto: { dataUrl: afterPhoto.dataUrl, dHash: afterPhoto.dHash },
-            note: completeNote.trim(),
-            override: overrideAi,
-            edge: afterPhoto.stats,
-            lat: livePos.lat,
-            lng: livePos.lng,
-          },
+          body: fd,
           timeoutMs: 30000,
         },
       );
@@ -827,14 +852,15 @@ export function TacticalNavigationWorkspace({
             {afterPhoto && mission.photos[0] ? (
               <BeforeAfterSlider
                 before={mission.photos[0].url}
-                after={afterPhoto.dataUrl}
+                after={afterPhoto.previewUrl}
                 labelBefore="Trước xử lý"
                 labelAfter="Sau xử lý"
               />
             ) : afterPhoto ? (
               <img
-                src={afterPhoto.dataUrl}
+                src={afterPhoto.previewUrl}
                 alt="Ảnh hiện trường sau xử lý"
+                decoding="async"
                 className="aspect-video w-full rounded-2xl border border-slate-700 object-cover"
               />
             ) : (

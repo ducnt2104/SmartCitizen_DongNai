@@ -1,5 +1,5 @@
 import { ArrowRightLeft, Ban, CheckCircle2, ExternalLink, Navigation, Radio, RotateCcw, ShieldAlert, Truck, Upload, X } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DEPARTMENTS } from '@shared/constants';
 import { haversineMeters } from '@shared/geo';
 import type { ClientReport, Department } from '@shared/types';
@@ -11,11 +11,12 @@ import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { db } from '../../db/localDb';
 import { useLiveNavigationGps } from '../../hooks/useLiveNavigationGps';
 import { useI18n } from '../../i18n';
-import { api, ApiError, NetworkError } from '../../lib/api';
+import { api, apiMultipart, ApiError, NetworkError } from '../../lib/api';
 import { useSession } from '../../lib/authStore';
 import { edge } from '../../lib/edgeClient';
 import { googleMapsDirectionsUrl } from '../../lib/mapConfig';
 import { CATEGORY_META, DEPT_KEY } from '../../lib/meta';
+import { invalidateSwrPrefix } from '../../lib/swrCache';
 import { useToast } from '../../state/toast';
 
 const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
@@ -41,7 +42,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const [sla, setSla] = useState(r.priority === 'emergency' ? 2 : r.priority === 'high' ? 24 : 72);
   const [transferWard, setTransferWard] = useState(r.wardCode);
   const [transferNote, setTransferNote] = useState('');
-  const [after, setAfter] = useState<{ dataUrl: string; dHash: string } | null>(null);
+  const [after, setAfter] = useState<{ previewUrl: string; displayBlob: Blob; aiBlob: Blob; dHash: string } | null>(null);
   const [override, setOverride] = useState(false);
   const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -49,12 +50,20 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const meta = CATEGORY_META[r.category];
   const closed = r.status === 'resolved' || r.status === 'rejected';
 
+  useEffect(() => {
+    return () => {
+      if (after?.previewUrl.startsWith('blob:')) URL.revokeObjectURL(after.previewUrl);
+    };
+  }, [after]);
+
   const run = async (key: string, fn: () => Promise<ClientReport | null>, okMsg: string): Promise<void> => {
     setBusy(key);
     try {
       const upd = await fn();
       if (upd) {
         await db.reports.put({ ...upd, syncState: 'synced' });
+        invalidateSwrPrefix('q:');
+        invalidateSwrPrefix('ov:');
         onChanged(upd);
         toast('success', okMsg);
       }
@@ -72,7 +81,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
     setBusy('photo');
     try {
       const p = await edge.processImage(f);
-      setAfter({ dataUrl: p.dataUrl, dHash: p.dHash });
+      setAfter({ previewUrl: p.previewUrl, displayBlob: p.displayBlob, aiBlob: p.aiBlob, dHash: p.dHash });
       setAiMsg(null);
     } catch (e) {
       toast('error', t('report.photoFail'), e instanceof Error ? e.message : undefined);
@@ -86,8 +95,14 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
     if (!after) return;
     setBusy('resolve');
     try {
-      const res = await post<{ report: ClientReport; accepted: boolean }>(`/api/admin/reports/${r.id}/resolve`, { afterPhoto: after, note: '', override });
+      const fd = new FormData();
+      fd.append('displayImage', after.displayBlob, 'display.webp');
+      fd.append('aiImage', after.aiBlob, 'ai.webp');
+      fd.append('metadata', JSON.stringify({ dHash: after.dHash, note: '', override }));
+      const res = await apiMultipart<{ report: ClientReport; accepted: boolean }>(`/api/admin/reports/${r.id}/resolve`, { body: fd });
       await db.reports.put({ ...res.report, syncState: 'synced' });
+      invalidateSwrPrefix('q:');
+      invalidateSwrPrefix('ov:');
       onChanged(res.report);
       if (res.accepted) {
         toast('success', t('ioc.resolved'), t('ioc.resolvedText', { n: res.report.clusterCount }));
@@ -119,7 +134,14 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
         {r.photos[0] && (
           <div className="grid grid-cols-4 gap-1.5">
             {r.photos.slice(0, 8).map((p, i) => (
-              <img key={p.id} src={p.url} alt={`${t('detail.angle')} ${i + 1}`} className={`aspect-square rounded border border-ioc-line object-cover ${i === 0 ? 'col-span-2 row-span-2 aspect-auto h-full w-full' : ''}`} />
+              <img
+                key={p.id}
+                src={i === 0 ? p.url : (p.thumbnailUrl ?? p.url)}
+                alt={`${t('detail.angle')} ${i + 1}`}
+                loading="lazy"
+                decoding="async"
+                className={`aspect-square rounded border border-ioc-line object-cover ${i === 0 ? 'col-span-2 row-span-2 aspect-auto h-full w-full' : ''}`}
+              />
             ))}
           </div>
         )}
@@ -292,7 +314,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
 
             <fieldset className="space-y-2 rounded border border-ioc-line p-2" disabled={busy === 'resolve'}>
               <legend className="px-1 text-[11px] font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.acceptance')}</legend>
-              {after ? <img src={after.dataUrl} alt={t('detail.after')} className="aspect-video w-full rounded border border-ioc-line object-cover" /> : <p className="text-xs text-ioc-dim">{t('ioc.acceptanceHint')}</p>}
+              {after ? <img src={after.previewUrl} alt={t('detail.after')} decoding="async" className="aspect-video w-full rounded border border-ioc-line object-cover" /> : <p className="text-xs text-ioc-dim">{t('ioc.acceptanceHint')}</p>}
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" className="ioc-btn" onClick={() => fileRef.current?.click()}>{busy === 'photo' ? <Spinner /> : <Upload className="h-4 w-4" aria-hidden />}{t('ioc.uploadAfter')}</button>
                 <button type="button" className="ioc-btn ioc-btn-green" disabled={!after} onClick={() => void resolve()}>{busy === 'resolve' ? <Spinner /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}{t('ioc.verifyClose')}</button>

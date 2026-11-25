@@ -111,12 +111,17 @@ export function createApp(
       cb(new Error(`Origin không được phép: ${origin}`));
     }),
   );
-  // SSE không được nén/buffer; các JSON/HTML/JS khác nén nhanh ở ngưỡng >= 512B
+  // SSE & ảnh WebP đã nén sẵn không được nén lại để tiết kiệm CPU Render
   app.use(
     compression({
       level: 6,
       threshold: 512,
-      filter: (req, res) => (req.path === '/api/ai/chat' ? false : compression.filter(req, res)),
+      filter: (req, res) => {
+        if (req.path === '/api/ai/chat' || req.path.startsWith('/api/media/')) return false;
+        const ct = String(res.getHeader('Content-Type') ?? '');
+        if (ct.startsWith('image/')) return false;
+        return compression.filter(req, res);
+      },
     }),
   );
   app.use(express.json({ limit: '4mb' }));

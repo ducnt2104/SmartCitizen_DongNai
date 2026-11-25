@@ -7,8 +7,9 @@ import type { ReportStatus } from '../shared/types';
 import { purgeDemoData } from '../data/seedStore';
 import { clearAuthCookies, readCookie, REFRESH_COOKIE, setAuthCookies } from '../middleware/auth';
 import type { BoundingBoxQuery } from '../repositories/types';
-import { isAdminRole } from '../services/access';
+import { isAdminRole, isRescueCapable, resolvePhotoInputFromRequest } from '../services/access';
 import type { Services } from '../services/container';
+import { isValidMediaId } from '../services/media.service';
 import { toProfile } from '../services/trust.service';
 import { sha256 } from '../utils/crypto';
 import { badRequest, forbidden } from '../utils/errors';
@@ -155,16 +156,68 @@ export function reportController(s: Services) {
       const result = await s.geo.reverseGeocode(norm.lat, norm.lng);
       res.set('Cache-Control', 'public, max-age=3600').json(result);
     },
+    media: async (req: Request, res: Response) => {
+      const id = String(req.params.id ?? '').trim();
+      const variant = req.path.endsWith('/thumb') || req.query.variant === 'thumb' ? 'thumb' : 'display';
+      if (!isValidMediaId(id)) {
+        res.status(404).json({ error: { code: 'media_not_found', message: 'Không tìm thấy tệp ảnh.' } });
+        return;
+      }
+      const item = await s.media.getMediaBinary(id, variant);
+      if (!item) {
+        res.status(404).json({ error: { code: 'media_not_found', message: 'Không tìm thấy tệp ảnh.' } });
+        return;
+      }
+      res.set('Content-Type', item.mimeType);
+      res.set('ETag', item.etag);
+      res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      res.set('X-Content-Type-Options', 'nosniff');
+      if (req.headers['if-none-match'] === item.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.send(item.buffer);
+    },
     stats: async (req: Request, res: Response) => {
-      res.json(await s.reports.stats(scopeOf(req)));
+      const scope = scopeOf(req);
+      const cacheKey = `stats:${scope}`;
+      let entry = s.cache.getReportCached(cacheKey);
+      if (!entry) {
+        entry = s.cache.setReportCached(cacheKey, await s.reports.stats(scope), 30_000);
+      }
+      res.set('ETag', entry.etag);
+      res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
+      if (req.headers['if-none-match'] === entry.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json(entry.body);
     },
     summary: async (req: Request, res: Response) => {
+      const scope = scopeOf(req);
       const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
       const rawStatus = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
       const status = rawStatus && VALID_STATUSES.has(rawStatus) ? (rawStatus as ReportStatus) : undefined;
       const bbox = parseBbox(req.query.bbox);
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 1500), 5000);
-      res.json(await s.reports.listSummary(req.user ?? null, { scope: scopeOf(req), bbox, category, status, limit }));
+      const visKey = req.user
+        ? isRescueCapable(req.user)
+          ? `staff:${req.user.wardCode ?? 'all'}`
+          : `u:${req.user.id}`
+        : 'pub';
+      const cacheKey = `summary:${visKey}:${scope}:${category ?? ''}:${status ?? ''}:${typeof req.query.bbox === 'string' ? req.query.bbox : ''}:${limit}`;
+      let entry = s.cache.getReportCached(cacheKey);
+      if (!entry) {
+        const items = await s.reports.listSummary(req.user ?? null, { scope, bbox, category, status, limit });
+        entry = s.cache.setReportCached(cacheKey, items, 20_000);
+      }
+      res.set('ETag', entry.etag);
+      res.set('Cache-Control', 'public, max-age=10, stale-while-revalidate=30');
+      if (req.headers['if-none-match'] === entry.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json(entry.body);
     },
     list: async (req: Request, res: Response) => {
       const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
@@ -194,14 +247,19 @@ export function reportController(s: Services) {
       if (normalizeRole(u.role) !== 'citizen') {
         throw forbidden('Tài khoản nội bộ (Quản trị / Cán bộ / Đội cứu hộ) không gửi phản ánh công dân trực tiếp.');
       }
-      const result = await s.reports.create(u, body(req, 'createReport') as CreateReportInput);
+      const b = body(req, 'createReport') as CreateReportInput;
+      const photoInput = await resolvePhotoInputFromRequest(req, b.photo, b.dHash);
+      const rateLimitKey = `rp:${req.ip ?? 'ip'}:${u.id}`;
+      const result = await s.reports.create(u, { ...b, photoInput, rateLimitKey });
       res.status(result.outcome === 'duplicate_submit' ? 200 : 201).json(result);
     },
     confirm: async (req: Request, res: Response) => {
       res.json(await s.reports.confirm(req.user!, String(req.params.id)));
     },
     attachPhoto: async (req: Request, res: Response) => {
-      res.json(await s.reports.attachPhoto(req.user!, String(req.params.id), body(req, 'attachPhoto').photo));
+      const b = body(req, 'attachPhoto');
+      const photoInput = await resolvePhotoInputFromRequest(req, b.photo, b.dHash);
+      res.json(await s.reports.attachPhoto(req.user!, String(req.params.id), photoInput));
     },
     rate: async (req: Request, res: Response) => {
       const { stars, comment } = body(req, 'rate');
@@ -220,11 +278,16 @@ export function volunteerController(s: Services) {
     },
     verify: async (req: Request, res: Response) => {
       const b = body(req, 'volunteerVerify');
-      res.json(await s.staff.verifyTask(req.user!, String(req.params.id), b.verdict, b.note, b.photo));
+      const hasPhoto = Boolean(req.uploadedImages?.displayBuffer || b.photo?.dataUrl);
+      const photoInput = hasPhoto ? await resolvePhotoInputFromRequest(req, b.photo) : undefined;
+      res.json(await s.staff.verifyTask(req.user!, String(req.params.id), b.verdict, b.note, photoInput));
     },
     proxyReport: async (req: Request, res: Response) => {
       const u = req.user!;
-      const result = await s.reports.create(u, body(req, 'createReport') as CreateReportInput, u.id);
+      const b = body(req, 'createReport') as CreateReportInput;
+      const photoInput = await resolvePhotoInputFromRequest(req, b.photo, b.dHash);
+      const rateLimitKey = `proxy:${req.ip ?? 'ip'}:${u.id}`;
+      const result = await s.reports.create(u, { ...b, photoInput, rateLimitKey }, u.id);
       if (result.outcome !== 'duplicate_submit') await s.staff.awardProxyCredit(u);
       res.status(result.outcome === 'duplicate_submit' ? 200 : 201).json(result);
     },
@@ -269,6 +332,8 @@ export function rescueController(s: Services) {
         | 'in_progress'
         | 'on_site'
         | 'resolved';
+      const hasPhoto = Boolean(req.uploadedImages?.displayBuffer || b.afterPhoto?.dataUrl);
+      const afterPhoto = hasPhoto ? await resolvePhotoInputFromRequest(req, b.afterPhoto) : undefined;
       res.json(
         await s.staff.updateRescueMissionStatus(
           req.user!,
@@ -277,7 +342,7 @@ export function rescueController(s: Services) {
           b.note,
           b.lat,
           b.lng,
-          b.afterPhoto,
+          afterPhoto,
           b.override,
           b.edge,
         ),
@@ -302,11 +367,12 @@ export function rescueController(s: Services) {
     },
     complete: async (req: Request, res: Response) => {
       const b = body(req, 'rescueComplete');
+      const afterPhoto = await resolvePhotoInputFromRequest(req, b.afterPhoto, b.dHash);
       res.json(
         await s.staff.completeRescueMission(
           req.user!,
           String(req.params.id),
-          b.afterPhoto,
+          afterPhoto,
           b.note,
           b.override,
           b.edge,
@@ -355,7 +421,8 @@ export function adminController(s: Services) {
     },
     resolve: async (req: Request, res: Response) => {
       const b = body(req, 'resolve');
-      res.json(await s.staff.resolve(req.user!, String(req.params.id), b.afterPhoto, b.note, b.override));
+      const afterPhoto = await resolvePhotoInputFromRequest(req, b.afterPhoto, b.dHash);
+      res.json(await s.staff.resolve(req.user!, String(req.params.id), afterPhoto, b.note, b.override));
     },
     audit: async (req: Request, res: Response) => {
       const limit = Math.min(Number(req.query.limit) || 200, 1000);
@@ -496,10 +563,26 @@ export function metaController(
   }
 
   return {
-    /** Liveness probe cho Render (`/healthz`): luôn trả HTTP 200 khi HTTP server sống để tránh container bị kill lúc DB cold-start. */
+    /** Liveness probe cho Render (`/healthz`): trả về trong <2ms hoàn toàn từ bộ nhớ trong, không truy vấn DB nặng. */
     liveness: async (_req: Request, res: Response) => {
-      const { body } = await buildHealthPayload();
-      res.status(200).json(body);
+      const ai = s.gemini.status;
+      const aiMode = ai.configured && !ai.circuitOpen ? 'gemini' : 'fallback';
+      const dbState = bootInfo.dbState ?? (s.repos.mode === 'mongodb' ? 'connected' : 'reconnecting');
+      res.status(200).json({
+        status: 'ok',
+        time: new Date().toISOString(),
+        uptimeSec: Math.round(process.uptime()),
+        db: {
+          mode: s.repos.mode,
+          state: dbState,
+          ok: true,
+          latencyMs: 0,
+          note: bootInfo.fallbackReason,
+          lastError: bootInfo.lastError ?? null,
+        },
+        ai: { ...ai, mode: aiMode },
+        wardsCount: DONG_NAI_WARDS.length,
+      });
     },
     /** Readiness & Diagnostics (`/api/health`): trả 200 khi DB sẵn sàng, 503 khi DB đang kết nối lại hoặc lỗi. */
     health: async (_req: Request, res: Response) => {

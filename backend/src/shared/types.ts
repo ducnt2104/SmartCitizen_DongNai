@@ -78,6 +78,11 @@ export interface Ward {
 export interface Photo {
   id: string;
   url: string;
+  thumbnailUrl?: string;
+  mediaId?: string;
+  width?: number;
+  height?: number;
+  bytes?: number;
   /** 64-bit dHash dạng 16 ký tự hex */
   dHash: string;
   kind: 'before' | 'angle' | 'after' | 'verify';
@@ -154,6 +159,18 @@ export interface RescueMissionState {
   releaseHistory?: RescueReleaseEntry[];
 }
 
+export type ModerationDecision = 'AUTO_APPROVE' | 'HUMAN_REVIEW' | 'AUTO_REJECT';
+export type AbuseRisk = 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
+export type StandardizedCivicCategory =
+  | 'RAC_THAI_MOI_TRUONG'
+  | 'HA_TANG_GIAO_THONG'
+  | 'NGAP_UNG_THOAT_NUOC'
+  | 'CAY_XANH_DO_NGA'
+  | 'DIEN_VIEN_THONG'
+  | 'TRAT_TU_DO_THI'
+  | 'PCCC_KHAN_CAP'
+  | 'KHAC';
+
 export interface AiAnalysis {
   authenticityScore: number;
   fraudFlags: string[];
@@ -167,6 +184,17 @@ export interface AiAnalysis {
   isDuplicateCrop?: boolean;
   duplicateSimilarity?: number | null;
   inlierCount?: number | null;
+  standardizedCategory?: StandardizedCivicCategory;
+  moderationDecision?: ModerationDecision;
+  decision?: ModerationDecision;
+  relevanceScore?: number;
+  abuseRisk?: AbuseRisk;
+  isScreenCaptureOrFake?: boolean;
+  forensicFlags?: string[];
+  keyEvidenceTags?: string[];
+  officerReviewNotes?: string | null;
+  citizenFeedback?: string | null;
+  latencyMs?: number;
   mode: AiMode;
 }
 
@@ -321,6 +349,7 @@ export interface ReportSummary {
   lng: number;
   clusterCount: number;
   confirmCount: number;
+  thumbnailUrl?: string | null;
   createdAt: string;
 }
 
@@ -412,6 +441,23 @@ export interface VisionResult {
   mode: AiMode;
   cached: boolean;
   latencyMs?: number;
+  // ── 3-Stage AI Cascade Fields ──
+  status?: 'ANALYZED' | 'DUPLICATE_FOUND' | 'REJECTED_PREFILTER';
+  duplicateIncidentId?: string | null;
+  duplicateIncidentCode?: string | null;
+  standardizedCategory?: StandardizedCivicCategory;
+  suggestedUnit?: string;
+  suggestedTitle?: string;
+  suggestedDescription?: string;
+  keyEvidenceTags?: string[];
+  isScreenCaptureOrFake?: boolean;
+  forensicFlags?: string[];
+  relevanceScore?: number;
+  abuseRisk?: AbuseRisk;
+  decision?: ModerationDecision;
+  citizenFeedback?: string | null;
+  officerReviewNotes?: string | null;
+  stageTimingsMs?: { stage0?: number; stage1?: number; total: number };
 }
 
 export interface DynamicAiConfig {

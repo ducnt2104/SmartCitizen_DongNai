@@ -20,6 +20,7 @@ import { useOnline, useScopedReports } from '../../db/hooks';
 import { usePreciseLocation } from '../../hooks/usePreciseLocation';
 import { useI18n } from '../../i18n';
 import { api } from '../../lib/api';
+import { getSwrEntry, setSwrEntry } from '../../lib/swrCache';
 import {
   resolvePlaceSuggestion,
   reverseGeocode,
@@ -193,14 +194,23 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     (bbox: MapBbox) => {
       if (embedded || externalReports || !online) return;
       bboxAbortRef.current?.abort();
+      const bboxParam = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
+      const cacheKey = `map:${settings.scope}:${bboxParam}`;
+      const cached = getSwrEntry<ReportSummary[]>(cacheKey);
+      if (cached) {
+        setBboxPoints(cached.data);
+        if (!cached.isStale) return;
+      }
       const ctrl = new AbortController();
       bboxAbortRef.current = ctrl;
-      const bboxParam = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
-      api<ReportSummary[]>(`/api/reports/summary?scope=${encodeURIComponent(settings.scope)}&bbox=${bboxParam}`, {
+      api<ReportSummary[]>(`/api/incidents/map?scope=${encodeURIComponent(settings.scope)}&bbox=${bboxParam}`, {
         signal: ctrl.signal,
       })
         .then((rows) => {
-          if (!ctrl.signal.aborted) setBboxPoints(rows);
+          if (!ctrl.signal.aborted) {
+            setSwrEntry(cacheKey, rows, 15_000);
+            setBboxPoints(rows);
+          }
         })
         .catch(() => {
           /* Giữ bản lưu IndexedDB cục bộ */

@@ -6,11 +6,19 @@ import { CategoryIcon, PriorityBadges, StatusBadge } from './ui';
 
 export function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientReport) => void }) {
   const { t, fmtDate } = useI18n();
-  const thumb = r.photos[0]?.url;
+  const thumb = r.photos[0]?.thumbnailUrl ?? r.photos[0]?.url;
   return (
     <button type="button" onClick={() => onOpen(r)} className="card flex w-full items-stretch gap-3 p-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/35 hover:shadow-lift active:scale-[0.99]">
       {thumb ? (
-        <img src={thumb} alt="" loading="lazy" className="h-20 w-20 shrink-0 rounded-xl border border-line/80 object-cover shadow-sm" />
+        <img
+          src={thumb}
+          alt=""
+          width={80}
+          height={80}
+          loading="lazy"
+          decoding="async"
+          className="aspect-square h-20 w-20 shrink-0 rounded-xl border border-line/80 object-cover shadow-sm"
+        />
       ) : (
         <CategoryIcon r={r} />
       )}

@@ -206,14 +206,14 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(fetchCount).toBe(1);
   });
 
-  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép) cho cả AQ.* lẫn AIza* và tự xoay khi gặp 403/429', async () => {
-    const calledUrls: string[] = [];
+  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép) cho cả AQ.* lẫn AIza*, mặc định AI Studio và chỉ dùng Vertex khi tag vertex:/VERTEX_API_KEYS', async () => {
+    const calledEndpoints: string[] = [];
     const poolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-keypool-vertex-'));
     try {
       const multiFormatRaw = [
-        '"AQ.Ab8RN6RevokedVertexKey12345678"',
+        '"AQ.Ab8RN6StudioKeyNewFormat12345"',
         'AIzaSyDisabledStudioKey111111111111\\nAIzaSyHealthyStudioKey9876543210000',
-        '   AIzaSyHealthyBackupKey222222222222 ; AIzaSyHealthyStudioKey9876543210000 ',
+        '   vertex:AQ.Ab8RN6ExplicitVertexKey22222 ; AIzaSyHealthyStudioKey9876543210000 ',
       ].join(',\n');
 
       const pool = new KeyPoolManager({
@@ -221,34 +221,36 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
         encryptionSecret: 'test-secret-32-bytes-minimum-key!!',
         envSource: {
           GEMINI_API_KEYS: multiFormatRaw,
-          GEMINI_MODEL: 'gemini-3.5-flash',
+          VERTEX_API_KEYS: 'AQ.Ab8RN6EnvVertexPoolKey33333',
+          GEMINI_MODEL: 'gemini-3.5-flash-lite',
         },
       });
       await pool.init();
-      const summaryBefore = pool.getSummarySync();
-      // Đúng 4 key duy nhất sau khi tách dấu phẩy + \n + khoảng trắng + chấm phẩy và lọc trùng!
-      expect(summaryBefore.totalKeys).toBe(4);
+      const snap = await pool.listMaskedKeys();
+      // Đúng 5 key duy nhất sau khi tách đa định dạng và lọc trùng
+      expect(snap.summary.totalKeys).toBe(5);
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('2345'))?.geminiEndpoint).toBe('ai_studio');
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('2222'))?.geminiEndpoint).toBe('vertex');
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('3333'))?.geminiEndpoint).toBe('vertex');
 
-      const out = await pool.executeWithRotation(async (apiKey) => {
-        if (apiKey.startsWith('AQ.')) {
-          calledUrls.push(`https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent?key=${apiKey}`);
+      const out = await pool.executeWithRotation(async (apiKey, meta) => {
+        if (meta.geminiEndpoint === 'vertex') {
+          calledEndpoints.push(`vertex:${apiKey}`);
           throw Object.assign(
-            new Error('[{"error":{"code":403,"message":"Generative Language API has not been used in project","status":"PERMISSION_DENIED"}}]'),
+            new Error('[{"error":{"code":403,"message":"Vertex key revoked","status":"PERMISSION_DENIED"}}]'),
             { status: 403 },
           );
         }
         if (apiKey.includes('DisabledStudioKey')) {
-          calledUrls.push(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`);
+          calledEndpoints.push('ai_studio:disabled');
           throw Object.assign(new Error('403 API_KEY_INVALID: Key revoked'), { status: 403 });
         }
-        calledUrls.push(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`);
-        return 'OK_FROM_HEALTHY_AIZA_KEY';
+        calledEndpoints.push(`ai_studio:${apiKey.slice(0, 6)}`);
+        return 'OK_FROM_HEALTHY_AI_STUDIO_KEY';
       });
 
-      expect(out).toBe('OK_FROM_HEALTHY_AIZA_KEY');
-      expect(calledUrls.length).toBeGreaterThanOrEqual(2);
-      expect(calledUrls.some((u) => u.includes('aiplatform.googleapis.com'))).toBe(true);
-      expect(calledUrls.some((u) => u.includes('generativelanguage.googleapis.com'))).toBe(true);
+      expect(out).toBe('OK_FROM_HEALTHY_AI_STUDIO_KEY');
+      expect(calledEndpoints.some((e) => e.startsWith('ai_studio:AQ.Ab8'))).toBe(true);
     } finally {
       fs.rmSync(poolDir, { recursive: true, force: true });
     }

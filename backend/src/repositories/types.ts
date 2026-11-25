@@ -87,6 +87,8 @@ export interface BoundingBoxQuery {
   maxLat: number;
 }
 
+export type ReportProjection = 'summary' | 'stats' | 'dedup' | 'code_only' | 'full';
+
 export interface ReportQuery {
   wardCodes?: string[];
   statuses?: ReportStatus[];
@@ -95,6 +97,7 @@ export interface ReportQuery {
   bbox?: BoundingBoxQuery;
   cursor?: string;
   limit?: number;
+  projection?: ReportProjection;
 }
 
 export interface NearbyQuery {
@@ -102,6 +105,9 @@ export interface NearbyQuery {
   lng: number;
   radiusM: number;
   category?: string;
+  sinceIso?: string;
+  limit?: number;
+  projection?: ReportProjection;
 }
 
 export interface AtomicRescueClaimInput {
@@ -129,7 +135,7 @@ export interface ReportRepository {
   delete(id: string): Promise<boolean>;
   claimRescueMission(id: string, claim: AtomicRescueClaimInput): Promise<Report | null>;
   findNearby(q: NearbyQuery): Promise<Report[]>;
-  findSince(sinceIso: string): Promise<Report[]>;
+  findSince(sinceIso: string, projection?: ReportProjection): Promise<Report[]>;
   countByReporterSince(reporterId: string, sinceIso: string): Promise<number>;
   count(): Promise<number>;
 }

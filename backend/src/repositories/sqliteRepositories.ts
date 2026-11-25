@@ -427,13 +427,15 @@ export function createLocalPersistentRepositories(
       const out: Report[] = [];
       for (const r of engine.reports.values()) {
         if (q.category && r.category !== q.category) continue;
+        if (q.sinceIso && r.createdAt < q.sinceIso) continue;
         if (haversineMeters(q.lat, q.lng, r.lat, r.lng) <= q.radiusM) {
           out.push(structuredClone(r));
+          if (q.limit && out.length >= q.limit) break;
         }
       }
       return out;
     },
-    async findSince(sinceIso: string): Promise<Report[]> {
+    async findSince(sinceIso: string, _projection?: import('./types').ReportProjection): Promise<Report[]> {
       const out: Report[] = [];
       for (const r of engine.reports.values()) {
         if (r.createdAt >= sinceIso) out.push(structuredClone(r));
