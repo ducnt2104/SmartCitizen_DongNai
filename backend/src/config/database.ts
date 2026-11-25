@@ -1,3 +1,4 @@
+import dns from 'node:dns';
 import dotenv from 'dotenv';
 import { performance } from 'node:perf_hooks';
 import mongoose, { type ClientSession, type ConnectOptions } from 'mongoose';
@@ -46,14 +47,53 @@ const READY_STATE_MAP: Readonly<Record<number, ConnectionStateName>> = {
   99: 'uninitialized',
 };
 
+export const DEFAULT_MONGODB_DB_NAME = 'smartcitizen_dongnai';
+
+function uriHasDatabaseName(uri: string): boolean {
+  const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//i, '');
+  const slashIdx = withoutScheme.indexOf('/');
+  if (slashIdx < 0) return false;
+  const pathPart = withoutScheme.slice(slashIdx + 1).split('?')[0]?.trim() ?? '';
+  return pathPart.length > 0;
+}
+
+function isSrvDnsError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const msg = 'message' in err ? String((err as { message?: unknown }).message ?? '') : '';
+  const code = 'code' in err ? String((err as { code?: unknown }).code ?? '') : '';
+  return (
+    msg.includes('querySrv') ||
+    ['ENODATA', 'EREFUSED', 'ESERVFAIL', 'ETIMEOUT'].includes(code)
+  );
+}
+
+async function connectMongooseWithDnsFallback(uri: string, opts: ConnectOptions): Promise<typeof mongoose> {
+  try {
+    return await mongoose.connect(uri, opts);
+  } catch (err) {
+    if (uri.startsWith('mongodb+srv://') && isSrvDnsError(err)) {
+      const currentServers = dns.getServers();
+      const nextServers = Array.from(new Set(['1.1.1.1', '8.8.8.8', ...currentServers]));
+      dns.setServers(nextServers);
+      console.warn(
+        '[mongodb] DNS cục bộ không phân giải được bản ghi SRV (querySrv) -> tự động chuyển sang Public DNS (1.1.1.1, 8.8.8.8) và kết nối lại...',
+      );
+      return mongoose.connect(uri, opts);
+    }
+    throw err;
+  }
+}
+
 /**
  * Cấu hình Connection Pool chuẩn Production cho SmartCitizen Đồng Nai (MongoDB Atlas):
  * - Bối cảnh triển khai: Node.js/Express long-running backend phục vụ đồng thời 95 Phường/Xã
  *   (IOC Dashboard real-time + Citizen Local-First Outbox đồng bộ hàng loạt khi có mạng).
  * - Zero Mock Fallback: khi đã khai báo MONGODB_URI, hệ thống kết nối trực tiếp tới Atlas và fail-loud nếu lỗi.
  */
-export function buildMongoConnectOptions(): ConnectOptions {
+export function buildMongoConnectOptions(uri?: string): ConnectOptions {
+  const explicitDb = uri ? uriHasDatabaseName(uri) : true;
   return {
+    ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
     // Đáp ứng ~20 truy vấn đồng thời (IOC Dashboard + Outbox burst) mà chỉ tốn ~20MB RAM phía Atlas
     maxPoolSize: 20,
     // Duy trì 5 kết nối ấm (TCP + TLS + SCRAM auth sẵn) giúp truy vấn bản đồ đạt <10ms không tốn chi phí bắt tay lại
@@ -112,8 +152,7 @@ function scheduleReconnect(): void {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (manualDisconnect || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) return;
-    mongoose
-      .connect(activeUri, buildMongoConnectOptions())
+    connectMongooseWithDnsFallback(activeUri, buildMongoConnectOptions(activeUri))
       .then(() => {
         reconnectAttempts = 0;
         cachedReplicaSetSupport = null;
@@ -256,7 +295,7 @@ export async function connectDatabase(options: ConnectDbOptions = {}): Promise<t
     if (mongoose.connection.readyState !== 0) {
       await mongoose.disconnect();
     }
-    await mongoose.connect(uri, buildMongoConnectOptions());
+    await connectMongooseWithDnsFallback(uri, buildMongoConnectOptions(uri));
   }
 
   if (options.ensureIndexes !== false) {
