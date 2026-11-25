@@ -9,6 +9,7 @@ import {
   Droplets,
   ExternalLink,
   Layers,
+  LocateFixed,
   MapPin,
   Newspaper,
   Pencil,
@@ -37,7 +38,7 @@ import type {
   RouteCheckResponse,
   WeatherSnapshotItem,
 } from '@shared/types';
-import { DONG_NAI_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
+import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, WARD_BY_CODE } from '../data/dongNaiWards';
 import { useI18n } from '../i18n';
 import { api } from '../lib/api';
 import { fastFetch } from '../lib/swrCache';
@@ -128,11 +129,73 @@ export default function AlertsPage() {
   const selectedWard = settings.scope.startsWith('ward:')
     ? WARD_BY_CODE[settings.scope.replace('ward:', '')]
     : undefined;
+  const defaultWard = selectedWard ?? WARD_BY_CODE['DN-TB'] ?? DONG_NAI_WARDS[0];
+
+  const [weatherLoc, setWeatherLoc] = useState<{
+    label: string;
+    lat: number;
+    lng: number;
+    wardCode?: string;
+    isGps?: boolean;
+  }>(() => ({
+    label: defaultWard.name,
+    lat: defaultWard.centerLat,
+    lng: defaultWard.centerLng,
+    wardCode: defaultWard.wardCode,
+  }));
+  const [gpsBusy, setGpsBusy] = useState(false);
+
+  useEffect(() => {
+    if (selectedWard) {
+      setWeatherLoc({
+        label: selectedWard.name,
+        lat: selectedWard.centerLat,
+        lng: selectedWard.centerLng,
+        wardCode: selectedWard.wardCode,
+      });
+    }
+  }, [selectedWard]);
+
   const forecastCoords = useMemo(
-    () => (selectedWard ? { lat: selectedWard.centerLat, lng: selectedWard.centerLng } : { lat: 10.9465, lng: 106.8235 }),
-    [selectedWard],
+    () => ({ lat: weatherLoc.lat, lng: weatherLoc.lng }),
+    [weatherLoc.lat, weatherLoc.lng],
   );
-  const forecastAreaName = selectedWard ? selectedWard.name : 'Toàn TP. Đồng Nai';
+  const forecastAreaName = weatherLoc.label;
+
+  const detectGpsWeather = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      toast('error', 'Trình duyệt không hỗ trợ định vị GPS');
+      return;
+    }
+    setGpsBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        let nearest = DONG_NAI_WARDS[0];
+        let bestDist = Infinity;
+        for (const w of DONG_NAI_WARDS) {
+          const d = (w.centerLat - latitude) ** 2 + (w.centerLng - longitude) ** 2;
+          if (d < bestDist) {
+            bestDist = d;
+            nearest = w;
+          }
+        }
+        setWeatherLoc({
+          label: `Vị trí của bạn (gần ${nearest.shortName})`,
+          lat: latitude,
+          lng: longitude,
+          wardCode: nearest.wardCode,
+          isGps: true,
+        });
+        setGpsBusy(false);
+      },
+      () => {
+        setGpsBusy(false);
+        toast('info', 'Không lấy được GPS — vui lòng chọn Phường/Xã bên dưới.');
+      },
+      { enableHighAccuracy: false, timeout: 7000, maximumAge: 120_000 },
+    );
+  }, [toast]);
 
   const [forecast, setForecast] = useState<DongNaiWeather>(() =>
     buildFallbackWeather(forecastCoords.lat, forecastCoords.lng, lang),
@@ -544,8 +607,73 @@ export default function AlertsPage() {
 
         return (
           <div className="space-y-4">
+            {/* Thanh chọn vị trí thời tiết chi tiết (GPS / 95 Phường-Xã / 5 Vùng khí hậu) */}
+            <div className="card flex flex-col gap-2.5 p-3 sm:p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-brand">
+                  <MapPin className="h-4 w-4" aria-hidden />
+                  Thời tiết chi tiết theo vị trí
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={detectGpsWeather}
+                    disabled={gpsBusy}
+                    className={`btn !min-h-9 !rounded-xl !px-3 !text-xs ${weatherLoc.isGps ? 'btn-primary' : 'btn-soft'}`}
+                  >
+                    <LocateFixed className={`h-3.5 w-3.5 ${gpsBusy ? 'animate-spin' : ''}`} aria-hidden />
+                    <span>{gpsBusy ? 'Đang định vị…' : 'Vị trí của tôi (GPS)'}</span>
+                  </button>
+                  <select
+                    aria-label="Chọn Phường/Xã xem thời tiết chi tiết"
+                    value={weatherLoc.wardCode ?? ''}
+                    onChange={(e) => {
+                      const w = WARD_BY_CODE[e.target.value];
+                      if (!w) return;
+                      setWeatherLoc({
+                        label: w.name,
+                        lat: w.centerLat,
+                        lng: w.centerLng,
+                        wardCode: w.wardCode,
+                      });
+                    }}
+                    className="field !h-9 !min-h-9 !w-auto max-w-[15rem] !rounded-xl !px-2.5 !py-0 !text-xs"
+                  >
+                    <option value="">Chọn Phường/Xã (95 ĐVHC)…</option>
+                    {DONG_NAI_WARDS.map((w) => (
+                      <option key={w.wardCode} value={w.wardCode}>
+                        {w.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {QUICK_JUMP_REGIONS.map((reg) => {
+                  const active = !weatherLoc.isGps && !weatherLoc.wardCode && weatherLoc.label === reg.labelVi;
+                  return (
+                    <button
+                      key={reg.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() =>
+                        setWeatherLoc({
+                          label: reg.labelVi,
+                          lat: reg.center[0],
+                          lng: reg.center[1],
+                        })
+                      }
+                      className="chip !min-h-7 !px-2.5 !text-[11px]"
+                    >
+                      {reg.labelVi}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <section
-              aria-label="Dự báo thời tiết hiện tại Đồng Nai"
+              aria-label="Dự báo thời tiết hiện tại theo vị trí"
               className={`relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br ${heroSkyGradient(forecast)} p-5 text-white shadow-lift sm:p-6`}
             >
               <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden />
@@ -555,6 +683,9 @@ export default function AlertsPage() {
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
                       <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
                       <span>{forecastAreaName}</span>
+                    </span>
+                    <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/20 px-2.5 py-1 text-[10.5px] font-medium text-white/85">
+                      {forecastCoords.lat.toFixed(2)}°N, {forecastCoords.lng.toFixed(2)}°E
                     </span>
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
                       <span className={`h-2 w-2 rounded-full ${forecast.source === 'live' ? 'bg-emerald-400' : 'bg-amber-300'}`} aria-hidden />
@@ -712,30 +843,58 @@ export default function AlertsPage() {
                   </span>
                 </div>
                 <div className="flex gap-2.5 overflow-x-auto pb-1">
-                  {weather.map((w) => (
-                    <button
-                      key={w.regionKey}
-                      type="button"
-                      onClick={() => setInspectWardCode(w.wardCode)}
-                      className={`min-w-[11.5rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors hover:border-brand/40 ${
-                        w.isHazard ? 'border-rose-500/40 bg-rose-500/10' : 'border-line bg-surface-2/75'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
-                        <span className="mono text-xs font-extrabold text-brand">{w.temperatureC}°C</span>
+                  {weather.map((w) => {
+                    const targetWard = WARD_BY_CODE[w.wardCode];
+                    const isSelected = weatherLoc.wardCode === w.wardCode && !weatherLoc.isGps;
+                    return (
+                      <div
+                        key={w.regionKey}
+                        className={`min-w-[12rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors ${
+                          isSelected
+                            ? 'border-brand bg-brand-soft/60 ring-1 ring-brand/25'
+                            : w.isHazard
+                              ? 'border-rose-500/40 bg-rose-500/10'
+                              : 'border-line bg-surface-2/75 hover:border-brand/40'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (targetWard) {
+                              setWeatherLoc({
+                                label: `${w.regionName} (${targetWard.shortName})`,
+                                lat: targetWard.centerLat,
+                                lng: targetWard.centerLng,
+                                wardCode: targetWard.wardCode,
+                              });
+                            }
+                          }}
+                          className="w-full text-left"
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
+                            <span className="mono text-xs font-extrabold text-brand">{w.temperatureC}°C</span>
+                          </div>
+                          <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
+                          <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                            <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
+                              Mưa: {w.precipitationMm}mm/h
+                            </span>
+                            <span className="inline-flex items-center gap-0.5 text-muted">
+                              <Wind className="h-3 w-3" aria-hidden /> {w.windGustsKmh}km/h
+                            </span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInspectWardCode(w.wardCode)}
+                          className="mt-2 text-[10.5px] font-bold text-brand hover:underline"
+                        >
+                          Xem hồ sơ khu vực →
+                        </button>
                       </div>
-                      <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
-                      <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                        <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
-                          Mưa: {w.precipitationMm}mm/h
-                        </span>
-                        <span className="inline-flex items-center gap-0.5 text-muted">
-                          <Wind className="h-3 w-3" aria-hidden /> {w.windGustsKmh}km/h
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}
