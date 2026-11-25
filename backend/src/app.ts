@@ -12,7 +12,10 @@ import type { Services } from './services/container';
 
 const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
 
-export function createApp(s: Services, bootInfo: { fallbackReason: string | null }): Express {
+export function createApp(
+  s: Services,
+  bootInfo: { fallbackReason: string | null; dbState?: string; lastError?: string | null },
+): Express {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1); // Render đặt sau reverse proxy

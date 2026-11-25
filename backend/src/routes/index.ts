@@ -10,7 +10,10 @@ import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
 import { buildApiKeysRouter } from './apiKeys';
 
-export function buildRouter(s: Services, bootInfo: { fallbackReason: string | null }): { api: Router; root: Router } {
+export function buildRouter(
+  s: Services,
+  bootInfo: { fallbackReason: string | null; dbState?: string; lastError?: string | null },
+): { api: Router; root: Router } {
   const auth = authMiddleware(s);
   const a = authController(s);
   const r = reportController(s);
@@ -21,7 +24,7 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   const h = asyncHandler;
 
   const root = Router();
-  root.get('/healthz', h(meta.health));
+  root.get('/healthz', h(meta.liveness));
 
   const api = Router();
   api.get('/health', h(meta.health));

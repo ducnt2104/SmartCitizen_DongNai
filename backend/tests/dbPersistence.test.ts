@@ -3,8 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildMongoConnectOptions,
   connectDatabase,
+  diagnoseMongoError,
   disconnectDatabase,
   getDatabaseHealth,
+  maskMongoUri,
 } from '../src/config/database';
 import {
   AI_CACHE_TTL_SECONDS,
@@ -18,7 +20,7 @@ import {
   User,
   Ward,
 } from '../src/models';
-import { createRepositories, incidentRepository } from '../src/repositories';
+import { createNonBlockingServerRepositories, createRepositories, incidentRepository } from '../src/repositories';
 import { migrateDatabaseIndexes } from '../src/scripts/migrateIndexes';
 import { runProductionSeed } from '../src/scripts/seed';
 import { verifyDatabaseEndToEnd } from '../src/scripts/verifyDb';
@@ -39,19 +41,52 @@ afterAll(async () => {
 });
 
 describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', () => {
-  it('cấu hình Connection Pool chuẩn Production và chặn đứng fallback sang RAM/JSON khi có MONGODB_URI', async () => {
+  it('cấu hình Connection Pool chuẩn Cloud (Render -> Atlas IPv4) và kiểm soát retry / fallback an toàn', async () => {
     const opts = buildMongoConnectOptions();
     expect(opts.maxPoolSize).toBe(20);
     expect(opts.minPoolSize).toBe(5);
-    expect(opts.serverSelectionTimeoutMS).toBe(5_000);
+    expect(opts.serverSelectionTimeoutMS).toBe(10_000);
+    expect(opts.connectTimeoutMS).toBe(10_000);
     expect(opts.socketTimeoutMS).toBe(45_000);
+    expect(opts.family).toBe(4);
     expect(opts.retryWrites).toBe(true);
     expect(opts.w).toBe('majority');
 
-    // Khi truyền MONGODB_URI không kết nối được -> bắt buộc throw lỗi, KHÔNG fallback sang json mode
+    // Che giấu mật khẩu tuyệt đối trong log chẩn đoán
+    const masked = maskMongoUri('mongodb+srv://dongnai_admin:SuperSecretPass!2026@cluster0.xyz.mongodb.net/smartcitizen_dongnai?retryWrites=true');
+    expect(masked.maskedUri).not.toContain('SuperSecretPass!2026');
+    expect(masked.maskedUri).toContain('***:***@cluster0.xyz.mongodb.net');
+    expect(masked.host).toBe('cluster0.xyz.mongodb.net');
+    expect(masked.dbName).toBe('smartcitizen_dongnai');
+
+    const authDiag = diagnoseMongoError(Object.assign(new Error('bad auth : Authentication failed.'), { code: 8000 }));
+    expect(authDiag.category).toBe('AUTH_FAILED');
+
+    // Khi ALLOW_JSON_FALLBACK=false: thử lại có giới hạn rồi ném lỗi chẩn đoán tường minh
     await expect(
-      createRepositories('mongodb://127.0.0.1:1/unreachable_db?serverSelectionTimeoutMS=400'),
-    ).rejects.toThrow();
+      createRepositories('mongodb://127.0.0.1:1/unreachable_db?serverSelectionTimeoutMS=250', {
+        bootRetries: 2,
+        retryBaseDelayMs: 60,
+        allowJsonFallback: false,
+      }),
+    ).rejects.toThrow(/FATAL/);
+
+    // Khi bật ALLOW_JSON_FALLBACK=true: chuyển mượt sang Local JSON Store mà không làm sập server
+    const fallbackBoot = await createRepositories(
+      'mongodb://127.0.0.1:1/unreachable_db?serverSelectionTimeoutMS=250',
+      { bootRetries: 1, retryBaseDelayMs: 50, allowJsonFallback: true },
+    );
+    expect(fallbackBoot.repos.mode).toBe('json');
+    expect(fallbackBoot.dbState).toBe('fallback_json');
+    await fallbackBoot.repos.close();
+
+    // Non-blocking startup proxy: trả 503 có kiểm soát khi đang kết nối mà không throw crash tiến trình
+    const prevUri = process.env.MONGODB_URI;
+    process.env.MONGODB_URI = '';
+    const nb = createNonBlockingServerRepositories({ allowJsonFallback: true });
+    expect(nb.boot.repos.mode).toBe('json');
+    await nb.stop();
+    process.env.MONGODB_URI = prevUri;
   });
 
   it('đăng ký đầy đủ Compound Indexes IOC, 2dsphere, syncId unique sparse và TTL Indexes chống tràn 512MB M0', () => {

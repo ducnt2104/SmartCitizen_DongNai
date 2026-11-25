@@ -346,8 +346,16 @@ class MongoSessionRepo implements SessionRepository {
   }
 }
 
-export async function createMongoRepositories(uri: string): Promise<Repositories> {
-  await connectDatabase({ uri, ensureIndexes: true });
+export async function createMongoRepositories(
+  uri: string,
+  options?: { bootRetries?: number; retryBaseDelayMs?: number },
+): Promise<Repositories> {
+  await connectDatabase({
+    uri,
+    ensureIndexes: true,
+    bootRetries: options?.bootRetries,
+    retryBaseDelayMs: options?.retryBaseDelayMs,
+  });
 
   const reports = new MongoReportRepo();
   const users = new MongoUserRepo();

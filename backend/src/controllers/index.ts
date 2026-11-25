@@ -346,31 +346,45 @@ export function adminController(s: Services) {
   };
 }
 
-export function metaController(s: Services, bootInfo: { fallbackReason: string | null }) {
-  return {
-    health: async (_req: Request, res: Response) => {
-      const [dbStats, cv, llm] = await Promise.all([
-        s.repos.healthStats(),
-        s.cvEngine.health(),
-        s.gemini.checkLocalLlmHealth(),
-      ]);
-      const ai = s.gemini.status;
-      const otp = s.otpDelivery.status;
-      const aiMode = llm.online
-        ? 'ollama'
-        : ai.configured && !ai.circuitOpen
-          ? 'gemini'
-          : 'fallback';
-      const body = {
-        status: dbStats.ok ? (cv.online || llm.online || (ai.configured && !ai.circuitOpen) ? 'ok' : 'degraded') : 'down',
+export function metaController(
+  s: Services,
+  bootInfo: { fallbackReason: string | null; dbState?: string; lastError?: string | null },
+) {
+  async function buildHealthPayload() {
+    const [dbStats, cv, llm] = await Promise.all([
+      s.repos.healthStats(),
+      s.cvEngine.health(),
+      s.gemini.checkLocalLlmHealth(),
+    ]);
+    const ai = s.gemini.status;
+    const otp = s.otpDelivery.status;
+    const aiMode = llm.online
+      ? 'ollama'
+      : ai.configured && !ai.circuitOpen
+        ? 'gemini'
+        : 'fallback';
+    const dbState = bootInfo.dbState ?? (dbStats.ok ? 'connected' : 'reconnecting');
+    const status = dbStats.ok
+      ? cv.online || llm.online || (ai.configured && !ai.circuitOpen)
+        ? 'ok'
+        : 'degraded'
+      : dbState === 'connecting' || dbState === 'reconnecting'
+        ? 'connecting'
+        : 'down';
+    return {
+      ok: dbStats.ok,
+      body: {
+        status,
         time: new Date().toISOString(),
         uptimeSec: Math.round(process.uptime()),
         db: {
           mode: s.repos.mode,
+          state: dbState,
           ok: dbStats.ok,
           latencyMs: dbStats.latencyMs,
           counts: dbStats.counts,
           note: bootInfo.fallbackReason,
+          lastError: bootInfo.lastError ?? null,
         },
         cvEngine: cv,
         localLlm: llm,
@@ -378,8 +392,20 @@ export function metaController(s: Services, bootInfo: { fallbackReason: string |
         ai: { ...ai, mode: aiMode },
         otp,
         wardsCount: DONG_NAI_WARDS.length,
-      };
-      res.status(dbStats.ok ? 200 : 503).json(body);
+      },
+    };
+  }
+
+  return {
+    /** Liveness probe cho Render (`/healthz`): luôn trả HTTP 200 khi HTTP server sống để tránh container bị kill lúc DB cold-start. */
+    liveness: async (_req: Request, res: Response) => {
+      const { body } = await buildHealthPayload();
+      res.status(200).json(body);
+    },
+    /** Readiness & Diagnostics (`/api/health`): trả 200 khi DB sẵn sàng, 503 khi DB đang kết nối lại hoặc lỗi. */
+    health: async (_req: Request, res: Response) => {
+      const { ok, body } = await buildHealthPayload();
+      res.status(ok ? 200 : 503).json(body);
     },
   };
 }

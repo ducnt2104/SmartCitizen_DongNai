@@ -15,12 +15,32 @@ export type ConnectionStateName =
 export interface ConnectDbOptions {
   /** Chuỗi kết nối MongoDB Atlas; mặc định đọc từ process.env.MONGODB_URI */
   uri?: string;
-  /** Số lần tự động kết nối lại tối đa khi mất kết nối bất ngờ (mặc định 10) */
+  /** Số lần thử lại ngay lúc khởi tạo (boot retry với exponential backoff, mặc định 5 ở prod/dev, 2 ở test) */
+  bootRetries?: number;
+  /** Thời gian chờ cơ sở giữa các lần boot retry (ms, mặc định 1000ms ở prod/dev, 150ms ở test) */
+  retryBaseDelayMs?: number;
+  /** Số lần tự động kết nối lại tối đa khi mất kết nối bất ngờ lúc đang chạy (mặc định 10) */
   maxReconnectAttempts?: number;
   /** Tự động gọi createIndexes() cho toàn bộ collections sau khi kết nối (mặc định true) */
   ensureIndexes?: boolean;
   /** Tự động đăng ký Graceful Shutdown trên SIGINT/SIGTERM (mặc định true) */
   registerShutdownHooks?: boolean;
+}
+
+export interface MaskedMongoUriInfo {
+  configured: boolean;
+  protocol: 'mongodb+srv' | 'mongodb' | 'none';
+  host: string;
+  dbName: string;
+  maskedUri: string;
+}
+
+export interface MongoErrorDiagnosis {
+  category: 'AUTH_FAILED' | 'DNS_ERROR' | 'NETWORK_OR_IP_WHITELIST' | 'TLS_HANDSHAKE' | 'INVALID_URI' | 'UNKNOWN';
+  errorName: string;
+  code: string | null;
+  message: string;
+  hint: string;
 }
 
 export interface DatabaseHealth {
@@ -49,12 +69,125 @@ const READY_STATE_MAP: Readonly<Record<number, ConnectionStateName>> = {
 
 export const DEFAULT_MONGODB_DB_NAME = 'smartcitizen_dongnai';
 
+/** Che giấu tuyệt đối username/password trong URI trước khi ghi ra Render logs. */
+export function maskMongoUri(rawUri?: string): MaskedMongoUriInfo {
+  const trimmed = (rawUri ?? '').trim();
+  if (!trimmed) {
+    return {
+      configured: false,
+      protocol: 'none',
+      host: '(none)',
+      dbName: DEFAULT_MONGODB_DB_NAME,
+      maskedUri: '(empty)',
+    };
+  }
+  const protocol: 'mongodb+srv' | 'mongodb' | 'none' = trimmed.startsWith('mongodb+srv://')
+    ? 'mongodb+srv'
+    : trimmed.startsWith('mongodb://')
+      ? 'mongodb'
+      : 'none';
+  const maskedUri = trimmed.replace(/(mongodb(?:\+srv)?:\/\/)([^/@\s]+)@/gi, '$1***:***@');
+  const withoutScheme = maskedUri.replace(/^mongodb(?:\+srv)?:\/\//i, '').replace(/^\*\*\*:\*\*\*@/, '');
+  const slashIdx = withoutScheme.indexOf('/');
+  const host = (slashIdx >= 0 ? withoutScheme.slice(0, slashIdx) : withoutScheme.split('?')[0]) || '(unknown-host)';
+  const rawDb = slashIdx >= 0 ? withoutScheme.slice(slashIdx + 1).split('?')[0]?.trim() ?? '' : '';
+  return {
+    configured: true,
+    protocol,
+    host,
+    dbName: rawDb || DEFAULT_MONGODB_DB_NAME,
+    maskedUri,
+  };
+}
+
+/** Phân loại chính xác nguyên nhân lỗi kết nối Cloud (Render -> MongoDB Atlas) không lộ mật khẩu. */
+export function diagnoseMongoError(err: unknown): MongoErrorDiagnosis {
+  const isObj = err !== null && typeof err === 'object';
+  const errorName = isObj && 'name' in err ? String((err as { name?: unknown }).name ?? 'Error') : 'Error';
+  const code =
+    isObj && 'code' in err && (err as { code?: unknown }).code !== undefined
+      ? String((err as { code?: unknown }).code)
+      : null;
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  const safeMsg = rawMsg.replace(/(mongodb(?:\+srv)?:\/\/)([^/@\s]+)@/gi, '$1***:***@');
+
+  if (/bad auth|Authentication failed|auth failed/i.test(safeMsg) || code === '18' || code === '8000') {
+    return {
+      category: 'AUTH_FAILED',
+      errorName,
+      code,
+      message: safeMsg,
+      hint: 'Sai username/password của Database User trên MongoDB Atlas (lưu ý URL-encode ký tự đặc biệt như @, :, #, % trong mật khẩu) hoặc chưa cấp quyền readWrite.',
+    };
+  }
+  if (
+    /querySrv|ENOTFOUND|ENODATA|EREFUSED|ESERVFAIL|EAI_AGAIN/i.test(safeMsg) ||
+    (code !== null && ['ENOTFOUND', 'ENODATA', 'EREFUSED', 'ESERVFAIL', 'EAI_AGAIN'].includes(code))
+  ) {
+    return {
+      category: 'DNS_ERROR',
+      errorName,
+      code,
+      message: safeMsg,
+      hint: 'Không phân giải được tên miền cụm Atlas (kiểm tra hostname trong MONGODB_URI hoặc dùng Standard Connection String mongodb:// nếu mạng chặn SRV).',
+    };
+  }
+  if (/SSL|TLS|ERR_SSL|alert number/i.test(safeMsg)) {
+    return {
+      category: 'TLS_HANDSHAKE',
+      errorName,
+      code,
+      message: safeMsg,
+      hint: 'Lỗi bắt tay TLS/SSL tới MongoDB Atlas (kiểm tra Network Access IP Whitelist 0.0.0.0/0 trên Atlas vì Atlas đóng TLS sớm khi IP bị chặn).',
+    };
+  }
+  if (
+    errorName === 'MongoServerSelectionError' ||
+    /Could not connect to any servers|Server selection timed out|ETIMEDOUT|ECONNREFUSED|ENETUNREACH/i.test(safeMsg)
+  ) {
+    return {
+      category: 'NETWORK_OR_IP_WHITELIST',
+      errorName,
+      code,
+      message: safeMsg,
+      hint: 'Render chưa được phép truy cập cụm Atlas (vào MongoDB Atlas -> Network Access -> Add IP Address -> Allow Access from Anywhere 0.0.0.0/0) hoặc cụm M0 đang cold-start.',
+    };
+  }
+  if (/Invalid scheme|uri/i.test(safeMsg)) {
+    return {
+      category: 'INVALID_URI',
+      errorName,
+      code,
+      message: safeMsg,
+      hint: 'Định dạng MONGODB_URI không hợp lệ (cần bắt đầu bằng mongodb+srv:// hoặc mongodb://).',
+    };
+  }
+  return {
+    category: 'UNKNOWN',
+    errorName,
+    code,
+    message: safeMsg,
+    hint: 'Kiểm tra lại biến MONGODB_URI và trạng thái cụm trên MongoDB Atlas Dashboard.',
+  };
+}
+
 function uriHasDatabaseName(uri: string): boolean {
   const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//i, '');
   const slashIdx = withoutScheme.indexOf('/');
   if (slashIdx < 0) return false;
   const pathPart = withoutScheme.slice(slashIdx + 1).split('?')[0]?.trim() ?? '';
   return pathPart.length > 0;
+}
+
+function parseExplicitTimeoutFromUri(uri: string | undefined, param: string): number | null {
+  if (!uri) return null;
+  const qIdx = uri.indexOf('?');
+  if (qIdx < 0) return null;
+  const params = new URLSearchParams(uri.slice(qIdx + 1));
+  const raw = params.get(param);
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 function isSrvDnsError(err: unknown): boolean {
@@ -85,33 +218,27 @@ async function connectMongooseWithDnsFallback(uri: string, opts: ConnectOptions)
 }
 
 /**
- * Cấu hình Connection Pool chuẩn Production cho SmartCitizen Đồng Nai (MongoDB Atlas):
- * - Bối cảnh triển khai: Node.js/Express long-running backend phục vụ đồng thời 95 Phường/Xã
- *   (IOC Dashboard real-time + Citizen Local-First Outbox đồng bộ hàng loạt khi có mạng).
- * - Zero Mock Fallback: khi đã khai báo MONGODB_URI, hệ thống kết nối trực tiếp tới Atlas và fail-loud nếu lỗi.
+ * Cấu hình Connection Pool chuẩn Cloud Production (Render -> MongoDB Atlas):
+ * - serverSelectionTimeoutMS: 10000ms (chịu được độ trễ cold-start của container Render & cụm M0/M2 Atlas)
+ * - connectTimeoutMS: 10000ms, socketTimeoutMS: 45000ms
+ * - family: 4 (ép dùng IPv4 tránh lỗi dual-stack IPv6 DNS/TLS handshake treo trên Linux container)
  */
 export function buildMongoConnectOptions(uri?: string): ConnectOptions {
   const explicitDb = uri ? uriHasDatabaseName(uri) : true;
+  const explicitServerSel = parseExplicitTimeoutFromUri(uri, 'serverSelectionTimeoutMS');
   return {
     ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
-    // Đáp ứng ~20 truy vấn đồng thời (IOC Dashboard + Outbox burst) mà chỉ tốn ~20MB RAM phía Atlas
     maxPoolSize: 20,
-    // Duy trì 5 kết nối ấm (TCP + TLS + SCRAM auth sẵn) giúp truy vấn bản đồ đạt <10ms không tốn chi phí bắt tay lại
     minPoolSize: 5,
-    // Fail-fast sau 5s nếu sai IP Whitelist, lỗi DNS SRV hoặc mất Primary trong Replica Set
-    serverSelectionTimeoutMS: 5_000,
-    // Cho phép truy vấn thống kê/aggregation lớn hoặc mạng chập chờn hoàn tất trong tối đa 45s trước khi cắt socket
-    socketTimeoutMS: 45_000,
-    // Giới hạn thời gian bắt tay TCP + TLS ban đầu tới cụm Atlas
+    serverSelectionTimeoutMS: explicitServerSel ?? 10_000,
     connectTimeoutMS: 10_000,
-    // Giải phóng kết nối nhàn rỗi trên 60s về mức minPoolSize để tiết kiệm tài nguyên cụm M0/M2
+    socketTimeoutMS: 45_000,
     maxIdleTimeMS: 60_000,
-    // Tự động thử lại thao tác ghi/đọc đơn lẻ khi bầu chọn lại Primary trên Atlas Replica Set
+    // Ép IPv4 để tránh lỗi DNS/TLS handshake chậm trên container Linux (Render / Docker)
+    family: 4,
     retryWrites: true,
     retryReads: true,
-    // Đảm bảo ghi bền vững trên đa số node Replica Set — chống mất dữ liệu khi Primary gặp sự cố
     w: 'majority',
-    // Tắt autoIndex ngầm lúc runtime để quản lý tường minh qua migrateIndexes / ensureDatabaseIndexes
     autoIndex: false,
   };
 }
@@ -119,11 +246,16 @@ export function buildMongoConnectOptions(uri?: string): ConnectOptions {
 let listenersAttached = false;
 let shutdownHooksAttached = false;
 let manualDisconnect = false;
+let isBootConnecting = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectAttempts = 0;
 let activeUri = '';
 let maxAttempts = 10;
 let cachedReplicaSetSupport: boolean | null = null;
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function clearReconnectTimer(): void {
   if (reconnectTimer) {
@@ -137,10 +269,10 @@ export function mapReadyState(readyState: number): ConnectionStateName {
 }
 
 function scheduleReconnect(): void {
-  if (manualDisconnect || !activeUri || reconnectTimer) return;
+  if (manualDisconnect || isBootConnecting || !activeUri || reconnectTimer) return;
   if (reconnectAttempts >= maxAttempts) {
     console.error(
-      `[mongodb] Đã vượt quá ${maxAttempts} lần kết nối lại. Kiểm tra ngay MONGODB_URI và Atlas Network Access.`,
+      `[mongodb] Đã vượt quá ${maxAttempts} lần kết nối lại nền. Kiểm tra ngay MONGODB_URI và Atlas Network Access (0.0.0.0/0).`,
     );
     return;
   }
@@ -151,7 +283,9 @@ function scheduleReconnect(): void {
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (manualDisconnect || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) return;
+    if (manualDisconnect || isBootConnecting || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
+      return;
+    }
     connectMongooseWithDnsFallback(activeUri, buildMongoConnectOptions(activeUri))
       .then(() => {
         reconnectAttempts = 0;
@@ -159,7 +293,8 @@ function scheduleReconnect(): void {
         console.log('[mongodb] Kết nối lại MongoDB Atlas thành công.');
       })
       .catch((err) => {
-        console.error(`[mongodb] Lỗi kết nối lại: ${err instanceof Error ? err.message : String(err)}`);
+        const diag = diagnoseMongoError(err);
+        console.error(`[mongodb] Lỗi kết nối lại [${diag.category} - ${diag.errorName}]: ${diag.message}`);
         scheduleReconnect();
       });
   }, delayMs);
@@ -271,19 +406,26 @@ export async function ensureDatabaseIndexes(): Promise<IndexSyncSummary[]> {
 }
 
 /**
- * Kết nối trực tiếp tới MongoDB Atlas (Zero Mock Fallback).
- * Ném lỗi tường minh nếu thiếu hoặc sai định dạng `MONGODB_URI`, hoặc không kết nối được tới cluster.
+ * Kết nối tới MongoDB Atlas với cơ chế Retry có giới hạn (Exponential Backoff) lúc Cold-Start.
+ * Tránh fail ngay ở lần thử đầu tiên khi container Render hoặc cụm M0/M2 vừa thức dậy.
  */
 export async function connectDatabase(options: ConnectDbOptions = {}): Promise<typeof mongoose> {
   const uri = (options.uri ?? process.env.MONGODB_URI ?? '').trim();
   if (!uri) {
     throw new Error(
-      'Thiếu biến môi trường MONGODB_URI. Hãy cấu hình chuỗi kết nối MongoDB Atlas trong backend/.env (không dùng mock fallback).',
+      'Thiếu biến môi trường MONGODB_URI. Hãy cấu hình chuỗi kết nối MongoDB Atlas trong backend/.env hoặc Render Dashboard.',
     );
   }
   if (!/^mongodb(\+srv)?:\/\/.+/.test(uri)) {
     throw new Error('MONGODB_URI không đúng định dạng (yêu cầu mongodb:// hoặc mongodb+srv://).');
   }
+
+  const masked = maskMongoUri(uri);
+  const isTestEnv = process.env.NODE_ENV === 'test';
+  const explicitFastTimeout = parseExplicitTimeoutFromUri(uri, 'serverSelectionTimeoutMS');
+  const defaultRetries = isTestEnv || (explicitFastTimeout !== null && explicitFastTimeout <= 1_000) ? 2 : 5;
+  const totalAttempts = Math.max(1, options.bootRetries ?? defaultRetries);
+  const baseDelayMs = Math.max(50, options.retryBaseDelayMs ?? (isTestEnv ? 120 : 1_000));
 
   activeUri = uri;
   maxAttempts = options.maxReconnectAttempts ?? 10;
@@ -296,10 +438,47 @@ export async function connectDatabase(options: ConnectDbOptions = {}): Promise<t
   }
 
   if (mongoose.connection.readyState !== 1) {
-    if (mongoose.connection.readyState !== 0) {
-      await mongoose.disconnect();
+    isBootConnecting = true;
+    clearReconnectTimer();
+    let lastErr: unknown;
+    try {
+      for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+        try {
+          if (mongoose.connection.readyState !== 0) {
+            await mongoose.disconnect().catch(() => undefined);
+          }
+          const connectOpts = buildMongoConnectOptions(uri);
+          console.log(
+            `[mongodb] Đang kết nối tới ${masked.protocol}://${masked.host}/${masked.dbName} ` +
+              `(lần ${attempt}/${totalAttempts}, family=IPv4, timeout=${connectOpts.serverSelectionTimeoutMS}ms)...`,
+          );
+          await connectMongooseWithDnsFallback(uri, connectOpts);
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const diag = diagnoseMongoError(err);
+          console.error(
+            `[mongodb] Kết nối lần ${attempt}/${totalAttempts} thất bại [${diag.category} - ${diag.errorName}]: ${diag.message}\n` +
+              `          -> Chẩn đoán: ${diag.hint}`,
+          );
+          if (attempt < totalAttempts && !manualDisconnect) {
+            // Không cần retry lặp lại nếu lỗi xác thực sai mật khẩu cố định hoặc URI sai cú pháp
+            if (diag.category === 'AUTH_FAILED' || diag.category === 'INVALID_URI') {
+              break;
+            }
+            const backoffMs = Math.min(15_000, baseDelayMs * 2 ** (attempt - 1)) + Math.floor(Math.random() * 250);
+            console.warn(`[mongodb] Chờ ${backoffMs}ms trước khi thử lại lần ${attempt + 1}/${totalAttempts}...`);
+            await sleepMs(backoffMs);
+          }
+        }
+      }
+      if (lastErr !== undefined) {
+        throw lastErr;
+      }
+    } finally {
+      isBootConnecting = false;
     }
-    await connectMongooseWithDnsFallback(uri, buildMongoConnectOptions(uri));
   }
 
   if (options.ensureIndexes !== false) {
