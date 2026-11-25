@@ -29,7 +29,8 @@ export function CommunityLayout() {
       <Header />
       <OfflineBanner />
       <TopNav />
-      <main id="main" className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-3 pb-6 pt-4 sm:px-4 md:pb-10">
+      <main id="main" className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-3 pb-6 pt-3 sm:px-4 md:pb-10">
+        <FloatingSosWidget />
         <RouteErrorBoundary>
           <Suspense fallback={<RouteLoadingSkeleton />}>
             <Outlet />
@@ -51,7 +52,6 @@ export function CommunityLayout() {
           </nav>
         </div>
       </footer>
-      <FloatingSosWidget />
       {assistantOpen && (
         <Suspense fallback={null}>
           <ChatWidget />

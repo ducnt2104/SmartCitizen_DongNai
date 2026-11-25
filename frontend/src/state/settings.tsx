@@ -66,7 +66,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     root.dataset.theme = settings.theme;
     root.dataset.senior = String(settings.senior);
     root.lang = settings.lang;
-    root.style.setProperty('--font-px', `${(16 * (settings.senior ? 150 : settings.fontScale)) / 100}px`);
+    const effectiveScale = settings.senior && settings.fontScale === 100 ? 125 : settings.fontScale;
+    root.style.setProperty('--font-px', `${(16 * effectiveScale) / 100}px`);
     const meta = document.querySelector('meta[name="theme-color"]');
     meta?.setAttribute('content', settings.mode === 'dark' ? '#0B1220' : settings.theme === 'youth' ? '#0284C7' : '#0B57D0');
     localStorage.setItem(KEY, JSON.stringify(settings));
@@ -75,11 +76,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const set = useCallback((patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch })), []);
   const toggleSenior = useCallback(() => {
-    setSettings((s) =>
-      s.senior
-        ? { ...s, senior: false, fontScale: s.prevFontScale }
-        : { ...s, senior: true, prevFontScale: s.fontScale, fontScale: 150 },
-    );
+    setSettings((s) => {
+      const curScale = s.senior && s.fontScale === 100 ? 125 : s.fontScale;
+      if (curScale === 100) {
+        return { ...s, senior: true, prevFontScale: 100, fontScale: 125 };
+      }
+      if (curScale === 125) {
+        return { ...s, senior: true, prevFontScale: 100, fontScale: 150 };
+      }
+      return { ...s, senior: false, fontScale: 100 };
+    });
   }, []);
 
   const value = useMemo(

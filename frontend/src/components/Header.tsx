@@ -1,4 +1,4 @@
-import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
+import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { normalizeRole } from '@shared/constants';
@@ -147,37 +147,31 @@ export function Header({ showScope = true }: { showScope?: boolean }) {
   const { t } = useI18n();
   const { settings, toggleSenior, setDrawerOpen, setTourOpen } = useSettings();
   const nav = useNavigate();
+  const scaleLabel = settings.fontScale === 150 ? 'Rất lớn' : settings.senior || settings.fontScale === 125 ? 'Lớn' : 'Tiêu chuẩn';
   return (
-    <header className="sticky top-0 z-40 border-b border-line/80 bg-surface/90 shadow-[0_1px_12px_rgb(15_23_42/0.04)] backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b border-line/80 bg-surface/95 shadow-[0_1px_12px_rgb(15_23_42/0.04)] backdrop-blur-xl">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 py-2">
         <div className="flex w-full items-center justify-between gap-2">
           <Link to="/" className="min-w-0 shrink overflow-hidden" aria-label={t('nav.home')}>
             <Logo />
           </Link>
-          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
-            <Link
-              to="/alerts"
-              className="btn btn-soft !min-h-9 !min-w-9 !px-2 !text-xs text-rose-700 sm:!min-h-10 sm:!px-3 md:hidden"
-              aria-label={t('nav.alerts')}
-              title="Cảnh báo thiên tai & giao thông"
-            >
-              <ShieldAlert className="h-4 w-4 text-rose-600" aria-hidden />
-              <span className="hidden xs:inline">{t('nav.alerts')}</span>
-            </Link>
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               data-tour="senior"
               aria-pressed={settings.senior}
               onClick={toggleSenior}
-              className={`btn !min-h-9 !min-w-9 !px-2 !text-xs sm:!min-h-10 sm:!min-w-10 sm:!px-3 sm:!text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
-              title={t('senior.toggleHint')}
+              aria-label={`Đổi cỡ chữ (đang chọn: ${scaleLabel})`}
+              className={`btn !min-h-11 !min-w-11 !px-3 !text-xs sm:!text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
+              title="Bấm để đổi cỡ chữ: Tiêu chuẩn → Lớn → Rất lớn"
             >
-              <span className="font-extrabold">Aa+</span> <span className="hidden sm:inline">{t('senior.toggle')}</span>
+              <span className="font-extrabold">Aa+</span>
+              <span className="text-[11px] font-bold sm:text-xs">{scaleLabel}</span>
             </button>
-            <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10 sm:!px-2.5" onClick={() => { nav('/'); setTourOpen(true); }} aria-label={t('tour.open')} title={t('tour.open')}>
+            <button type="button" className="btn btn-ghost !min-h-11 !min-w-11 !px-2.5" onClick={() => { nav('/'); setTourOpen(true); }} aria-label={t('tour.open')} title={t('tour.open')}>
               <CircleHelp className="h-5 w-5" aria-hidden /> <span className="hidden text-sm md:inline">{t('tour.open')}</span>
             </button>
-            <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
+            <button type="button" className="btn btn-ghost !min-h-11 !min-w-11 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
               <SettingsIcon className="h-5 w-5" aria-hidden />
             </button>
             <UserMenu />

@@ -22,7 +22,7 @@
   --surface: 255 255 255;
   --surface-2: 238 243 252;
   --ink: 15 23 42;
-  --muted: 71 85 105;
+  --muted: 51 65 85;
   --line: 219 227 242;
   --brand: 29 78 216;
   --brand-2: 14 165 233;
@@ -220,7 +220,7 @@ h1, h2, h3, h4 { line-height: 1.35; }
   }
   .label { @apply mb-1 block text-sm font-semibold text-ink; }
   .chip {
-    @apply inline-flex min-h-8 items-center gap-1 rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink transition-colors hover:border-brand/40 hover:bg-brand-soft/50;
+    @apply inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 text-sm font-semibold text-ink transition-colors hover:border-brand/40 hover:bg-brand-soft/50 sm:min-h-9;
   }
   .chip[aria-pressed='true'], .chip[data-active='true'] {
     @apply border-transparent bg-brand text-brand-ink shadow-sm;
