@@ -52,6 +52,7 @@ Desktop.ini
 /data/
 backend/data/
 !frontend/src/data/
+!backend/src/data/
 logs/
 *.log
 npm-debug.log*
