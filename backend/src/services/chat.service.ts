@@ -1,6 +1,6 @@
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../shared/dongNaiWards';
 import { computeStats, toClientReport } from '../shared/report';
-import type { Category, CivicAlertItem, OfficialBulletinItem, Report, WeatherSnapshotItem } from '../shared/types';
+import type { AlertSeverity, Category, CivicAlertItem, OfficialBulletinItem, Report, WeatherSnapshotItem } from '../shared/types';
 import type { Repositories, UserRecord } from '../repositories/types';
 import { canSee } from './access';
 import type { AlertsAndWardsService } from './alertsAndWards.service';
@@ -31,6 +31,11 @@ const CAT_VI: Record<Category, string> = {
   ngap_nuoc: 'Ngập nước',
   mat_duong: 'Mặt đường',
   khac: 'Khác',
+};
+const ALERT_SEVERITY_VI: Record<AlertSeverity, string> = {
+  1: 'MỨC 1 · THÔNG TIN',
+  2: 'MỨC 2 · CẢNH BÁO',
+  3: 'MỨC 3 · KHẨN CẤP',
 };
 
 export interface ChatContext {
@@ -132,7 +137,7 @@ export class ChatService {
         'Cảnh báo thiên tai / ngập lụt / giao thông đang kích hoạt:',
         ...activeAlerts.map(
           (a) =>
-            `- [${a.severity.toUpperCase()} · ${a.category}] ${a.title}${a.affectedRoads.length ? ` (Tuyến đường: ${a.affectedRoads.join(', ')})` : ''}${a.detourNote ? ` — Lộ trình tránh: ${a.detourNote}` : ''}: ${a.description.slice(0, 180)}`,
+            `- [${ALERT_SEVERITY_VI[a.severity] ?? `MỨC ${String(a.severity)}`} · ${a.category}] ${a.title}${a.affectedRoads.length ? ` (Tuyến đường: ${a.affectedRoads.join(', ')})` : ''}${a.detourNote ? ` — Lộ trình tránh: ${a.detourNote}` : ''}: ${a.description.slice(0, 180)}`,
         ),
       );
     } else {

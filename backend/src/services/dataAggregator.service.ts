@@ -14,6 +14,7 @@ import { env } from '../config/env';
 import { Bulletin, DailyDigest, WeatherSnapshot } from '../models';
 import type { Repositories } from '../repositories/types';
 import { newId, sha256 } from '../utils/crypto';
+import { stripVnDiacritics } from './alertsAndWards.service';
 import type { AlertsAndWardsService } from './alertsAndWards.service';
 import type { GeminiService } from './gemini.service';
 import { safeFetchOfficial } from './ssrfGuard';

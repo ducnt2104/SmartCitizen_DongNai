@@ -276,12 +276,12 @@ describe('Nâng cấp SmartCitizen Đồng Nai: Defense-in-Depth, Aggregator, Wa
     expect(run1.weatherZonesUpdated).toBe(9);
     expect(run1.weatherAlertsTriggered).toBeGreaterThanOrEqual(1);
     expect(run1.bulletinsSaved).toBe(1);
-    expect(classifySpy).toHaveBeenCalledTimes(1);
+    expect(classifySpy).toHaveBeenCalledTimes(0);
 
-    // Chạy lại với cùng bài RSS -> sourceUrlHash trùng khớp nên không được gọi Gemini lần 2
+    // Chạy lại với cùng bài RSS -> sourceUrlHash trùng khớp nên không lưu trùng và vẫn 0 tốn Cloud AI
     const run2 = await services.aggregator.syncAll({ skipWeather: true, fetcher: mockFetcher });
     expect(run2.bulletinsSaved).toBe(0);
-    expect(classifySpy).toHaveBeenCalledTimes(1);
+    expect(classifySpy).toHaveBeenCalledTimes(0);
     classifySpy.mockRestore();
 
     const wApi = await apiCall('/api/weather');

@@ -31,7 +31,7 @@ const CLUSTER_RADIUS_M = 500;
 const CLUSTER_WINDOW_MS = 30 * 60 * 1000;
 const CLUSTER_MIN_DISTINCT_USERS = 3;
 
-function stripVnDiacritics(input: string): string {
+export function stripVnDiacritics(input: string): string {
   return input
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
