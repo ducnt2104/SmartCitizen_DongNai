@@ -1,0 +1,10 @@
+{
+  "name": "smartcitizen-client-render-compat",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Compatibility shim for Render services still configured with --prefix client -> forwards to ../frontend",
+  "scripts": {
+    "postinstall": "node ../scripts/render-compat.mjs install frontend",
+    "build": "node ../scripts/render-compat.mjs build frontend"
+  }
+}

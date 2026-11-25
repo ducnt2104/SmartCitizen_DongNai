@@ -147,7 +147,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
 
   const geminiApiKey = readTrimmed(source, 'GEMINI_API_KEY') ?? '';
   const geminiModel = readTrimmed(source, 'GEMINI_MODEL') || 'gemini-3.5-flash';
-  const allowCloudAiFallback = parseBoolEnv(source, 'ALLOW_CLOUD_AI_FALLBACK', false, issues);
+  const allowCloudAiFallback = parseBoolEnv(source, 'ALLOW_CLOUD_AI_FALLBACK', Boolean(source.RENDER), issues);
 
   // Local AI & High-Speed Rust CV Engine
   const cvEngineUrl = readTrimmed(source, 'CV_ENGINE_URL') || 'http://127.0.0.1:8001';

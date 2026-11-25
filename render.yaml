@@ -16,6 +16,8 @@ services:
         generateValue: true
       - key: OTP_PEPPER
         generateValue: true
+      - key: KEY_ENCRYPTION_SECRET
+        generateValue: true
       - key: COOKIE_SECURE
         value: "true"
       - key: REFRESH_TOKEN_DAYS
@@ -23,10 +25,25 @@ services:
       # Các khóa bí mật bắt buộc nhập trực tiếp trên Render Dashboard (không lưu trong Git)
       - key: MONGODB_URI
         sync: false
+      - key: ALLOW_JSON_FALLBACK
+        value: "false"
+      - key: ALLOW_CLOUD_AI_FALLBACK
+        value: "true"
+      - key: GEMINI_API_KEYS
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.5-flash
+      # Tài khoản SUPER_ADMIN & Cán bộ IOC Khởi tạo (đổi mật khẩu trên Render Dashboard)
+      - key: SUPER_ADMIN_CODE
+        value: SUPER-ADMIN
+      - key: SUPER_ADMIN_EMAIL
+        value: superadmin@dongnai.gov.vn
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: INITIAL_STAFF_PASSWORD
+        sync: false
       # Dịch vụ gửi OTP thật qua HTTPS Port 443 (Render Free Tier chặn cổng SMTP 25/465/587)
       - key: OTP_PROVIDER
         value: auto
@@ -49,9 +66,6 @@ services:
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS
-        sync: false
-      # Mật khẩu khởi tạo Cán bộ IOC 2 cấp (đổi trên Render Dashboard)
-      - key: INITIAL_STAFF_PASSWORD
         sync: false
       - key: ALLOWED_ORIGINS
         value: http://localhost:5173,https://*.onrender.com
