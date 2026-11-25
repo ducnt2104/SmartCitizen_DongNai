@@ -84,7 +84,7 @@ export default function RescueLoginPage() {
             Đăng nhập Đội Cứu Hộ & Ứng Cứu Khẩn Cấp
           </h1>
           <p className="mt-1 text-sm leading-relaxed text-slate-400">
-            Nhận lệnh điều động ưu tiên SOS từ AI Brain, dẫn đường trực tiếp tới địa chỉ sự cố và nghiệm thu Trước/Sau ngay tại thực địa.
+            Nhận lệnh điều động khẩn cấp, dẫn đường trực tiếp tới địa chỉ sự cố và cập nhật kết quả xử lý ngay tại hiện trường.
           </p>
 
           {/* Chọn nhanh mã đội trực chiến */}
@@ -180,11 +180,11 @@ export default function RescueLoginPage() {
             </p>
             <p className="flex items-center gap-1.5">
               <Radio className="h-3.5 w-3.5 shrink-0 text-rose-400" aria-hidden />
-              Ưu tiên AI SOS & $nearSphere
+              Điều phối ưu tiên sự cố khẩn cấp
             </p>
             <p className="col-span-2 flex items-center gap-1.5 text-slate-400">
               <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
-              Mật khẩu khởi tạo chuẩn từ biến môi trường <span className="mono text-slate-300">INITIAL_STAFF_PASSWORD</span>.
+              Sử dụng mã đơn vị và mật khẩu công vụ do Trung tâm Điều hành cấp.
             </p>
           </div>
         </div>

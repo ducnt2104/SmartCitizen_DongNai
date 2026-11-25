@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { OtpToken } from '../../models/OtpToken';
+import type { Repositories } from '../../repositories/types';
 import { badRequest, tooMany } from '../../utils/errors';
 import { safeEqualHex, sha256 } from '../../utils/crypto';
 import {
@@ -35,8 +36,10 @@ export interface SendPhoneOtpResponse {
   targetMasked: string;
   resendInSec: number;
   expiresInSec: number;
-  provider: ConcreteSmsProviderName;
+  provider: ConcreteSmsProviderName | string;
   clientSideFirebase?: boolean;
+  fallbackChannel?: 'telegram' | 'email';
+  fallbackTargetMasked?: string;
   devOtpPreview?: string;
 }
 
@@ -64,79 +67,140 @@ function isMongoReady(): boolean {
 export class PhoneOtpService {
   readonly rateLimiter: OtpSendRateLimiter;
   readonly smsDispatcher: MultiSmsOtpDispatcher;
+  private readonly otpRepo?: Repositories['otps'];
   private readonly memoryStore = new Map<string, StoredPhoneOtpChallenge>();
 
   constructor(opts?: {
     rateLimiter?: OtpSendRateLimiter;
     smsDispatcher?: MultiSmsOtpDispatcher;
     fetchImpl?: FetchLike;
+    otpRepo?: Repositories['otps'];
   }) {
     this.rateLimiter = opts?.rateLimiter ?? new OtpSendRateLimiter();
     this.smsDispatcher = opts?.smsDispatcher ?? new MultiSmsOtpDispatcher(opts?.fetchImpl);
+    this.otpRepo = opts?.otpRepo;
   }
 
   private async loadLatestChallenge(phoneE164: string): Promise<StoredPhoneOtpChallenge | null> {
     if (isMongoReady()) {
-      const doc = await OtpToken.findOne({ channel: 'phone', target: phoneE164 })
-        .sort({ createdAt: -1 })
-        .lean();
-      if (doc) {
-        return {
-          target: doc.target,
-          channel: 'phone',
-          purpose: doc.purpose,
-          otpHash: doc.otpHash,
-          attempts: doc.attempts ?? 0,
-          resendAt: doc.resendAt ? new Date(doc.resendAt).getTime() : 0,
-          expiresAt: new Date(doc.expiresAt).getTime(),
-          consumedAt: doc.consumedAt ? new Date(doc.consumedAt).getTime() : null,
-          invalidatedAt: doc.invalidatedAt ? new Date(doc.invalidatedAt).getTime() : null,
-        };
+      try {
+        const doc = await OtpToken.findOne({ channel: 'phone', target: phoneE164 })
+          .sort({ createdAt: -1 })
+          .lean();
+        if (doc) {
+          return {
+            target: doc.target,
+            channel: 'phone',
+            purpose: doc.purpose,
+            otpHash: doc.otpHash,
+            attempts: doc.attempts ?? 0,
+            resendAt: doc.resendAt ? new Date(doc.resendAt).getTime() : 0,
+            expiresAt: new Date(doc.expiresAt).getTime(),
+            consumedAt: doc.consumedAt ? new Date(doc.consumedAt).getTime() : null,
+            invalidatedAt: doc.invalidatedAt ? new Date(doc.invalidatedAt).getTime() : null,
+          };
+        }
+      } catch {
+        /* fallback mượt xuống bộ nhớ / SQLite local */
       }
     }
     const mem = this.memoryStore.get(phoneE164);
-    return mem ? { ...mem } : null;
+    if (mem) return { ...mem };
+    if (this.otpRepo) {
+      const localRec = await this.otpRepo.get(phoneE164).catch(() => null);
+      if (localRec) {
+        return {
+          target: phoneE164,
+          channel: 'phone',
+          purpose: localRec.purpose,
+          otpHash: localRec.codeHash,
+          attempts: localRec.failedAttempts ?? 0,
+          resendAt: localRec.resendAt ?? 0,
+          expiresAt: localRec.expiresAt,
+          consumedAt: localRec.consumedAt ?? null,
+          invalidatedAt: localRec.lockedUntil && localRec.lockedUntil > 0 ? localRec.lockedUntil : null,
+        };
+      }
+    }
+    return null;
   }
 
   private async persistNewChallenge(rec: StoredPhoneOtpChallenge): Promise<void> {
     this.memoryStore.set(rec.target, { ...rec });
+    if (this.otpRepo) {
+      await this.otpRepo
+        .save({
+          identifier: rec.target,
+          channel: 'sms',
+          purpose: rec.purpose === 'reset_password' ? 'reset_password' : 'login',
+          codeHash: rec.otpHash,
+          expiresAt: rec.expiresAt,
+          resendAt: rec.resendAt,
+          failedAttempts: 0,
+          lockedUntil: 0,
+          consumedAt: null,
+        })
+        .catch(() => undefined);
+    }
     if (isMongoReady()) {
-      // Hủy các mã OTP cũ chưa dùng của cùng SĐT trước khi ghi mã mới
-      await OtpToken.deleteMany({ channel: 'phone', target: rec.target });
-      await OtpToken.create({
-        target: rec.target,
-        identifier: rec.target,
-        channel: 'phone',
-        purpose: rec.purpose,
-        otpHash: rec.otpHash,
-        codeHash: rec.otpHash,
-        attempts: 0,
-        failedAttempts: 0,
-        resendAt: new Date(rec.resendAt),
-        expiresAt: new Date(rec.expiresAt),
-        consumedAt: null,
-        invalidatedAt: null,
-        lockedUntil: null,
-      });
+      try {
+        await OtpToken.deleteMany({ channel: 'phone', target: rec.target });
+        await OtpToken.create({
+          target: rec.target,
+          identifier: rec.target,
+          channel: 'phone',
+          purpose: rec.purpose,
+          otpHash: rec.otpHash,
+          codeHash: rec.otpHash,
+          attempts: 0,
+          failedAttempts: 0,
+          resendAt: new Date(rec.resendAt),
+          expiresAt: new Date(rec.expiresAt),
+          consumedAt: null,
+          invalidatedAt: null,
+          lockedUntil: null,
+        });
+      } catch {
+        /* đã lưu an toàn ở memoryStore + SQLite local */
+      }
     }
   }
 
   private async updateChallengeState(rec: StoredPhoneOtpChallenge): Promise<void> {
     this.memoryStore.set(rec.target, { ...rec });
+    if (this.otpRepo) {
+      await this.otpRepo
+        .save({
+          identifier: rec.target,
+          channel: 'sms',
+          purpose: rec.purpose === 'reset_password' ? 'reset_password' : 'login',
+          codeHash: rec.otpHash,
+          expiresAt: rec.expiresAt,
+          resendAt: rec.resendAt,
+          failedAttempts: rec.attempts,
+          lockedUntil: rec.invalidatedAt ?? 0,
+          consumedAt: rec.consumedAt,
+        })
+        .catch(() => undefined);
+    }
     if (isMongoReady()) {
-      await OtpToken.findOneAndUpdate(
-        { channel: 'phone', target: rec.target },
-        {
-          $set: {
-            attempts: rec.attempts,
-            failedAttempts: rec.attempts,
-            consumedAt: rec.consumedAt ? new Date(rec.consumedAt) : null,
-            invalidatedAt: rec.invalidatedAt ? new Date(rec.invalidatedAt) : null,
-            lockedUntil: rec.invalidatedAt ? new Date(rec.invalidatedAt) : null,
+      try {
+        await OtpToken.findOneAndUpdate(
+          { channel: 'phone', target: rec.target },
+          {
+            $set: {
+              attempts: rec.attempts,
+              failedAttempts: rec.attempts,
+              consumedAt: rec.consumedAt ? new Date(rec.consumedAt) : null,
+              invalidatedAt: rec.invalidatedAt ? new Date(rec.invalidatedAt) : null,
+              lockedUntil: rec.invalidatedAt ? new Date(rec.invalidatedAt) : null,
+            },
           },
-        },
-        { sort: { createdAt: -1 } },
-      );
+          { sort: { createdAt: -1 } },
+        );
+      } catch {
+        /* đã cập nhật ở memoryStore + SQLite local */
+      }
     }
   }
 
@@ -204,7 +268,59 @@ export class PhoneOtpService {
       expiresInSec: PHONE_OTP_TTL_MS / 1000,
       provider: sendResult.provider,
       ...(sendResult.clientSideFirebase ? { clientSideFirebase: true } : {}),
+      ...(sendResult.fallbackChannel ? { fallbackChannel: sendResult.fallbackChannel } : {}),
       ...(sendResult.devOtpPreview ? { devOtpPreview: sendResult.devOtpPreview } : {}),
+    };
+  }
+
+  /**
+   * Phát hành mã OTP 6 số cho SĐT nhưng gửi qua kênh dự phòng (Email liên kết) khi cổng SMS chưa cấu hình.
+   */
+  async issueChallengeForExternalChannel(
+    rawPhone: string,
+    purpose: 'login' | 'reset_password' | 'verify_phone' = 'login',
+    deliverFn: (otp: string, parsed: ParsedVnPhone, ttlMinutes: number) => Promise<{
+      provider: string;
+      fallbackChannel: 'email' | 'telegram';
+      fallbackTargetMasked?: string;
+    }>,
+    now = Date.now(),
+  ): Promise<SendPhoneOtpResponse> {
+    const parsed = requireVnPhone(rawPhone);
+    this.rateLimiter.assertCanSend(parsed.e164, now);
+
+    const existing = await this.loadLatestChallenge(parsed.e164);
+    if (existing && existing.resendAt > now) {
+      const waitSec = Math.max(1, Math.ceil((existing.resendAt - now) / 1000));
+      throw tooMany(`Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`, 'otp_cooldown');
+    }
+
+    const otp = generateSixDigitOtp();
+    const otpHash = hashOtpCodeSha256(otp);
+    const delivered = await deliverFn(otp, parsed, PHONE_OTP_TTL_MS / 60_000);
+
+    await this.persistNewChallenge({
+      target: parsed.e164,
+      channel: 'phone',
+      purpose,
+      otpHash,
+      attempts: 0,
+      resendAt: now + OTP_COOLDOWN_MS,
+      expiresAt: now + PHONE_OTP_TTL_MS,
+      consumedAt: null,
+      invalidatedAt: null,
+    });
+    this.rateLimiter.recordSent(parsed.e164, now);
+
+    return {
+      channel: 'phone',
+      target: parsed.e164,
+      targetMasked: parsed.masked,
+      resendInSec: OTP_COOLDOWN_MS / 1000,
+      expiresInSec: PHONE_OTP_TTL_MS / 1000,
+      provider: delivered.provider,
+      fallbackChannel: delivered.fallbackChannel,
+      ...(delivered.fallbackTargetMasked ? { fallbackTargetMasked: delivered.fallbackTargetMasked } : {}),
     };
   }
 

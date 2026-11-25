@@ -2,8 +2,6 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Camera, Clock, ExternalLink, Navigation, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { hammingDistance } from '@shared/dhash';
-import type { ClientReport } from '@shared/types';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
 import { db } from '../db/localDb';
 import { useI18n } from '../i18n';
@@ -265,15 +263,10 @@ export function ReportDetail({
             <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => void doAttach(e.target.files?.[0])} />
           </div>
         )}
-        <p className="text-xs text-muted">{t('detail.created', { d: fmtDate(r.createdAt) })} · {t('detail.contributors', { n: r.clusterCount })} · {hammingNote(r)}</p>
+        <p className="text-xs text-muted">
+          {t('detail.created', { d: fmtDate(r.createdAt) })} · {t('detail.contributors', { n: r.clusterCount })} · {r.photos.length} ảnh hiện trường
+        </p>
       </div>
     </Sheet>
   );
-}
-
-function hammingNote(r: ClientReport): string {
-  if (r.photos.length < 2) return `${r.photos.length} dHash`;
-  let min = 64;
-  for (let i = 0; i < r.photos.length; i++) for (let j = i + 1; j < r.photos.length; j++) min = Math.min(min, hammingDistance(r.photos[i].dHash, r.photos[j].dHash));
-  return `${r.photos.length} · dHash min ${min}`;
 }

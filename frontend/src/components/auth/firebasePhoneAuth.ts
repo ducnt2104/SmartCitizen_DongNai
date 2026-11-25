@@ -9,14 +9,28 @@ import {
 
 const FIREBASE_APP_NAME = 'smartcitizen-dongnai-phone-auth';
 
-interface FirebaseClientEnv {
+export interface FirebaseClientEnv {
   apiKey: string;
   authDomain: string;
   projectId: string;
   appId?: string;
 }
 
+let runtimeFirebaseConfig: FirebaseClientEnv | null = null;
+
+export function setRuntimeFirebaseClientConfig(cfg: FirebaseClientEnv | null | undefined): void {
+  if (cfg?.apiKey && cfg?.projectId) {
+    runtimeFirebaseConfig = {
+      apiKey: cfg.apiKey,
+      projectId: cfg.projectId,
+      authDomain: cfg.authDomain || `${cfg.projectId}.firebaseapp.com`,
+      appId: cfg.appId,
+    };
+  }
+}
+
 function readFirebaseEnv(): FirebaseClientEnv | null {
+  if (runtimeFirebaseConfig) return runtimeFirebaseConfig;
   const apiKey = (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined)?.trim() ?? '';
   const projectId = (import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined)?.trim() ?? '';
   const authDomain =
@@ -36,7 +50,7 @@ function getFirebaseAuthInstance(): Auth {
   const cfg = readFirebaseEnv();
   if (!cfg) {
     throw new Error(
-      'Chưa cấu hình VITE_FIREBASE_API_KEY và VITE_FIREBASE_PROJECT_ID trên Frontend cho chế độ Firebase Phone Auth.',
+      'Dịch vụ xác thực SMS qua Firebase chưa sẵn sàng. Vui lòng chuyển sang nhận mã qua Email hoặc đăng nhập bằng mật khẩu.',
     );
   }
   const existing = getApps().find((a) => a.name === FIREBASE_APP_NAME);
@@ -62,7 +76,7 @@ export function clearFirebaseRecaptcha(): void {
 }
 
 /**
- * Gửi SMS OTP thật từ Google Firebase Phone Auth với `RecaptchaVerifier` ẩn (`size: 'invisible'`).
+ * Gửi mã SMS OTP từ Google Firebase Phone Auth với `RecaptchaVerifier` ẩn (`size: 'invisible'`).
  */
 export async function sendFirebasePhoneSms(
   phoneE164: string,

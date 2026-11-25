@@ -69,8 +69,16 @@ afterAll(async () => {
 
 describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đội Cứu Hộ (/rescue)', () => {
   it('chuẩn hóa model Gemini hợp lệ, nhận diện Vertex Express Key (AQ.*) và bóc sạch JSON từ markdown', () => {
-    expect(resolveGeminiModelChain('gemini-3.5-flash')).toEqual(['gemini-2.5-flash', 'gemini-2.0-flash']);
-    expect(resolveGeminiModelChain('')).toEqual(['gemini-2.5-flash', 'gemini-2.0-flash']);
+    expect(resolveGeminiModelChain('gemini-3.5-flash')).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+    ]);
+    expect(resolveGeminiModelChain('')).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+    ]);
 
     expect(buildGoogleGenAiClientOptions('AQ.Ab8RN6J2zkHaPWh_test')).toEqual({
       apiKey: 'AQ.Ab8RN6J2zkHaPWh_test',

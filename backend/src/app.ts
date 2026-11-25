@@ -30,6 +30,9 @@ export function createApp(
             "'self'",
             'https://maps.googleapis.com',
             'https://maps.gstatic.com',
+            'https://www.google.com',
+            'https://www.gstatic.com',
+            'https://apis.google.com',
           ],
           'img-src': [
             "'self'",
@@ -39,28 +42,35 @@ export function createApp(
             'https://*.gstatic.com',
             'https://*.google.com',
             'https://*.ggpht.com',
+            'https://tile.openstreetmap.org',
             'https://*.tile.openstreetmap.org',
             'https://*.basemaps.cartocdn.com',
             'https://server.arcgisonline.com',
+            'https://services.arcgisonline.com',
           ],
           'connect-src': [
             "'self'",
             'https://*.googleapis.com',
             'https://*.gstatic.com',
             'https://*.google.com',
+            'https://*.firebaseio.com',
+            'https://*.firebaseapp.com',
             'https://nominatim.openstreetmap.org',
+            'https://tile.openstreetmap.org',
             'https://*.tile.openstreetmap.org',
             'https://*.basemaps.cartocdn.com',
             'https://server.arcgisonline.com',
+            'https://services.arcgisonline.com',
             'https://geocode.arcgis.com',
             'https://photon.komoot.io',
+            'https://api.bigdatacloud.net',
             'https://tiles.openfreemap.org',
             'https://router.project-osrm.org',
           ],
           'worker-src': ["'self'", 'blob:'],
           'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
-          'frame-src': ["'self'", 'https://*.google.com'],
+          'frame-src': ["'self'", 'https://*.google.com', 'https://*.firebaseapp.com'],
         },
       },
       crossOriginEmbedderPolicy: false,
@@ -70,11 +80,17 @@ export function createApp(
     cors((req, cb) => {
       const origin = req.header('Origin');
       const host = req.get('host');
-      const sameOrigin = Boolean(origin && host && origin === `${req.protocol}://${host}`);
-      if (!origin || sameOrigin || env.isOriginAllowed(origin)) {
+      const sameHost = Boolean(
+        origin &&
+          host &&
+          (origin === `https://${host}` || origin === `http://${host}`),
+      );
+      const isLocalDev = Boolean(origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin));
+      if (!origin || sameHost || isLocalDev || env.isOriginAllowed(origin)) {
         cb(null, {
           origin: true,
           credentials: true,
+          methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
           allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Fp'],
         });
         return;
@@ -82,8 +98,14 @@ export function createApp(
       cb(new Error(`Origin không được phép: ${origin}`));
     }),
   );
-  // SSE không được nén/buffer
-  app.use(compression({ filter: (req, res) => (req.path === '/api/ai/chat' ? false : compression.filter(req, res)) }));
+  // SSE không được nén/buffer; các JSON/HTML/JS khác nén nhanh ở ngưỡng >= 512B
+  app.use(
+    compression({
+      level: 6,
+      threshold: 512,
+      filter: (req, res) => (req.path === '/api/ai/chat' ? false : compression.filter(req, res)),
+    }),
+  );
   app.use(express.json({ limit: '4mb' }));
   app.use(limits.global);
   app.use(sanitizeInput);

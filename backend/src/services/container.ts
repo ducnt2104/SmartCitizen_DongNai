@@ -46,7 +46,7 @@ export function createServices(repos: Repositories): Services {
   const gemini = new GeminiService(keyPool);
   gemini.attachLocalEngines(cvEngine, rag);
   const otpDelivery = new OtpDeliveryService();
-  const phoneOtp = new PhoneOtpService();
+  const phoneOtp = new PhoneOtpService({ otpRepo: repos.otps });
   const firebaseVerifier = new FirebasePhoneVerifier();
   const geo = new GeoService();
   return {

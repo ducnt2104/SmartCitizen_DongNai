@@ -14,6 +14,11 @@ import type { Category, DynamicAiConfig } from '../shared/types';
 import { env } from '../config/env';
 import type { ImageFingerprintRecord, Repositories } from '../repositories/types';
 import { newId } from '../utils/crypto';
+import {
+  runSharpAuthenticityCheck,
+  runSharpBeforeAfterVerify,
+  runSharpDuplicateCheck,
+} from './localCvPipeline';
 
 export interface RustAuthenticityResult {
   is_authentic: boolean;
@@ -118,6 +123,7 @@ export function isSyntheticTinyFixture(base64: string): boolean {
 export class CvEngineService {
   private child: ChildProcess | null = null;
   private cachedConfig: DynamicAiConfig | null = null;
+  private rustOfflineUntil = 0;
 
   constructor(
     private readonly repos: Repositories,
@@ -134,11 +140,6 @@ export class CvEngineService {
 
   async getConfig(): Promise<DynamicAiConfig> {
     if (this.cachedConfig) return this.cachedConfig;
-    const saved = await this.repos.aiConfig.get();
-    if (saved) {
-      this.cachedConfig = saved;
-      return saved;
-    }
     const defaults: DynamicAiConfig = {
       screenshotThreshold: AUTHENTICITY_MIN,
       duplicateThreshold: DHASH_DUPLICATE_MAX,
@@ -149,8 +150,18 @@ export class CvEngineService {
       updatedAt: new Date().toISOString(),
       updatedBy: 'system',
     };
-    this.cachedConfig = defaults;
-    return defaults;
+    try {
+      const saved = await this.repos.aiConfig.get();
+      if (saved) {
+        this.cachedConfig = saved;
+        return saved;
+      }
+      this.cachedConfig = defaults;
+      return defaults;
+    } catch {
+      // Nếu DB đang cold-start / reconnecting, dùng cấu hình mặc định tạm thời để không chặn luồng Cloud AI
+      return defaults;
+    }
   }
 
   async updateConfig(patch: Partial<Omit<DynamicAiConfig, 'updatedAt' | 'updatedBy'>>, actorId: string): Promise<DynamicAiConfig> {
@@ -257,8 +268,9 @@ export class CvEngineService {
     if (isSyntheticTinyFixture(imageBase64)) return null;
     const cfg = await this.getConfig();
     try {
+      if (Date.now() < this.rustOfflineUntil) throw new Error('rust_offline_cached');
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4500);
+      const timer = setTimeout(() => ctrl.abort(), 1500);
       const res = await fetch(`${this.baseUrl}/cv/check-authenticity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -269,7 +281,8 @@ export class CvEngineService {
         signal: ctrl.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) return null;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this.rustOfflineUntil = 0;
       const out = (await res.json()) as Omit<RustAuthenticityResult, 'engine'>;
       if (reportId) {
         await this.repos.evaluations.append({
@@ -292,7 +305,34 @@ export class CvEngineService {
       }
       return { ...out, engine: 'rust' };
     } catch {
-      return null;
+      this.rustOfflineUntil = Date.now() + 60_000;
+      try {
+        const localOut = await runSharpAuthenticityCheck(imageBase64, cfg.screenshotThreshold);
+        if (reportId) {
+          await this.repos.evaluations
+            .append({
+              id: newId('ev'),
+              reportId,
+              kind: 'authenticity',
+              authenticityScore: localOut.authenticity_score,
+              sceneMatchScore: null,
+              resolutionScore: null,
+              isAuthentic: localOut.is_authentic,
+              isDuplicate: null,
+              resolutionVerified: null,
+              inlierCount: 0,
+              flags: localOut.flags,
+              engineMode: 'sharp_local',
+              latencyMs: localOut.latency_ms,
+              summary: localOut.reason,
+              createdAt: new Date().toISOString(),
+            })
+            .catch(() => undefined);
+        }
+        return localOut;
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -313,8 +353,9 @@ export class CvEngineService {
     const dbCandidates = await this.repos.fingerprints.findNearbyRecent(params.lat, params.lng, 200, since30d);
 
     try {
+      if (Date.now() < this.rustOfflineUntil) throw new Error('rust_offline_cached');
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const timer = setTimeout(() => ctrl.abort(), 1800);
       const res = await fetch(`${this.baseUrl}/cv/check-duplicate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -386,33 +427,67 @@ export class CvEngineService {
 
       return { ...out, engine: 'rust' };
     } catch {
-      // Fallback sang quét dHash trong bán kính 200m trên DB nếu Rust engine chưa chạy
-      for (const c of dbCandidates) {
-        if (c.reportId === params.reportId) continue;
-        const hd = hammingDistance(params.dHash, c.dHash);
-        if (hd <= cfg.duplicateThreshold) {
-          return {
-            is_duplicate: true,
-            match_type: 'dhash_fallback',
-            matched_incident_id: c.reportId,
-            similarity_score: Math.round(((64 - hd) / 64) * 1000) / 10,
-            inlier_count: 0,
-            min_hamming: hd,
-            grid_matches: 0,
-            fingerprint: {
-              dhash_hex: params.dHash,
-              phash_hex: params.dHash,
-              center_dhash_hex: params.dHash,
-              grid_dhashes_hex: [],
-              keypoint_count: 0,
-              descriptors_base64: '',
-            },
-            latency_ms: 0.5,
-            engine: 'fallback',
-          };
+      try {
+        const localDup = await runSharpDuplicateCheck({
+          imageBase64: params.imageBase64,
+          fallbackDHash: params.dHash,
+          reportId: params.reportId,
+          lat: params.lat,
+          lng: params.lng,
+          duplicateThreshold: cfg.duplicateThreshold,
+          minKeypointInliers: cfg.minKeypointInliers,
+          candidates: dbCandidates,
+        });
+        if (params.registerOnPass && !localDup.is_duplicate) {
+          await this.repos.fingerprints
+            .save({
+              id: newId('fp'),
+              reportId: params.reportId,
+              photoId: params.photoId,
+              wardCode: params.wardCode,
+              category: params.category,
+              dHash: localDup.fingerprint.dhash_hex || params.dHash,
+              pHash: localDup.fingerprint.phash_hex,
+              centerHash: localDup.fingerprint.center_dhash_hex,
+              gridHashes: localDup.fingerprint.grid_dhashes_hex,
+              keypointCount: localDup.fingerprint.keypoint_count,
+              descriptorsBase64: localDup.fingerprint.descriptors_base64,
+              lat: params.lat,
+              lng: params.lng,
+              createdAt: new Date().toISOString(),
+            })
+            .catch(() => undefined);
         }
+        return localDup;
+      } catch {
+        // Fallback tối giản theo dHash nếu ảnh không giải mã được bằng sharp
+        for (const c of dbCandidates) {
+          if (c.reportId === params.reportId) continue;
+          const hd = hammingDistance(params.dHash, c.dHash);
+          if (hd <= cfg.duplicateThreshold) {
+            return {
+              is_duplicate: true,
+              match_type: 'dhash_fallback',
+              matched_incident_id: c.reportId,
+              similarity_score: Math.round(((64 - hd) / 64) * 1000) / 10,
+              inlier_count: 0,
+              min_hamming: hd,
+              grid_matches: 0,
+              fingerprint: {
+                dhash_hex: params.dHash,
+                phash_hex: params.dHash,
+                center_dhash_hex: params.dHash,
+                grid_dhashes_hex: [],
+                keypoint_count: 0,
+                descriptors_base64: '',
+              },
+              latency_ms: 0.5,
+              engine: 'fallback',
+            };
+          }
+        }
+        return null;
       }
-      return null;
     }
   }
 
@@ -431,8 +506,9 @@ export class CvEngineService {
     }
     const cfg = await this.getConfig();
     try {
+      if (Date.now() < this.rustOfflineUntil) throw new Error('rust_offline_cached');
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const timer = setTimeout(() => ctrl.abort(), 1800);
       const res = await fetch(`${this.baseUrl}/cv/verify-resolution`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -450,7 +526,8 @@ export class CvEngineService {
         signal: ctrl.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) return null;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this.rustOfflineUntil = 0;
       const out = (await res.json()) as Omit<RustResolutionResult, 'engine'>;
       if (params.reportId) {
         await this.repos.evaluations.append({
@@ -473,7 +550,44 @@ export class CvEngineService {
       }
       return { ...out, engine: 'rust' };
     } catch {
-      return null;
+      this.rustOfflineUntil = Date.now() + 60_000;
+      try {
+        const localRes = await runSharpBeforeAfterVerify({
+          beforeBase64: params.beforeBase64,
+          afterBase64: params.afterBase64,
+          category: params.category,
+          beforeLat: params.beforeLat,
+          beforeLng: params.beforeLng,
+          afterLat: params.afterLat,
+          afterLng: params.afterLng,
+          sceneMatchThreshold: cfg.sceneMatchThreshold,
+          resolutionThreshold: cfg.resolutionThreshold,
+        });
+        if (params.reportId) {
+          await this.repos.evaluations
+            .append({
+              id: newId('ev'),
+              reportId: params.reportId,
+              kind: 'resolution',
+              authenticityScore: null,
+              sceneMatchScore: localRes.scene_match_score,
+              resolutionScore: localRes.resolution_score,
+              isAuthentic: null,
+              isDuplicate: null,
+              resolutionVerified: localRes.verified,
+              inlierCount: localRes.inlier_keypoints,
+              flags: [localRes.status],
+              engineMode: 'sharp_local',
+              latencyMs: localRes.latency_ms,
+              summary: localRes.summary,
+              createdAt: new Date().toISOString(),
+            })
+            .catch(() => undefined);
+        }
+        return localRes;
+      } catch {
+        return null;
+      }
     }
   }
 }

@@ -93,7 +93,7 @@ export default function AdminPage() {
             <Link
               to="/rescue"
               className="ioc-btn !border-rose-500/40 !text-rose-300"
-              title="Mở Cổng Điều phối Đội Cứu Hộ (/rescue)"
+              title="Mở Cổng Điều phối Đội Cứu Hộ"
             >
               <Siren className="h-3.5 w-3.5" aria-hidden />
               <span className="hidden lg:inline">Cứu Hộ SOS</span>
@@ -103,7 +103,7 @@ export default function AdminPage() {
             type="button"
             className="ioc-btn ioc-btn-cyan"
             onClick={() => setDiagOpen(true)}
-            title="Kiểm tra kết nối MongoDB Atlas, AI Brain & Self-Test"
+            title="Kiểm tra trạng thái kết nối và dịch vụ hệ thống"
           >
             <Activity className="h-3.5 w-3.5" aria-hidden />
             <span className="hidden sm:inline">Chẩn đoán</span>

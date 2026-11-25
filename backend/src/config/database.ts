@@ -243,8 +243,8 @@ export function buildMongoConnectOptions(uri?: string): ConnectOptions {
     ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
     maxPoolSize: 20,
     minPoolSize: 5,
-    serverSelectionTimeoutMS: explicitServerSel ?? 8_000,
-    connectTimeoutMS: 8_000,
+    serverSelectionTimeoutMS: explicitServerSel ?? 10_000,
+    connectTimeoutMS: 10_000,
     socketTimeoutMS: 45_000,
     maxIdleTimeMS: 60_000,
     // Ép IPv4 để tránh lỗi DNS/TLS handshake chậm trên container Linux (Render / Docker)
@@ -263,8 +263,16 @@ let isBootConnecting = false;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let reconnectAttempts = 0;
 let activeUri = '';
-let maxAttempts = 10;
+let maxAttempts = 1_000;
 let cachedReplicaSetSupport: boolean | null = null;
+const reconnectCallbacks = new Set<() => void>();
+
+export function onMongoReadyOrReconnected(cb: () => void): () => void {
+  reconnectCallbacks.add(cb);
+  return () => {
+    reconnectCallbacks.delete(cb);
+  };
+}
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -323,6 +331,13 @@ function attachConnectionListeners(): void {
     cachedReplicaSetSupport = null;
     clearReconnectTimer();
     console.log(`[mongodb] connected -> database="${mongoose.connection.name || 'default'}"`);
+    for (const cb of reconnectCallbacks) {
+      try {
+        cb();
+      } catch (e) {
+        console.error('[mongodb] lỗi callback onMongoReadyOrReconnected:', e);
+      }
+    }
   });
 
   mongoose.connection.on('reconnected', () => {
@@ -330,6 +345,13 @@ function attachConnectionListeners(): void {
     cachedReplicaSetSupport = null;
     clearReconnectTimer();
     console.log('[mongodb] reconnected -> phiên kết nối MongoDB Atlas đã khôi phục.');
+    for (const cb of reconnectCallbacks) {
+      try {
+        cb();
+      } catch (e) {
+        console.error('[mongodb] lỗi callback onMongoReadyOrReconnected:', e);
+      }
+    }
   });
 
   mongoose.connection.on('disconnected', () => {
@@ -450,7 +472,7 @@ export async function connectDatabase(options: ConnectDbOptions = {}): Promise<t
   const baseDelayMs = Math.max(50, options.retryBaseDelayMs ?? (isTestEnv ? 120 : 1_000));
 
   activeUri = uri;
-  maxAttempts = options.maxReconnectAttempts ?? 10;
+  maxAttempts = options.maxReconnectAttempts ?? 1_000;
   manualDisconnect = false;
   cachedReplicaSetSupport = null;
 

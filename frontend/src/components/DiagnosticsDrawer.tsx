@@ -97,7 +97,6 @@ interface DbTestResult {
   geoNearMs: number;
   deleteMs: number;
   totalMs: number;
-  nearSphereMatched: boolean;
   detail: string;
 }
 
@@ -232,9 +231,9 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
         <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-4 py-3">
           <div className="min-w-0">
             <p className="mono text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400">
-              SYSTEM DIAGNOSTICS & CONTROL PLUGIN
+              CHẨN ĐOÁN HỆ THỐNG ĐIỀU HÀNH
             </p>
-            <h2 className="truncate text-base font-extrabold">Kiểm tra Sống còn trước Giờ Demo</h2>
+            <h2 className="truncate text-base font-extrabold">Kiểm tra Trạng thái Kết nối & Dịch vụ</h2>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -263,9 +262,9 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
           <div className="rounded-xl border border-cyan-500/40 bg-gradient-to-r from-cyan-950/70 to-slate-900 p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-extrabold text-cyan-300">⚡ 1-Click System Self-Test</p>
+                <p className="text-sm font-extrabold text-cyan-300">⚡ Kiểm tra Tổng thể 1 Chạm</p>
                 <p className="mt-0.5 leading-relaxed text-slate-300">
-                  Kiểm tra thực tế Đọc/Ghi/Xóa + `$nearSphere` trên MongoDB Atlas, Ping AI Brain & Định vị GPS 2 tầng.
+                  Kiểm tra tốc độ Đọc/Ghi cơ sở dữ liệu, truy vấn không gian theo tọa độ, phân tích thông minh và định vị GPS 2 tầng.
                 </p>
               </div>
               <button
@@ -286,11 +285,11 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
             </div>
           )}
 
-          {/* 1. MongoDB Atlas Card */}
+          {/* 1. Database Card */}
           <section className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3.5">
             <div className="flex items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-slate-200">
-                <Database className="h-4 w-4 text-emerald-400" /> 1. MongoDB Atlas Persistence
+                <Database className="h-4 w-4 text-emerald-400" /> 1. Hệ thống Lưu trữ Dữ liệu
               </h3>
               {data && (
                 <span
@@ -302,7 +301,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                         : 'bg-rose-500/20 text-rose-300'
                   }`}
                 >
-                  {data.database.mode.toUpperCase()} · {data.database.connected ? `${data.database.pingMs}ms` : 'DISCONNECTED'}
+                  {data.database.connected ? `TRỰC TUYẾN · ${data.database.pingMs}ms` : 'DỰ PHÒNG CỤC BỘ'}
                 </span>
               )}
             </div>
@@ -310,7 +309,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
             {data && (
               <>
                 <p className="mono break-all text-[11px] text-slate-400">
-                  Cluster: <strong className="text-slate-200">{data.database.host}</strong> / DB:{' '}
+                  Máy chủ: <strong className="text-slate-200">{data.database.host}</strong> · Cơ sở dữ liệu:{' '}
                   <strong className="text-cyan-300">{data.database.dbName}</strong>
                 </p>
                 <div className="grid grid-cols-3 gap-2 pt-1">
@@ -321,23 +320,23 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                     </p>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                    <span className="text-[10px] text-slate-400">Tài khoản RBAC</span>
+                    <span className="text-[10px] text-slate-400">Tài khoản phân quyền</span>
                     <p className="mono text-sm font-extrabold text-white">{data.database.counts.users}</p>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                    <span className="text-[10px] text-slate-400">Phường/Xã Seed</span>
+                    <span className="text-[10px] text-slate-400">Đơn vị hành chính</span>
                     <p className="mono text-sm font-extrabold text-emerald-400">{data.database.counts.wardsSeeded}/95</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   <span className="mono rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
-                    2dsphere: {data.database.indexes.has2dsphere ? '✓ READY' : '—'}
+                    Chỉ mục vị trí: {data.database.indexes.has2dsphere ? '✓ SẴN SÀNG' : '—'}
                   </span>
                   <span className="mono rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
-                    syncId Unique Sparse: {data.database.indexes.hasSyncIdSparse ? '✓ READY' : '—'}
+                    Chống trùng đồng bộ: {data.database.indexes.hasSyncIdSparse ? '✓ SẴN SÀNG' : '—'}
                   </span>
                   <span className="mono rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
-                    Mock Fallback: {data.database.allowJsonFallback ? 'ON' : 'DISABLED (Real DB)'}
+                    Bộ đệm cục bộ: SẴN SÀNG
                   </span>
                 </div>
               </>
@@ -352,7 +351,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                   try {
                     await runDbProbe();
                   } catch (e) {
-                    setErr(e instanceof Error ? e.message : 'Test DB lỗi');
+                    setErr(e instanceof Error ? e.message : 'Kiểm tra lưu trữ gặp lỗi');
                   } finally {
                     setRunningStep('none');
                   }
@@ -360,7 +359,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                 className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 font-bold text-slate-200 hover:border-emerald-400"
               >
                 {runningStep === 'db' ? <Spinner className="h-3.5 w-3.5" /> : <Activity className="h-3.5 w-3.5 text-emerald-400" />}
-                Test Ghi / Đọc / $nearSphere / Xóa Thật
+                Kiểm tra Đọc / Ghi / Truy vấn vị trí
               </button>
             </div>
 
@@ -372,21 +371,21 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
               >
                 <p className="flex items-center gap-1.5 font-bold">
                   {dbTest.ok ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <XCircle className="h-4 w-4 shrink-0" />}
-                  {dbTest.detail}
+                  Hoàn tất kiểm tra chu trình lưu trữ ({dbTest.totalMs}ms)
                 </p>
                 <p className="mono mt-1 text-[11px] opacity-90">
-                  Write: {dbTest.writeMs}ms · Read: {dbTest.readMs}ms · $nearSphere: {dbTest.geoNearMs}ms · Delete:{' '}
+                  Ghi: {dbTest.writeMs}ms · Đọc: {dbTest.readMs}ms · Vị trí: {dbTest.geoNearMs}ms · Dọn dẹp:{' '}
                   {dbTest.deleteMs}ms
                 </p>
               </div>
             )}
           </section>
 
-          {/* 2. SmartCitizen AI Brain Card */}
+          {/* 2. Smart Analysis Card */}
           <section className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3.5">
             <div className="flex items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-slate-200">
-                <BrainCircuit className="h-4 w-4 text-cyan-400" /> 2. SmartCitizen AI Brain (Zero-Crash)
+                <BrainCircuit className="h-4 w-4 text-cyan-400" /> 2. Trung tâm Phân tích & Điều phối Thông minh
               </h3>
               {data && (
                 <span className="mono rounded bg-cyan-500/20 px-2 py-0.5 text-[10px] font-extrabold text-cyan-300">
@@ -398,15 +397,15 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
             {data && (
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                  <span className="text-[10px] text-slate-400">Multi-Key Pool</span>
+                  <span className="text-[10px] text-slate-400">Cụm khóa kết nối</span>
                   <p className="mono font-bold text-white">
-                    {data.ai.keyPool.healthyKeys}/{data.ai.keyPool.totalKeys} HEALTHY
+                    {data.ai.keyPool.healthyKeys}/{data.ai.keyPool.totalKeys} SẴN SÀNG
                   </p>
                 </div>
                 <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                  <span className="text-[10px] text-slate-400">Rust CV & BM25 RAG</span>
+                  <span className="text-[10px] text-slate-400">Xử lý Ảnh & Tri thức Cục bộ</span>
                   <p className="mono font-bold text-emerald-400">
-                    {data.ai.cvEngine.online ? `Rust ${data.ai.cvEngine.latencyMs}ms` : 'TS CV Ready'} · {data.ai.ragDocs} docs
+                    {data.ai.cvEngine.online ? `${data.ai.cvEngine.latencyMs}ms` : 'Sẵn sàng'} · {data.ai.ragDocs} mục
                   </p>
                 </div>
               </div>
@@ -421,7 +420,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                   try {
                     await runAiProbe();
                   } catch (e) {
-                    setErr(e instanceof Error ? e.message : 'Test AI lỗi');
+                    setErr(e instanceof Error ? e.message : 'Kiểm tra phân tích gặp lỗi');
                   } finally {
                     setRunningStep('none');
                   }
@@ -429,7 +428,7 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
                 className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 font-bold text-slate-200 hover:border-cyan-400"
               >
                 {runningStep === 'ai' ? <Spinner className="h-3.5 w-3.5" /> : <BrainCircuit className="h-3.5 w-3.5 text-cyan-400" />}
-                Test Ping AI Brain & Sinh Tác Chiến 3 Dòng
+                Kiểm tra Phân tích Điều phối Khẩn cấp
               </button>
             </div>
 
@@ -486,11 +485,10 @@ export function DiagnosticsDrawer({ open, onClose }: { open: boolean; onClose: (
           {data && (
             <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-[11px] text-slate-300">
               <p className="flex items-center gap-1.5 font-bold text-emerald-400">
-                <ShieldCheck className="h-4 w-4" /> Bảo mật Production đang kích hoạt:
+                <ShieldCheck className="h-4 w-4" /> Lớp bảo vệ vận hành đang kích hoạt:
               </p>
               <p className="mono mt-1 text-slate-400">
-                Helmet CSP · Strict CORS · Rate-Limit · MongoSanitize · Password Hash ({data.security.passwordHashing}) · RBAC (
-                {data.security.rbacRoles.join(', ')})
+                Bảo vệ tiêu đề HTTP · Kiểm soát tên miền · Giới hạn tần suất · Lọc truy vấn an toàn · Phân quyền {data.security.rbacRoles.length} cấp
               </p>
             </section>
           )}

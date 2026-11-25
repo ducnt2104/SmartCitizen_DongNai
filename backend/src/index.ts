@@ -5,31 +5,33 @@ import { createNonBlockingServerRepositories } from './repositories';
 import { createServices } from './services/container';
 
 async function main(): Promise<void> {
-  // 1. Khởi tạo Non-Blocking Repository Proxy để mở cổng HTTP ngay lập tức (tránh crash-loop & port-scan timeout trên Render)
+  // 1. Khởi tạo Resilient Dual-Layer Repositories (SQLite WAL cục bộ + tự động đồng bộ 2 chiều MongoDB Atlas)
   const bootCtrl = createNonBlockingServerRepositories();
-  const { boot } = bootCtrl;
+  const { boot, localRepos } = bootCtrl;
   const services = createServices(boot.repos);
 
-  // 2. Bind cổng HTTP ngay lập tức để phục vụ SPA tĩnh và Liveness Probe `/healthz`
+  // 2. Seed sẵn SUPER-ADMIN, TP-01, CB-TB-01, CUUHO-01 và dữ liệu nền vào bộ đệm cục bộ TRƯỚC khi mở cổng HTTP (<5ms)
+  //    Đảm bảo đăng nhập, gửi phản ánh & Chatbot hoạt động 100% ngay lập tức dù MongoDB Atlas đang cold-start hay mất kết nối!
+  const localSeeded = await seedIfEmpty(localRepos, services.audit);
+
+  // 3. Bind cổng HTTP ngay lập tức để phục vụ SPA tĩnh và Liveness Probe `/healthz`
   const app = createApp(services, boot);
   const server = app.listen(env.port, () => {
     const otp = services.otpDelivery.status;
-    console.log(`[server] SmartCitizen_DongNai (Team Victer) đã mở cổng lắng nghe ${env.port} (non-blocking startup)`);
+    const sms = services.phoneOtp.smsDispatcher.getStatus();
+    console.log(
+      `[server] SmartCitizen_DongNai (Team Victer) đã mở cổng lắng nghe ${env.port} (localPersistence=${localRepos.engine}, localSeed=${localSeeded.users} users/${localSeeded.reports} reports)`,
+    );
     console.log(`[server] Trạng thái DB khởi điểm: mode=${boot.repos.mode}, state=${boot.dbState ?? 'connecting'}`);
     console.log(
-      `[server] OTP: Email=${otp.activeEmailProvider ?? 'CHƯA CẤU HÌNH'} | SMS=${otp.activeSmsProvider ?? 'CHƯA CẤU HÌNH'}`,
+      `[server] OTP: Email=${otp.activeEmailProvider ?? 'CHƯA CẤU HÌNH'} | SMS=${sms.realSmsConfigured ? sms.activeSmsProvider : sms.allowDemoOtp ? 'demo(ALLOW_DEMO_OTP)' : 'CHƯA CẤU HÌNH'}`,
     );
-    if (!otp.emailConfigured && !otp.smsConfigured) {
-      console.warn(
-        '[server] CẢNH BÁO: Chưa cấu hình nhà cung cấp gửi OTP thật (RESEND_API_KEY, BREVO_API_KEY hoặc OTP_WEBHOOK_URL). Endpoint gửi OTP sẽ trả lỗi 503 hướng dẫn cấu hình.',
-      );
-    }
     if (env.jwtSecretEphemeral) {
       console.warn('[server] JWT_SECRET chưa đặt — dùng khóa tạm thời cho phiên dev.');
     }
   });
 
-  // 3. Khởi chạy song song KeyPool, Rust CV Engine (nếu có binary) và Kết nối + Seed MongoDB Atlas ở hậu cảnh
+  // 4. Khởi chạy song song KeyPool, CV Engine và Kết nối + Đồng bộ 2 chiều MongoDB Atlas ở hậu cảnh
   void Promise.allSettled([
     services.keyPool.init().then(() => {
       const pool = services.keyPool.getSummarySync();
@@ -37,16 +39,15 @@ async function main(): Promise<void> {
         `[server] AI: ${
           services.gemini.status.configured
             ? `Multi-Key Pool (${pool.healthyKeys}/${pool.totalKeys} key HEALTHY), model ${env.geminiModel}`
-            : 'Chế độ Local-First AI (Rust CV / Ollama / Local BM25 RAG)'
+            : 'Chế độ Local-First AI (Sharp/Rust CV + Local Knowledge/Intent Engine)'
         }`,
       );
     }),
     services.cvEngine.ensureEngineRunning(),
-    bootCtrl.startBackgroundConnect(async (readyRepos) => {
-      const seeded = await seedIfEmpty(readyRepos, services.audit);
+    bootCtrl.startBackgroundConnect(async (readyMongoRepos) => {
+      const seeded = await seedIfEmpty(readyMongoRepos, services.audit);
       console.log(
-        `[server] DB sẵn sàng: mode=${readyRepos.mode}${boot.fallbackReason ? ` (${boot.fallbackReason})` : ''}; ` +
-          `seed mới: ${seeded.reports} hồ sơ, ${seeded.users} tài khoản`,
+        `[server] DB Cloud sẵn sàng: mode=${readyMongoRepos.mode}; seed bổ sung: ${seeded.reports} hồ sơ, ${seeded.users} tài khoản`,
       );
     }),
   ]);

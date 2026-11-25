@@ -101,20 +101,59 @@ export interface TacticalBriefing {
   latencyMs?: number;
 }
 
-export type RescueMissionStatus = 'unassigned' | 'accepted' | 'en_route' | 'on_site' | 'completed';
+export type RescueMissionStatus =
+  | 'unassigned'
+  | 'accepted'
+  | 'en_route'
+  | 'arrived'
+  | 'in_progress'
+  | 'on_site'
+  | 'completed';
+
+export type RescueStageCode =
+  | 'PENDING'
+  | 'VERIFIED'
+  | 'DISPATCHED'
+  | 'EN_ROUTE'
+  | 'ARRIVED'
+  | 'IN_PROGRESS'
+  | 'RESOLVED';
+
+export interface RescueLiveLocation {
+  lat: number;
+  lng: number;
+  heading: number | null;
+  speedKmh: number | null;
+  updatedAt: string;
+}
+
+export interface RescueReleaseEntry {
+  teamId: string;
+  teamName: string;
+  teamCode: string | null;
+  reason: string;
+  at: string;
+}
 
 export interface RescueMissionState {
   status: RescueMissionStatus;
+  stageCode?: RescueStageCode | 'UNASSIGNED';
   assignedTeamId: string | null;
   assignedTeamName: string | null;
   assignedTeamCode: string | null;
   acceptedAt: string | null;
   enRouteAt: string | null;
+  arrivedAt?: string | null;
+  inProgressAt?: string | null;
   onSiteAt: string | null;
   completedAt: string | null;
   lastLat?: number | null;
   lastLng?: number | null;
+  lastHeading?: number | null;
+  lastSpeedKmh?: number | null;
+  lastLocationUpdatedAt?: string | null;
   note?: string;
+  releaseHistory?: RescueReleaseEntry[];
 }
 
 export interface AiAnalysis {
@@ -226,6 +265,12 @@ export interface Report {
   department: Department | null;
   slaDueAt: string | null;
   dispatches: DispatchOrder[];
+  assignedRescueId?: string | null;
+  assignedRescueName?: string | null;
+  acceptedAt?: string | null;
+  rescueStatus?: RescueStageCode | null;
+  rescueLiveLocation?: RescueLiveLocation | null;
+  rescueReleaseHistory?: RescueReleaseEntry[];
   rescueMission?: RescueMissionState | null;
   resolvedAt: string | null;
   resolution: ResolutionVerification | null;
@@ -245,6 +290,20 @@ export type ClientReport = Omit<Report, 'reporterId' | 'contributors' | 'confirm
   /** Đánh dấu bản ghi do thiết bị này gửi */
   mine?: boolean;
 };
+
+/** Bản ghi nhiệm vụ dành riêng cho Đội Cứu Hộ & Cán bộ điều phối hiện trường. */
+export type RescueMissionItem = ClientReport & {
+  distanceKm: number | null;
+  etaMinutes: number | null;
+  reporterPhone?: string | null;
+  reporterName?: string | null;
+};
+
+export interface RescueMissionsResponse {
+  activeMission: RescueMissionItem | null;
+  availableMissions: RescueMissionItem[];
+  resolvedMissions: RescueMissionItem[];
+}
 
 /** Bản tóm tắt siêu nhẹ cho Map Markers (không kéo mảng ảnh base64 lớn). */
 export interface ReportSummary {

@@ -31,8 +31,17 @@ export interface SmsOtpSendResult {
   /** Cờ báo cho Frontend kích hoạt luồng `signInWithPhoneNumber` của Firebase Auth */
   clientSideFirebase?: boolean;
   messageId?: string;
-  /** CHỈ xuất hiện khi đang ở chế độ `demo` VÀ `ALLOW_DEMO_OTP=true` */
+  /** Kênh dự phòng thực tế được kích hoạt khi chưa cấu hình cổng SMS nhà mạng */
+  fallbackChannel?: 'telegram' | 'email';
+  /** CHỈ xuất hiện khi đang ở chế độ thử nghiệm VÀ `ALLOW_DEMO_OTP=true` */
   devOtpPreview?: string;
+}
+
+export interface RuntimeFirebaseClientConfig {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  appId?: string;
 }
 
 export interface SmsOtpProvider {
@@ -51,6 +60,10 @@ function readEnv(envSource: NodeJS.ProcessEnv, key: string): string {
 
 function isTruthyEnv(envSource: NodeJS.ProcessEnv, key: string): boolean {
   return ['1', 'true', 'yes'].includes(readEnv(envSource, key).toLowerCase());
+}
+
+export function hasTelegramOtpFallback(envSource: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(readEnv(envSource, 'TELEGRAM_BOT_TOKEN') && readEnv(envSource, 'TELEGRAM_CHAT_ID'));
 }
 
 function buildSmsText(otp: string, ttlMinutes: number): string {
@@ -93,6 +106,18 @@ async function fetchWithTimeout(
 export class FirebaseSmsOtpProvider implements SmsOtpProvider {
   readonly name = 'firebase' as const;
 
+  getClientConfig(envSource: NodeJS.ProcessEnv = process.env): RuntimeFirebaseClientConfig | null {
+    const apiKey = readEnv(envSource, 'FIREBASE_API_KEY') || readEnv(envSource, 'VITE_FIREBASE_API_KEY');
+    const projectId = readEnv(envSource, 'FIREBASE_PROJECT_ID') || readEnv(envSource, 'VITE_FIREBASE_PROJECT_ID');
+    if (!apiKey || !projectId) return null;
+    const authDomain =
+      readEnv(envSource, 'FIREBASE_AUTH_DOMAIN') ||
+      readEnv(envSource, 'VITE_FIREBASE_AUTH_DOMAIN') ||
+      `${projectId}.firebaseapp.com`;
+    const appId = readEnv(envSource, 'FIREBASE_APP_ID') || readEnv(envSource, 'VITE_FIREBASE_APP_ID') || undefined;
+    return { apiKey, authDomain, projectId, appId };
+  }
+
   isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
     return Boolean(
       readEnv(envSource, 'FIREBASE_PROJECT_ID') ||
@@ -105,7 +130,7 @@ export class FirebaseSmsOtpProvider implements SmsOtpProvider {
     if (!this.isConfigured(envSource)) {
       throw new HttpError(
         503,
-        'Chưa cấu hình FIREBASE_PROJECT_ID (hoặc VITE_FIREBASE_PROJECT_ID / FIREBASE_SERVICE_ACCOUNT_JSON) cho chế độ SMS_PROVIDER=firebase.',
+        'Kênh xác thực Firebase Phone Auth chưa được cấu hình đầy đủ.',
         'sms_provider_not_configured',
       );
     }
@@ -534,23 +559,65 @@ export class MultiSmsOtpDispatcher {
     activeSmsProvider: ConcreteSmsProviderName;
     realSmsConfigured: boolean;
     firebaseClientReady: boolean;
+    firebaseClientConfig: RuntimeFirebaseClientConfig | null;
+    telegramFallbackReady: boolean;
     allowDemoOtp: boolean;
   } {
     const mode = this.getConfiguredMode(envSource);
     const active = this.resolveActiveProvider(envSource);
+    const fbProvider = this.providers.firebase as FirebaseSmsOtpProvider;
     const realSmsConfigured =
       active.name !== 'demo' ? active.isConfigured(envSource) : false;
     return {
       smsProviderMode: mode,
       activeSmsProvider: active.name,
       realSmsConfigured,
-      firebaseClientReady: this.providers.firebase.isConfigured(envSource),
+      firebaseClientReady: fbProvider.isConfigured(envSource),
+      firebaseClientConfig: fbProvider.getClientConfig(envSource),
+      telegramFallbackReady: hasTelegramOtpFallback(envSource),
       allowDemoOtp: isTruthyEnv(envSource, 'ALLOW_DEMO_OTP'),
     };
   }
 
   async sendOtp(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
+    if (this.overrideProvider) {
+      return this.overrideProvider.send(input, envSource);
+    }
+
+    const mode = this.getConfiguredMode(envSource);
     const active = this.resolveActiveProvider(envSource);
-    return active.send(input, envSource);
+    const allowDemo = isTruthyEnv(envSource, 'ALLOW_DEMO_OTP');
+    const hasTelegram = hasTelegramOtpFallback(envSource);
+
+    if (active.name === 'demo' && mode === 'auto') {
+      if (!allowDemo && !hasTelegram) {
+        throw new HttpError(
+          503,
+          'Hệ thống chưa kết nối cổng gửi tin nhắn SMS nhà mạng. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.',
+          'sms_provider_not_configured',
+        );
+      }
+      const demoRes = await this.providers.demo.send(input, envSource);
+      return {
+        ...demoRes,
+        ...(hasTelegram ? { fallbackChannel: 'telegram' as const } : {}),
+      };
+    }
+
+    try {
+      return await active.send(input, envSource);
+    } catch (err) {
+      if (mode === 'auto' && (allowDemo || hasTelegram)) {
+        console.warn(
+          `[SMS_DISPATCH] Kênh ${active.name} gặp lỗi (${err instanceof Error ? err.message : err}), tự động chuyển sang kênh dự phòng.`,
+        );
+        const demoRes = await this.providers.demo.send(input, envSource);
+        return {
+          ...demoRes,
+          ...(hasTelegram ? { fallbackChannel: 'telegram' as const } : {}),
+        };
+      }
+      throw err;
+    }
   }
 }

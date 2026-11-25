@@ -44,9 +44,29 @@ services:
         sync: false
       - key: INITIAL_STAFF_PASSWORD
         sync: false
-      # Dịch vụ gửi OTP thật qua HTTPS Port 443 (Render Free Tier chặn cổng SMTP 25/465/587)
+      # Dịch vụ gửi OTP Email & SMS qua HTTPS Port 443
       - key: OTP_PROVIDER
         value: auto
+      - key: SMS_PROVIDER
+        value: auto
+      - key: ALLOW_DEMO_OTP
+        sync: false
+      - key: TEXTBEE_DEVICE_ID
+        sync: false
+      - key: TEXTBEE_API_KEY
+        sync: false
+      - key: SMS_GATEWAY_URL
+        sync: false
+      - key: SMS_GATEWAY_API_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
       - key: OTP_WEBHOOK_URL
         sync: false
       - key: OTP_WEBHOOK_SECRET

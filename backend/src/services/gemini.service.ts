@@ -23,6 +23,7 @@ import type { CvEngineService } from './cvEngine.service';
 import {
   KeyPoolExhaustedError,
   KeyPoolManager,
+  sanitizeUpstreamErrorReason,
   type ApiKeyProvider,
   type KeyPoolSummary,
 } from './keyPool';
@@ -301,16 +302,30 @@ export function safeParseStructuredJson<T>(raw: string, schema: z.ZodType<T>): T
   return schema.parse(parsed);
 }
 
-/** Chuỗi model Gemini hợp lệ để tự động xoay model khi cấu hình sai tên model hoặc model bị ngừng hỗ trợ. */
+let cachedLiveGeminiModel: string | null = null;
+
+/** Chuỗi model Gemini hợp lệ để tự động xoay model tuần tự khi cấu hình sai tên model hoặc model trả 404. */
 export function resolveGeminiModelChain(configuredModel?: string): string[] {
   const raw = (configuredModel ?? env.geminiModel ?? 'gemini-2.5-flash').trim();
   const normalized = !raw || /^gemini-3\.5/i.test(raw) ? 'gemini-2.5-flash' : raw;
-  return Array.from(new Set([normalized, 'gemini-2.5-flash', 'gemini-2.0-flash']));
+  const chain = [
+    ...(cachedLiveGeminiModel && configuredModel === undefined ? [cachedLiveGeminiModel] : []),
+    normalized,
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+  ];
+  return Array.from(new Set(chain));
 }
 
 function isModelNotFoundError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /\b404\b|not[_ -]?found|is not found for api version|model.*not supported/i.test(msg);
+  const st = err && typeof err === 'object' && 'status' in err ? Number((err as { status?: unknown }).status) : 0;
+  return st === 404 || /\b404\b|not[_ -]?found|is not found for api version|model.*not supported/i.test(msg);
+}
+
+export function detectGeminiKeyEndpointKind(apiKey: string): 'vertex_express' | 'ai_studio' {
+  return /^AQ\./.test(apiKey.trim()) ? 'vertex_express' : 'ai_studio';
 }
 
 const EMERGENCY_WORDS =
@@ -365,6 +380,7 @@ export class GeminiService {
   private readonly chatFaqCache = new LruCache<string, string>(300, 10 * 60 * 1000);
   private cvEngine: CvEngineService | null = null;
   private rag: LocalRagService | null = null;
+  private ollamaOfflineUntil = 0;
   lastError: string | null = null;
   lastOkAt: string | null = null;
 
@@ -450,31 +466,115 @@ export class GeminiService {
     return client;
   }
 
-  /** Gọi Gemini với tự động chuyển đổi model (`gemini-2.5-flash` -> `gemini-2.0-flash`) nếu gặp lỗi 404 model. */
+  /**
+   * Gọi trực tiếp REST endpoint tương ứng với từng định dạng API key:
+   * - `AIza...`: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+   * - `AQ....`:  `https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent`
+   */
+  private async callGeminiRestByKeyKind(
+    apiKey: string,
+    modelId: string,
+    params: Parameters<GoogleGenAI['models']['generateContent']>[0],
+    timeoutMs: number,
+    label: string,
+  ): Promise<string> {
+    const cleanKey = apiKey.trim();
+    const isVertex = detectGeminiKeyEndpointKind(cleanKey) === 'vertex_express';
+    const url = isVertex
+      ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`
+      : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(isVertex ? {} : { 'x-goog-api-key': cleanKey }),
+    };
+
+    const cfg = (params.config ?? {}) as Record<string, unknown>;
+    const rawContents = params.contents;
+    const contents =
+      typeof rawContents === 'string'
+        ? [{ role: 'user', parts: [{ text: rawContents }] }]
+        : rawContents;
+
+    const generationConfig: Record<string, unknown> = {};
+    if (cfg.temperature !== undefined) generationConfig.temperature = cfg.temperature;
+    if (cfg.maxOutputTokens !== undefined) generationConfig.maxOutputTokens = cfg.maxOutputTokens;
+    if (cfg.responseMimeType !== undefined) generationConfig.responseMimeType = cfg.responseMimeType;
+    if (cfg.responseSchema !== undefined) generationConfig.responseSchema = cfg.responseSchema;
+
+    const payload: Record<string, unknown> = {
+      contents,
+      ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
+    };
+    if (typeof cfg.systemInstruction === 'string' && cfg.systemInstruction) {
+      payload.systemInstruction = isVertex
+        ? { role: 'system', parts: [{ text: cfg.systemInstruction }] }
+        : { parts: [{ text: cfg.systemInstruction }] };
+    }
+
+    const endpointLabel = isVertex ? 'VertexAI' : 'AIStudio';
+    const res = await withTimeout(
+      fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      }),
+      timeoutMs,
+      `${label} ${endpointLabel}(${modelId})`,
+    );
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      const cleanSummary = sanitizeUpstreamErrorReason(errBody, res.status);
+      throw Object.assign(
+        new Error(`${endpointLabel}(${modelId}) ${cleanSummary}`),
+        { status: res.status },
+      );
+    }
+
+    const json = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = (json.candidates?.[0]?.content?.parts ?? [])
+      .map((p) => p.text ?? '')
+      .join('')
+      .trim();
+    if (!text) {
+      throw new Error(`${endpointLabel}(${modelId}) trả về rỗng`);
+    }
+    return text;
+  }
+
+  /**
+   * Gọi Gemini hỗ trợ song song:
+   * - Key `AIza...`: Google AI Studio (`https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`)
+   * - Key `AQ....`: Vertex AI (`https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent`)
+   * Kèm tự động fallback tuần tự `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` và xoay sang key kế tiếp khi gặp 403/429.
+   */
   private async generateGeminiWithModelChain(
     apiKey: string,
     buildParams: (modelId: string) => Parameters<GoogleGenAI['models']['generateContent']>[0],
     timeoutMs: number,
     label: string,
   ): Promise<{ text: string; modelUsed: string }> {
-    const ai = await this.getGeminiClient(apiKey);
-    const models = resolveGeminiModelChain(env.geminiModel);
+    const models = resolveGeminiModelChain();
     let lastErr: unknown = null;
+
     for (const modelId of models) {
       try {
-        const res = await withTimeout(ai.models.generateContent(buildParams(modelId)), timeoutMs, `${label} (${modelId})`);
-        if (!res.text) throw new Error(`Gemini (${modelId}) trả về rỗng`);
-        return { text: res.text, modelUsed: modelId };
+        const text = await this.callGeminiRestByKeyKind(apiKey, modelId, buildParams(modelId), timeoutMs, label);
+        cachedLiveGeminiModel = modelId;
+        return { text, modelUsed: modelId };
       } catch (err) {
         lastErr = err;
         if (isModelNotFoundError(err)) {
-          console.warn(`[ai] Model "${modelId}" không khả dụng (404), tự động chuyển sang model dự phòng kế tiếp...`);
+          console.warn(`[ai] Model "${modelId}" trả 404, tự động chuyển sang model dự phòng kế tiếp...`);
           continue;
         }
         throw err;
       }
     }
-    throw lastErr ?? new Error('Không có model Gemini khả dụng');
+    throw lastErr ?? Object.assign(new Error('Không có model Gemini khả dụng'), { status: 404 });
   }
 
   async checkLocalLlmHealth(): Promise<LocalLlmHealth> {
@@ -540,13 +640,15 @@ export class GeminiService {
   }
 
   private recordPoolExhausted(err: unknown): void {
-    this.lastError = err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300);
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    this.lastError = sanitizeUpstreamErrorReason(rawMsg, null);
     if (!(err instanceof KeyPoolExhaustedError && err.attempts === 0)) {
-      console.warn('[ai] Xoay vòng Cloud KeyPool không thành công, chuyển mượt sang Local/Deterministic AI Brain:', this.lastError);
+      console.warn('[ai] Xoay vòng Cloud KeyPool không thành công, chuyển mượt sang Local AI Brain:', this.lastError);
     }
   }
 
   private async callOllamaJson<T>(systemPrompt: string, userPrompt: string, schema: z.ZodType<T>, timeoutMs = 4500): Promise<T | null> {
+    if (Date.now() < this.ollamaOfflineUntil) return null;
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -566,11 +668,16 @@ export class GeminiService {
         signal: ctrl.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        this.ollamaOfflineUntil = Date.now() + 60_000;
+        return null;
+      }
+      this.ollamaOfflineUntil = 0;
       const data = (await res.json()) as { message?: { content?: string } };
       if (!data.message?.content) return null;
       return safeParseStructuredJson(data.message.content, schema);
     } catch {
+      this.ollamaOfflineUntil = Date.now() + 60_000;
       return null;
     }
   }
@@ -1351,13 +1458,22 @@ export class GeminiService {
     databaseContext: string,
     localAnswer: () => string,
     wardCode?: string,
+    instantAnswer?: string | null,
   ): AsyncGenerator<{ delta: string; mode: AiMode }> {
     const last = history[history.length - 1];
     if (last && detectPromptInjection(last.text)) {
       yield {
-        delta: 'Mình không thể làm theo yêu cầu này. Mình chỉ hỗ trợ gửi phản ánh, tra cứu hồ sơ và hướng dẫn dùng ứng dụng SmartCitizen_DongNai. Bạn cần giúp gì về sự cố tại khu vực của mình?',
+        delta: 'Mình không thể làm theo yêu cầu này. Mình chỉ hỗ trợ gửi phản ánh, tra cứu hồ sơ và hướng dẫn dùng ứng dụng SmartCitizen Đồng Nai. Bạn cần giúp gì về sự cố tại khu vực của mình?',
         mode: 'fallback',
       };
+      return;
+    }
+
+    // 0. Trả lời tức thì (< 5–15ms) từ Local Knowledge & Intent Engine cho các câu hỏi hướng dẫn phổ biến, 95 Phường/Xã, SĐT khẩn cấp, tra mã đơn
+    if (instantAnswer) {
+      for (let i = 0; i < instantAnswer.length; i += 64) {
+        yield { delta: instantAnswer.slice(i, i + 64), mode: 'ollama' };
+      }
       return;
     }
 
@@ -1371,31 +1487,35 @@ export class GeminiService {
     if (!isDynamicLookup && history.length === 1) {
       const hit = this.chatFaqCache.get(faqKey);
       if (hit) {
-        for (let i = 0; i < hit.length; i += 36) {
-          yield { delta: hit.slice(i, i + 36), mode: 'ollama' };
+        for (let i = 0; i < hit.length; i += 48) {
+          yield { delta: hit.slice(i, i + 48), mode: 'ollama' };
         }
         return;
       }
     }
 
-    // 1. Local LLM (Ollama / llama.cpp)
-    let streamedLocal = '';
-    try {
-      for await (const tok of this.streamOllamaOrLlamaCpp(history, fullSystem)) {
-        streamedLocal += tok;
-        yield { delta: tok, mode: 'ollama' };
-      }
-      if (streamedLocal.trim().length > 0) {
-        if (!isDynamicLookup && history.length === 1) {
-          this.chatFaqCache.set(faqKey, streamedLocal);
+    // 1. Local LLM (Ollama / llama.cpp) — có Circuit Breaker 60s để không chờ timeout 1.2s khi Ollama tắt
+    if (Date.now() >= this.ollamaOfflineUntil) {
+      let streamedLocal = '';
+      try {
+        for await (const tok of this.streamOllamaOrLlamaCpp(history, fullSystem)) {
+          streamedLocal += tok;
+          yield { delta: tok, mode: 'ollama' };
         }
-        return;
+        if (streamedLocal.trim().length > 0) {
+          this.ollamaOfflineUntil = 0;
+          if (!isDynamicLookup && history.length === 1) {
+            this.chatFaqCache.set(faqKey, streamedLocal);
+          }
+          return;
+        }
+      } catch {
+        this.ollamaOfflineUntil = Date.now() + 60_000;
+        if (streamedLocal.length > 0) return;
       }
-    } catch {
-      if (streamedLocal.length > 0) return;
     }
 
-    // 2. Cloud Fallback qua KeyPoolManager + Model Chain
+    // 2. Cloud Fallback qua KeyPoolManager + Model Chain (hỗ trợ cả AIza... lẫn AQ....)
     if (await this.cloudAllowed()) {
       let emittedAny = false;
       try {
@@ -1413,77 +1533,47 @@ export class GeminiService {
                 userContent: promptTranscript,
                 jsonMode: false,
                 temperature: 0.3,
-                timeoutMs: 18_000,
+                timeoutMs: 16_000,
                 label: `${meta.provider} Chat`,
               });
               return { kind: 'full' as const, text: fullAnswer };
             }
 
-            const ai = await this.getGeminiClient(apiKey);
-            const models = resolveGeminiModelChain(env.geminiModel);
-            let lastErr: unknown = null;
-            for (const modelId of models) {
-              try {
-                const stream = await withTimeout(
-                  ai.models.generateContentStream({
-                    model: modelId,
-                    contents: history
-                      .slice(-10)
-                      .map((m) => ({ role: m.role, parts: [{ text: sanitizeUserText(m.text) }] })),
-                    config: { systemInstruction: fullSystem, temperature: 0.3 },
-                  }),
-                  18_000,
-                  `Gemini Chat (${modelId})`,
-                );
-
-                const iterator = stream[Symbol.asyncIterator]();
-                while (true) {
-                  const step = await withTimeout(iterator.next(), 18_000, 'Gemini Chat First Chunk');
-                  if (step.done) throw new Error('Gemini stream không trả nội dung');
-                  const t = step.value?.text;
-                  if (t) return { kind: 'stream' as const, firstDelta: t, iterator };
-                }
-              } catch (err) {
-                lastErr = err;
-                if (isModelNotFoundError(err)) continue;
-                throw err;
-              }
-            }
-            throw lastErr ?? new Error('Không có model Gemini Chat khả dụng');
+            const { text } = await this.generateGeminiWithModelChain(
+              apiKey,
+              (modelId) => ({
+                model: modelId,
+                contents: history
+                  .slice(-10)
+                  .map((m) => ({ role: m.role, parts: [{ text: sanitizeUserText(m.text) }] })),
+                config: { systemInstruction: fullSystem, temperature: 0.3 },
+              }),
+              16_000,
+              'Gemini Chat',
+            );
+            return { kind: 'full' as const, text };
           },
           { operationName: 'Gemini Chat' },
         );
 
         if (opened.kind === 'full') {
-          for (let i = 0; i < opened.text.length; i += 32) {
+          for (let i = 0; i < opened.text.length; i += 48) {
             emittedAny = true;
-            yield { delta: opened.text.slice(i, i + 32), mode: 'gemini' };
+            yield { delta: opened.text.slice(i, i + 48), mode: 'gemini' };
           }
           this.ok();
           return;
         }
-
-        emittedAny = true;
-        yield { delta: opened.firstDelta, mode: 'gemini' };
-        while (true) {
-          const nextStep = await opened.iterator.next();
-          if (nextStep.done) break;
-          const t = nextStep.value?.text;
-          if (t) yield { delta: t, mode: 'gemini' };
-        }
-        this.ok();
-        return;
       } catch (err) {
         this.recordPoolExhausted(err);
         if (emittedAny) return;
       }
     }
 
-    // 3. Deterministic Local RAG + Real DB Answer (0% crash)
+    // 3. Deterministic Local Knowledge + Context Answer (< 2ms, 0% crash)
     const ans = localAnswer();
-    for (let i = 0; i < ans.length; i += 32) {
-      yield { delta: ans.slice(i, i + 32), mode: 'fallback' };
-      await sleep(6);
+    for (let i = 0; i < ans.length; i += 64) {
+      yield { delta: ans.slice(i, i + 64), mode: 'fallback' };
     }
   }
 }

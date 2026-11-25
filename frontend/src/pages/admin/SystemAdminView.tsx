@@ -319,14 +319,14 @@ export function SystemAdminView() {
 
   return (
     <div className="space-y-4">
-      {/* ── 1. Trạng thái Local AI, Rust CV Engine & MongoDB Thật ── */}
-      <section className="ioc-panel p-3" aria-label="Giám sát hạ tầng AI & Cơ sở dữ liệu">
+      {/* ── 1. Trạng thái Hạ tầng Xử lý & Cơ sở dữ liệu ── */}
+      <section className="ioc-panel p-3" aria-label="Giám sát hạ tầng xử lý & Cơ sở dữ liệu">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
-              <Activity className="h-4 w-4" aria-hidden /> Giám sát Local AI Engine, Rust CV & MongoDB Persistence
+              <Activity className="h-4 w-4" aria-hidden /> Giám sát Hạ tầng Xử lý Ảnh, Tri thức & Cơ sở dữ liệu
             </h2>
-            <p className="text-xs text-ioc-dim">Đo ping trực tiếp từ cơ sở dữ liệu thật, Rust CV Engine (:8001) và Local LLM + BM25 RAG</p>
+            <p className="text-xs text-ioc-dim">Đo độ trễ kết nối cơ sở dữ liệu, bộ xử lý hình ảnh hiện trường và kho tri thức điều hành</p>
           </div>
           <button type="button" className="ioc-btn" onClick={() => void loadMonitor()}>
             <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Làm mới trạng thái
@@ -334,69 +334,69 @@ export function SystemAdminView() {
         </div>
 
         <div className="grid gap-3 md:grid-cols-3">
-          {/* MongoDB Card */}
+          {/* Database Card */}
           <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <Database className="h-4 w-4 text-ioc-cyan" aria-hidden /> Lưu trữ Bền vững ({eng?.db.mode?.toUpperCase() ?? '…'})
+                <Database className="h-4 w-4 text-ioc-cyan" aria-hidden /> Hệ thống Lưu trữ ({eng?.db.mode?.toUpperCase() ?? '…'})
               </span>
               <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.db.ok ? 'bg-emerald-500/20 text-ioc-green' : 'bg-red-500/20 text-ioc-red'}`}>
-                {eng?.db.ok ? `ONLINE · ${eng.db.latencyMs}ms` : 'OFFLINE'}
+                {eng?.db.ok ? `ONLINE · ${eng.db.latencyMs}ms` : 'DỰ PHÒNG'}
               </span>
             </div>
             <p className="mono mt-2 text-xs text-ioc-text">
               Hồ sơ: <strong>{eng?.db.counts.reports ?? 0}</strong> · Tài khoản: <strong>{eng?.db.counts.users ?? 0}</strong>
             </p>
             <p className="mono mt-1 text-[11px] text-ioc-dim">
-              ORB Fingerprints: {eng?.db.counts.fingerprints ?? 0} · AI Evals: {eng?.db.counts.evaluations ?? 0} · Audit: {eng?.db.counts.auditLogs ?? 0}
+              Dấu vân tay ảnh: {eng?.db.counts.fingerprints ?? 0} · Thẩm định: {eng?.db.counts.evaluations ?? 0} · Nhật ký: {eng?.db.counts.auditLogs ?? 0}
             </p>
           </div>
 
-          {/* Rust CV Engine Card */}
+          {/* CV Engine Card */}
           <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <Cpu className="h-4 w-4 text-ioc-cyan" aria-hidden /> Rust CV & ONNX Engine
+                <Cpu className="h-4 w-4 text-ioc-cyan" aria-hidden /> Bộ Kiểm định Hình ảnh
               </span>
-              <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.cvEngine.online ? 'bg-emerald-500/20 text-ioc-green' : 'bg-amber-500/20 text-ioc-amber'}`}>
-                {eng?.cvEngine.online ? `RUST NATIVE · ${eng.cvEngine.latencyMs}ms` : 'FALLBACK'}
+              <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.cvEngine.online ? 'bg-emerald-500/20 text-ioc-green' : 'bg-cyan-500/20 text-ioc-cyan'}`}>
+                {eng?.cvEngine.online ? `TỐC ĐỘ CAO · ${eng.cvEngine.latencyMs}ms` : 'XỬ LÝ NỘI BỘ'}
               </span>
             </div>
-            <p className="mono mt-2 truncate text-xs text-ioc-text">{eng?.cvEngine.url ?? 'http://127.0.0.1:8001'}</p>
+            <p className="mono mt-2 truncate text-xs text-ioc-text">Kiểm tra EXIF, độ nét & đối chiếu Trước/Sau</p>
             <p className="mono mt-1 truncate text-[11px] text-ioc-dim">
-              RAM Index: {eng?.cvEngine.indexedFingerprints ?? 0} ảnh · {eng?.cvEngine.engine ?? '—'}
+              Bộ nhớ đối chiếu: {eng?.cvEngine.indexedFingerprints ?? 0} ảnh
             </p>
           </div>
 
-          {/* Local LLM + BM25 RAG Card */}
+          {/* Knowledge Engine Card */}
           <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <ShieldCheck className="h-4 w-4 text-ioc-cyan" aria-hidden /> Local LLM & BM25 RAG
+                <ShieldCheck className="h-4 w-4 text-ioc-cyan" aria-hidden /> Trợ lý & Kho Tri thức Đô thị
               </span>
               <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.localLlm.online ? 'bg-emerald-500/20 text-ioc-green' : 'bg-cyan-500/20 text-ioc-cyan'}`}>
-                {eng?.localLlm.online ? `${eng.localLlm.provider.toUpperCase()} · ${eng.localLlm.latencyMs}ms` : 'BM25 RAG READY'}
+                {eng?.localLlm.online ? `${eng.localLlm.provider.toUpperCase()} · ${eng.localLlm.latencyMs}ms` : 'SẴN SÀNG TỨC THÌ'}
               </span>
             </div>
-            <p className="mono mt-2 truncate text-xs text-ioc-text">Model: {eng?.localLlm.model ?? 'qwen2.5:3b'}</p>
-            <p className="mono mt-1 text-[11px] text-ioc-dim">Tri thức RAG cục bộ: {eng?.ragDocs ?? 99} tài liệu (95 ĐVHC + SOP)</p>
+            <p className="mono mt-2 truncate text-xs text-ioc-text">Mô hình: {eng?.localLlm.model ?? 'qwen2.5:3b'}</p>
+            <p className="mono mt-1 text-[11px] text-ioc-dim">Cơ sở tri thức: {eng?.ragDocs ?? 99} tài liệu (95 ĐVHC + Quy trình)</p>
           </div>
         </div>
 
-        {/* Sliders chỉnh ngưỡng AI động */}
+        {/* Sliders chỉnh ngưỡng thẩm định động */}
         {cfgDraft && (
           <div className="mt-3 rounded border border-ioc-line p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-text">
-                <Sliders className="h-3.5 w-3.5 text-ioc-cyan" aria-hidden /> Tinh chỉnh Ngưỡng Thẩm định AI Động (Không cần khởi động lại Server)
+                <Sliders className="h-3.5 w-3.5 text-ioc-cyan" aria-hidden /> Tinh chỉnh Ngưỡng Kiểm định Hình ảnh (Áp dụng tức thì)
               </h3>
               <button type="button" className="ioc-btn ioc-btn-cyan" disabled={savingCfg} onClick={() => void saveAiConfig()}>
-                {savingCfg ? <Spinner /> : <Save className="h-3.5 w-3.5" aria-hidden />} Lưu cấu hình AI
+                {savingCfg ? <Spinner /> : <Save className="h-3.5 w-3.5" aria-hidden />} Lưu cấu hình
               </button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               <label className="block text-xs">
-                <span className="text-ioc-dim">Chặn Screenshot (&lt; điểm):</span>{' '}
+                <span className="text-ioc-dim">Chặn ảnh màn hình (&lt; điểm):</span>{' '}
                 <strong className="mono text-ioc-cyan">{cfgDraft.screenshotThreshold}</strong>
                 <input
                   type="range"
@@ -408,7 +408,7 @@ export function SystemAdminView() {
                 />
               </label>
               <label className="block text-xs">
-                <span className="text-ioc-dim">Ngưỡng trùng dHash (bit):</span>{' '}
+                <span className="text-ioc-dim">Ngưỡng phát hiện ảnh trùng:</span>{' '}
                 <strong className="mono text-ioc-cyan">{cfgDraft.duplicateThreshold}</strong>
                 <input
                   type="range"
@@ -420,7 +420,7 @@ export function SystemAdminView() {
                 />
               </label>
               <label className="block text-xs">
-                <span className="text-ioc-dim">ORB+RANSAC Crop Inliers:</span>{' '}
+                <span className="text-ioc-dim">Điểm đặc trưng phát hiện ảnh cắt:</span>{' '}
                 <strong className="mono text-ioc-cyan">{cfgDraft.minKeypointInliers}</strong>
                 <input
                   type="range"
@@ -432,7 +432,7 @@ export function SystemAdminView() {
                 />
               </label>
               <label className="block text-xs">
-                <span className="text-ioc-dim">Khớp hiện trường (Scene %):</span>{' '}
+                <span className="text-ioc-dim">Khớp hiện trường (%):</span>{' '}
                 <strong className="mono text-ioc-cyan">{cfgDraft.sceneMatchThreshold}%</strong>
                 <input
                   type="range"
@@ -444,7 +444,7 @@ export function SystemAdminView() {
                 />
               </label>
               <label className="block text-xs">
-                <span className="text-ioc-dim">Đã xử lý (Resolution %):</span>{' '}
+                <span className="text-ioc-dim">Mức độ khắc phục (%):</span>{' '}
                 <strong className="mono text-ioc-cyan">{cfgDraft.resolutionThreshold}%</strong>
                 <input
                   type="range"
@@ -462,7 +462,7 @@ export function SystemAdminView() {
                 checked={cfgDraft.allowCloudFallback}
                 onChange={(e) => setCfgDraft({ ...cfgDraft, allowCloudFallback: e.target.checked })}
               />
-              Cho phép gọi Cloud Gemini dự phòng khi Local LLM đang tắt (`ALLOW_CLOUD_AI_FALLBACK`)
+              Cho phép kết nối dịch vụ phân tích đám mây dự phòng khi cần suy luận chuyên sâu
             </label>
           </div>
         )}
@@ -629,7 +629,7 @@ export function SystemAdminView() {
         <section className="ioc-panel overflow-hidden" aria-label="Nhật ký thẩm định AI/CV">
           <div className="border-b border-ioc-line p-3">
             <h2 className="text-xs font-bold uppercase tracking-wider text-ioc-dim">
-              Nhật ký Thẩm định Ảnh Rust CV & AI Gần nhất ({monitor.recentEvaluations.length})
+              Nhật ký Kiểm định Hình ảnh Gần nhất ({monitor.recentEvaluations.length})
             </h2>
           </div>
           <div className="max-h-64 overflow-auto">

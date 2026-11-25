@@ -120,6 +120,7 @@ export function aiController(s: Services) {
       if (last.role !== 'user') throw badRequest('Tin nhắn cuối phải là của người dùng.');
       const history = b.messages.map((m) => ({ role: m.role, text: sanitizeUserText(m.text) }));
       const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, last.text);
+      const instantAnswer = s.chat.resolveInstantAnswer(ctx, last.text, b.locale);
 
       res.set({
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -142,6 +143,7 @@ export function aiController(s: Services) {
           ctx.text,
           () => s.chat.localAnswer(ctx, last.text, b.locale),
           b.wardCode,
+          instantAnswer,
         )) {
           if (closed) break;
           mode = chunk.mode;

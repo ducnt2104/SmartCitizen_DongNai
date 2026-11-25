@@ -5,7 +5,14 @@ import { limits } from '../middleware/rateLimit';
 import { validateBody } from '../middleware/validate';
 import type { Services } from '../services/container';
 import { parseVnPhone } from '../services/otp';
-import { badRequest } from '../utils/errors';
+import { badRequest, HttpError } from '../utils/errors';
+
+function maskEmailAddress(email: string): string {
+  const [user = '', domain = ''] = email.trim().split('@');
+  if (!domain) return email;
+  const visible = user.slice(0, Math.min(2, user.length));
+  return `${visible}***@${domain}`;
+}
 
 const wardCodeSchema = z.string().regex(/^DN-[A-Z]{2,4}$/);
 
@@ -99,8 +106,11 @@ export function buildAuthRouter(s: Services): Router {
           ? sms.activeSmsProvider
           : legacy.activeSmsProvider ?? sms.activeSmsProvider,
         smsProviderMode: sms.smsProviderMode,
-        smsPhoneAuthReady: true,
+        smsPhoneAuthReady: smsConfigured || sms.allowDemoOtp || sms.telegramFallbackReady || Boolean(sms.firebaseClientConfig),
         firebaseClientReady: sms.firebaseClientReady,
+        firebaseClientConfig: sms.firebaseClientConfig,
+        telegramFallbackReady: sms.telegramFallbackReady,
+        emailFallbackAvailable: legacy.emailConfigured,
         allowDemoOtp: sms.allowDemoOtp,
       });
     }),
@@ -123,8 +133,45 @@ export function buildAuthRouter(s: Services): Router {
         return;
       }
 
-      const out = await s.phoneOtp.sendPhoneOtp(rawTarget, { purpose: b.purpose });
-      res.json(out);
+      try {
+        const out = await s.phoneOtp.sendPhoneOtp(rawTarget, { purpose: b.purpose });
+        res.json(out);
+      } catch (err) {
+        if (err instanceof HttpError && err.code === 'sms_provider_not_configured') {
+          const parsedPhone = parseVnPhone(rawTarget);
+          if (parsedPhone && s.otpDelivery.status.emailConfigured) {
+            const existingUser = await s.repos.users.getByPhone(parsedPhone.local).catch(() => null);
+            if (existingUser?.email) {
+              const fallbackRes = await s.phoneOtp.issueChallengeForExternalChannel(
+                rawTarget,
+                b.purpose,
+                async (otp, _parsed, ttlMinutes) => {
+                  const sent = await s.otpDelivery.sendOtp({
+                    to: existingUser.email!,
+                    code: otp,
+                    channel: 'email',
+                    ttlMinutes,
+                    purpose: b.purpose === 'reset_password' ? 'reset_password' : 'login',
+                  });
+                  return {
+                    provider: sent.provider,
+                    fallbackChannel: 'email',
+                    fallbackTargetMasked: maskEmailAddress(existingUser.email!),
+                  };
+                },
+              );
+              res.json(fallbackRes);
+              return;
+            }
+          }
+
+          const hintMessage = s.otpDelivery.status.emailConfigured
+            ? 'Kênh gửi tin nhắn SMS đang tạm bảo trì. Vui lòng chuyển sang tab Email để nhận mã xác thực OTP ngay lập tức, hoặc đăng nhập bằng mật khẩu.'
+            : 'Hệ thống chưa kích hoạt cổng gửi tin nhắn SMS. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.';
+          throw new HttpError(503, hintMessage, 'sms_provider_not_configured');
+        }
+        throw err;
+      }
     }),
   );
 

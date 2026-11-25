@@ -29,7 +29,7 @@ const RATE_LIMIT_RE =
   /(\b429\b|too many requests|resource_exhausted|rate[_ -]?limit|quota exceeded|tokens? per minute|\brpm\b|\btpm\b)/i;
 
 const INVALID_KEY_RE =
-  /(api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|api_key_service_blocked|api_key_http_referrer_blocked|unauthenticated|permission_denied|invalid authentication|incorrect api key|key.*revoked|key.*expired|unauthorized)/i;
+  /(api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|api_key_service_blocked|api_key_http_referrer_blocked|service_disabled|has not been used in project|accessnotconfigured|unauthenticated|permission_denied|invalid authentication|incorrect api key|key.*revoked|key.*leaked|key.*expired|unauthorized|forbidden)/i;
 
 const PAYLOAD_ONLY_400_RE =
   /(inlinedata|mimetype|responseschema|safety|blocked by safety|recitation|context length|maximum context)/i;
@@ -82,11 +82,57 @@ function stringifyError(err: unknown): string {
   }
 }
 
+/** Làm sạch thông điệp lỗi từ SDK/HTTP để tuyệt đối không trả mảng/chuỗi JSON lỗi thô ra log hay response. */
+export function sanitizeUpstreamErrorReason(rawText: string, status: number | null): string {
+  const trimmed = rawText.trim();
+  if (!trimmed) return status ? `HTTP ${status} Upstream Error` : 'Upstream AI Error';
+
+  // Nếu chuỗi chứa khối JSON `{"error": ...}` hoặc `[{"error": ...}]`, trích xuất `error.message` và `error.status` gọn gàng
+  const jsonStart = trimmed.search(/[\[{]\s*"error"\s*:/);
+  const candidateJson =
+    jsonStart >= 0
+      ? trimmed.slice(jsonStart)
+      : trimmed.startsWith('{') || trimmed.startsWith('[')
+        ? trimmed
+        : null;
+
+  if (candidateJson) {
+    try {
+      const parsed = JSON.parse(candidateJson) as unknown;
+      const root = Array.isArray(parsed) ? (parsed[0] as Record<string, unknown> | undefined) : (parsed as Record<string, unknown>);
+      const errObj =
+        root && typeof root === 'object' && root.error && typeof root.error === 'object'
+          ? (root.error as Record<string, unknown>)
+          : root;
+      if (errObj && typeof errObj === 'object') {
+        const code = typeof errObj.code === 'number' ? errObj.code : status;
+        const statusStr = typeof errObj.status === 'string' ? errObj.status : '';
+        const msgStr = typeof errObj.message === 'string' ? errObj.message.replace(/\s+/g, ' ').trim() : '';
+        const prefix = [code ? `HTTP ${code}` : '', statusStr].filter(Boolean).join(' ');
+        if (msgStr) {
+          return `${prefix ? `${prefix}: ` : ''}${msgStr}`.slice(0, 200);
+        }
+      }
+    } catch {
+      // Nếu JSON bị cắt cụt, loại bỏ phần ngoặc nhọn/mảng JSON thô phía sau
+    }
+  }
+
+  const strippedJson = trimmed
+    .replace(/\s*[\[{]\s*"error"[\s\S]*$/i, '')
+    .replace(/\s*\[\s*\{\s*"@type"[\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return (strippedJson || (status ? `HTTP ${status} Upstream Error` : 'Upstream AI Error')).slice(0, 200);
+}
+
 /** Phân loại lỗi từ Gemini / OpenRouter / Groq để quyết định trạng thái Circuit Breaker của từng key. */
 export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
   const status = extractHttpStatus(err);
   const fullText = stringifyError(err);
-  const shortReason = (err instanceof Error ? err.message : fullText).slice(0, 240);
+  const rawMessage = err instanceof Error ? err.message : fullText;
+  const shortReason = sanitizeUpstreamErrorReason(rawMessage, status);
 
   // 1. Lỗi 429 / RESOURCE_EXHAUSTED: tách bạch RPD (hết quota ngày) vs RPM/TPM (tạm thời)
   if (status === 429 || RATE_LIMIT_RE.test(fullText)) {
@@ -124,7 +170,18 @@ export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
     };
   }
 
-  // 3. Lỗi máy chủ upstream tạm thời / quá tải / mạng chập chờn -> giữ key HEALTHY và xoay sang key kế tiếp
+  // 3. Lỗi 404 khi đã thử hết chuỗi model dự phòng trên key đó (vd: key Vertex Express AQ.* chưa bật endpoint/model) -> xoay sang key tiếp theo
+  if (status === 404 || /\b404\b|not[_ -]?found|is not found for api version|publisher model.*not found/i.test(fullText)) {
+    return {
+      kind: 'INVALID_KEY',
+      httpStatus: 404,
+      targetStatus: 'INVALID',
+      retryable: true,
+      reasonSummary: shortReason || 'HTTP 404 Model or Endpoint Not Accessible for Key',
+    };
+  }
+
+  // 4. Lỗi máy chủ upstream tạm thời / quá tải / mạng chập chờn -> giữ key HEALTHY và xoay sang key kế tiếp
   if ((status !== null && status >= 500) || status === 408 || TRANSIENT_RE.test(fullText)) {
     return {
       kind: 'TRANSIENT_UPSTREAM',

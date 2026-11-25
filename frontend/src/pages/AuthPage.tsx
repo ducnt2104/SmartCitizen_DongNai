@@ -155,7 +155,7 @@ export default function AuthPage() {
               to="/rescue/login"
               className="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg border border-rose-500/50 bg-rose-500/15 px-3 text-xs font-bold text-rose-300 hover:bg-rose-500/25"
             >
-              <Siren className="h-4 w-4" aria-hidden /> Chuyển sang Cổng Tác Chiến Đội Cứu Hộ (/rescue/login)
+              <Siren className="h-4 w-4" aria-hidden /> Chuyển sang Cổng Tác Chiến Đội Cứu Hộ
             </Link>
           </div>
           <p className="mt-auto pt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
@@ -221,7 +221,7 @@ export default function AuthPage() {
             to="/rescue/login"
             className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 text-xs font-bold text-danger hover:bg-rose-500/15"
           >
-            <Siren className="h-4 w-4" aria-hidden /> Dành cho Đội Cứu Hộ Hiện Trường → /rescue/login
+            <Siren className="h-4 w-4" aria-hidden /> Cổng Tác Chiến Đội Cứu Hộ Hiện Trường
           </Link>
         </div>
         <p className="mt-auto pt-6 text-center text-xs text-muted">{t('footer.credit')}</p>

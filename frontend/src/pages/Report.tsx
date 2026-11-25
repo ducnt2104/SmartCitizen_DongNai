@@ -411,10 +411,9 @@ export default function ReportPage() {
           {photo && (
             <div className="card space-y-3 p-3">
               <img src={photo.dataUrl} alt={t('report.photoAlt')} className="aspect-[4/3] w-full rounded-xl object-cover" />
-              <p className="mono text-[11px] leading-relaxed text-muted">
-                {photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB (
-                {t('report.saved', { p: Math.max(0, Math.round((1 - photo.bytes / photo.originalBytes) * 100)) })}) · dHash{' '}
-                {photo.dHash} · Worker {photo.totalMs.toFixed(0)}ms (hash {photo.hashMs.toFixed(1)}ms)
+              <p className="text-xs text-muted">
+                Ảnh đã tối ưu ({photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB,{' '}
+                {t('report.saved', { p: Math.max(0, Math.round((1 - photo.bytes / photo.originalBytes) * 100)) })})
               </p>
               {exifApplied && (
                 <p className="flex items-center gap-2 rounded-xl bg-brand-soft px-3 py-2 text-xs font-semibold text-brand">
@@ -444,21 +443,6 @@ export default function ReportPage() {
                   <p className="flex items-center gap-2 font-bold">
                     {authLow ? <ShieldAlert className="h-4 w-4" aria-hidden /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}
                     {authLow ? t('report.authLow') : t('report.authOk')} · <span className="mono">{vision.authenticityScore}/100</span>
-                  </p>
-                  {vision.fraudFlags.length > 0 && (
-                    <p className="mt-1 break-words text-xs font-semibold">{vision.fraudFlags.join(' · ')}</p>
-                  )}
-                  <p className="mt-1 text-[11px] font-semibold text-ink/70">
-                    {vision.mode === 'local_rust'
-                      ? t('ai.rustLabel')
-                      : vision.mode === 'ollama'
-                        ? t('ai.ollamaLabel')
-                        : vision.mode === 'fallback'
-                          ? t('ai.fallbackLabel')
-                          : vision.cached
-                            ? t('ai.cachedLabel')
-                            : t('ai.geminiLabel')}
-                    {vision.latencyMs !== undefined && <span className="mono ml-1">({vision.latencyMs}ms)</span>}
                   </p>
                 </div>
               )}

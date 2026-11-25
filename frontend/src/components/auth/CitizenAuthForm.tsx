@@ -24,6 +24,8 @@ import {
   confirmFirebaseOtpAndGetIdToken,
   isFirebasePhoneClientConfigured,
   sendFirebasePhoneSms,
+  setRuntimeFirebaseClientConfig,
+  type FirebaseClientEnv,
 } from './firebasePhoneAuth';
 import { OtpSixDigitInput } from './OtpSixDigitInput';
 import { validateVnPhoneLive, VnPhoneInput } from './VnPhoneInput';
@@ -36,6 +38,8 @@ interface OtpSendResponse {
   expiresInSec: number;
   provider: string;
   clientSideFirebase?: boolean;
+  fallbackChannel?: 'telegram' | 'email';
+  fallbackTargetMasked?: string;
   devOtpPreview?: string;
 }
 
@@ -48,6 +52,9 @@ interface OtpStatusResponse {
   smsProviderMode?: string;
   smsPhoneAuthReady?: boolean;
   firebaseClientReady?: boolean;
+  firebaseClientConfig?: FirebaseClientEnv | null;
+  telegramFallbackReady?: boolean;
+  emailFallbackAvailable?: boolean;
   allowDemoOtp?: boolean;
 }
 
@@ -93,6 +100,7 @@ export function CitizenAuthForm({
   const [stage, setStage] = useState<'input' | 'code'>('input');
   const [targetMasked, setTargetMasked] = useState('');
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -105,7 +113,17 @@ export function CitizenAuthForm({
     let active = true;
     void api<OtpStatusResponse>('/api/auth/otp/status')
       .then((res) => {
-        if (active) setOtpStatus(res);
+        if (!active) return;
+        setRuntimeFirebaseClientConfig(res.firebaseClientConfig);
+        setOtpStatus(res);
+        const smsReady =
+          res.smsConfigured ||
+          Boolean(res.allowDemoOtp) ||
+          Boolean(res.telegramFallbackReady) ||
+          isFirebasePhoneClientConfigured();
+        if (!smsReady && res.emailConfigured) {
+          setChannelTab('email');
+        }
       })
       .catch(() => {
         /* giữ mặc định khi ngoại tuyến */
@@ -133,6 +151,7 @@ export function CitizenAuthForm({
     setMode(nextMode);
     setStage('input');
     setCode('');
+    setFallbackNotice(null);
     setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
@@ -142,6 +161,7 @@ export function CitizenAuthForm({
     setChannelTab(nextTab);
     setStage('input');
     setCode('');
+    setFallbackNotice(null);
     setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
@@ -160,6 +180,7 @@ export function CitizenAuthForm({
   const sendOtp = async (purpose: 'login' | 'reset_password'): Promise<void> => {
     setBusy(true);
     setErr(null);
+    setFallbackNotice(null);
     setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
 
@@ -170,9 +191,8 @@ export function CitizenAuthForm({
           return;
         }
 
-        // Kênh 1: Firebase Phone Auth gửi SMS thật từ Google (khi đăng nhập bằng SĐT)
+        // Kênh 1: Firebase Phone Auth gửi mã SMS từ Google (khi đăng nhập bằng SĐT)
         if (shouldUseFirebaseClientFlow && purpose === 'login') {
-          // Kiểm tra hạn mức / trạng thái phía server trước khi gọi Google SMS
           const serverAck = await api<OtpSendResponse>('/api/auth/otp/send', {
             body: { channel: 'phone', phone: phoneCheck.e164, purpose },
           });
@@ -186,7 +206,7 @@ export function CitizenAuthForm({
           return;
         }
 
-        // Kênh 2/3/4: Server SMS Provider (android_gateway / esms / speedsms / twilio / demo)
+        // Kênh 2/3/4: Cổng SMS trực tiếp hoặc kênh chuyển tiếp dự phòng
         const r = await api<OtpSendResponse>('/api/auth/otp/send', {
           body: { channel: 'phone', phone: phoneCheck.e164, purpose },
         });
@@ -194,7 +214,7 @@ export function CitizenAuthForm({
         if (r.clientSideFirebase && purpose === 'login') {
           if (!isFirebasePhoneClientConfigured()) {
             throw new Error(
-              'Máy chủ đang bật SMS_PROVIDER=firebase nhưng thiếu VITE_FIREBASE_API_KEY / VITE_FIREBASE_PROJECT_ID trên Frontend.',
+              'Dịch vụ xác thực SMS qua Firebase chưa hoàn tất cấu hình trình duyệt. Vui lòng chuyển sang nhận mã qua Email.',
             );
           }
           const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
@@ -202,11 +222,18 @@ export function CitizenAuthForm({
         }
 
         setActiveProvider(r.provider);
-        setTargetMasked(r.targetMasked);
+        setTargetMasked(r.fallbackTargetMasked ?? r.targetMasked);
         setCooldown(r.resendInSec || 60);
+        if (r.fallbackChannel === 'email') {
+          setFallbackNotice(
+            `Kênh SMS đang tạm gián đoạn — hệ thống đã gửi mã OTP tới Email liên kết ${r.fallbackTargetMasked ?? ''}.`.trim(),
+          );
+        } else if (r.fallbackChannel === 'telegram') {
+          setFallbackNotice('Mã xác thực OTP đã được chuyển qua kênh thông báo dự phòng.');
+        }
         if (r.devOtpPreview) setDevOtpPreview(r.devOtpPreview);
         setStage('code');
-        toast('info', t('auth.otpSentToast', { target: r.targetMasked }));
+        toast('info', t('auth.otpSentToast', { target: r.fallbackTargetMasked ?? r.targetMasked }));
         return;
       }
 
@@ -317,6 +344,13 @@ export function CitizenAuthForm({
 
   const emailUnconfigured =
     channelTab === 'email' && otpStatus !== null && !otpStatus.emailConfigured;
+  const smsUnconfigured =
+    channelTab === 'phone' &&
+    otpStatus !== null &&
+    !otpStatus.smsConfigured &&
+    !otpStatus.allowDemoOtp &&
+    !otpStatus.telegramFallbackReady &&
+    !shouldUseFirebaseClientFlow;
 
   const renderChannelSwitcher = (): JSX.Element => (
     <div
@@ -387,7 +421,7 @@ export function CitizenAuthForm({
 
       {!compact && <p className="text-sm text-muted">{t('auth.citizenIntro')}</p>}
 
-      {/* Chuyển đổi Mã OTP thật / Mật khẩu */}
+      {/* Chuyển đổi Mã OTP / Mật khẩu */}
       <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line/70 bg-surface-2/85 p-1" role="tablist">
         <button
           type="button"
@@ -488,6 +522,28 @@ export function CitizenAuthForm({
             </div>
           )}
 
+          {smsUnconfigured && (
+            <div role="status" className="rounded-xl border border-warn/40 bg-warn-soft p-3 text-xs text-warn">
+              <p className="flex items-center gap-1.5 font-bold">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+                Kênh tin nhắn SMS hiện đang tạm bảo trì
+              </p>
+              <p className="mt-1 leading-relaxed">
+                Bạn có thể chuyển sang nhận mã OTP qua Email hoặc đăng nhập trực tiếp bằng mật khẩu đã thiết lập.
+              </p>
+              {otpStatus?.emailConfigured && (
+                <button
+                  type="button"
+                  onClick={() => switchChannelTab('email')}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-bold text-white"
+                >
+                  <Mail className="h-3.5 w-3.5" aria-hidden />
+                  Nhận mã OTP qua Email
+                </button>
+              )}
+            </div>
+          )}
+
           {channelTab === 'phone' ? (
             <div>
               <label htmlFor="vn-phone-otp" className="label">
@@ -538,8 +594,14 @@ export function CitizenAuthForm({
           className="space-y-3.5"
         >
           <div className="rounded-xl bg-ok-soft px-3 py-2.5 text-xs font-semibold text-ok">
-            Đã gửi mã OTP 6 số tới <span className="font-mono font-bold">{targetMasked}</span> (hiệu lực 5 phút).
-            {activeProvider === 'firebase' && ' Xác thực bảo mật bởi Google Firebase.'}
+            {fallbackNotice ? (
+              fallbackNotice
+            ) : (
+              <>
+                Đã gửi mã OTP 6 số tới <span className="font-mono font-bold">{targetMasked}</span> (hiệu lực 5 phút).
+                {activeProvider === 'firebase' && ' Xác thực bảo mật bởi Google Firebase.'}
+              </>
+            )}
           </div>
 
           {devOtpPreview && (
@@ -548,7 +610,7 @@ export function CitizenAuthForm({
               className="flex items-center justify-between gap-2 rounded-xl border border-brand/40 bg-brand-soft px-3 py-2 text-xs text-brand"
             >
               <span>
-                Chế độ Demo Offline — Mã OTP thử nghiệm:{' '}
+                Mã xác thực thử nghiệm:{' '}
                 <strong className="font-mono text-sm tracking-widest">{devOtpPreview}</strong>
               </span>
               <button

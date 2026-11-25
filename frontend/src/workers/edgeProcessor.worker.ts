@@ -70,7 +70,7 @@ export type EdgeResponse =
   | { id: number; type: 'hamming'; matches: Array<{ id: string; distance: number }> }
   | { id: number; type: 'error'; message: string; unsupported?: boolean };
 
-const MAX_SIDE = 1600;
+const MAX_SIDE = 1280;
 const QUALITY = 0.8;
 
 function bytesToBase64(bytes: Uint8Array): string {

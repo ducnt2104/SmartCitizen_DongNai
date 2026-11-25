@@ -147,9 +147,18 @@ export function decryptApiKey(
   return plain;
 }
 
+/** Nhận diện loại endpoint Google cho Gemini key (`AQ....` -> Vertex AI, `AIza...` -> Google AI Studio). */
+export function detectGeminiKeyKind(rawKey: string): 'vertex' | 'ai_studio' {
+  return /^AQ\./.test(rawKey.trim()) ? 'vertex' : 'ai_studio';
+}
+
+function stripOuterQuotesAndBrackets(value: string): string {
+  return value.trim().replace(/^[\s"'“”‘’`[\]]+|[\s"'“”‘’`[\]]+$/g, '').trim();
+}
+
 /**
- * Tách danh sách key dán hàng loạt (phân tách bằng xuống dòng, dấu phẩy, chấm phẩy hoặc khoảng trắng),
- * loại bỏ dấu nháy bao ngoài và khử trùng lặp giữ nguyên thứ tự.
+ * Tách danh sách key đa định dạng (phân tách bằng dấu phẩy, xuống dòng, khoảng trắng, chấm phẩy `/[\s,;\r\n]+/`),
+ * tự động xử lý chuỗi `\n` thoát ký tự trên Render Dashboard, loại bỏ dấu ngoặc kép thừa và khử trùng lặp giữ nguyên thứ tự.
  */
 export function parseBulkApiKeys(raw: string | readonly string[]): string[] {
   const chunks = Array.isArray(raw) ? raw : [raw as string];
@@ -158,19 +167,31 @@ export function parseBulkApiKeys(raw: string | readonly string[]): string[] {
 
   for (const chunk of chunks) {
     if (typeof chunk !== 'string') continue;
-    const tokens = chunk
-      .split(/[\r\n,;]+/)
-      .map((s) => s.trim().replace(/^["']+|["']+$/g, '').trim())
+    // Hỗ trợ chuỗi chứa `\n` / `\r\n` dạng literal khi nhập trên giao diện biến môi trường 1 dòng
+    const normalizedLines = chunk
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\n/g, '\n')
+      .split(/[\r\n]+/)
+      .map((line) => {
+        const trimmed = stripOuterQuotesAndBrackets(line);
+        // Hỗ trợ dòng kiểu `export GEMINI_API_KEY_1 = "AIza..."` hoặc `GEMINI_API_KEYS=k1,k2`
+        return trimmed.replace(/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*/, '');
+      })
+      .join('\n');
+
+    const tokens = normalizedLines
+      .split(/[\s,;\r\n]+/)
+      .map(stripOuterQuotesAndBrackets)
       .filter(Boolean);
 
     for (const token of tokens) {
-      // Hỗ trợ cả trường hợp người dùng dán nguyên dòng `GEMINI_API_KEY_1=AIza...`
       const eqIdx = token.indexOf('=');
       const clean =
         eqIdx > 0 && /^[A-Z0-9_]+$/i.test(token.slice(0, eqIdx).trim())
-          ? token.slice(eqIdx + 1).trim().replace(/^["']+|["']+$/g, '').trim()
+          ? stripOuterQuotesAndBrackets(token.slice(eqIdx + 1))
           : token;
-      if (!clean) continue;
+      // Bỏ qua token rỗng, tên biến mồ côi hoặc chuỗi quá ngắn không phải API key
+      if (!clean || clean.length < 8 || /^[A-Z0-9_]+=$/i.test(token)) continue;
       const fp = fingerprintApiKey(clean);
       if (!seen.has(fp)) {
         seen.add(fp);

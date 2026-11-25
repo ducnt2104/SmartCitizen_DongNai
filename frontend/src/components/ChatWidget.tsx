@@ -185,9 +185,6 @@ export function ChatWidget() {
                 }`}
               >
                 {m.text || <span className="inline-flex gap-1" aria-label={t('chat.thinking')}><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /></span>}
-                {m.mode === 'fallback' && m.text && !m.error && (
-                  <span className="mt-1 block text-[11px] font-semibold text-warn">{t('ai.fallbackLabel')}</span>
-                )}
               </div>
             </div>
           ))}

@@ -340,8 +340,8 @@ export class OtpDeliveryService {
     if (!transport) {
       const hint =
         payload.channel === 'email'
-          ? 'Chưa cấu hình dịch vụ gửi Email OTP thật. Trên Render Free Tier (chặn cổng SMTP 587/465), hãy đặt OTP_WEBHOOK_URL, BREVO_API_KEY hoặc RESEND_API_KEY.'
-          : 'Chưa cấu hình dịch vụ gửi SMS OTP thật (TWILIO_* hoặc ESMS_*). Khuyến nghị chọn đăng nhập bằng Email OTP.';
+          ? 'Kênh gửi mã xác thực qua Email hiện đang tạm bảo trì. Vui lòng chuyển sang nhận mã qua Số điện thoại hoặc đăng nhập bằng mật khẩu.'
+          : 'Kênh gửi tin nhắn SMS hiện đang tạm bảo trì. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.';
       throw new HttpError(503, hint, 'otp_provider_not_configured');
     }
     try {

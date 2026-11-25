@@ -61,6 +61,10 @@ Desktop.ini
 # Runtime data, logs & temporary files
 /data/
 backend/data/
+server/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 !frontend/src/data/
 !backend/src/data/
 logs/

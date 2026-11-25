@@ -6,6 +6,7 @@ import { newId } from '../../utils/crypto';
 import { badRequest, notFound } from '../../utils/errors';
 import {
   decryptApiKey,
+  detectGeminiKeyKind,
   detectKeyProvider,
   encryptApiKey,
   fingerprintApiKey,
@@ -18,6 +19,7 @@ import {
   computeCooldownMs,
   computeNextMidnightMs,
   DEFAULT_COOLDOWN_STEPS_MS,
+  sanitizeUpstreamErrorReason,
 } from './errorClassifier';
 import {
   API_KEY_PROVIDERS,
@@ -145,7 +147,7 @@ export class KeyPoolManager {
     this.quotaResetTimeZone =
       (options.quotaResetTimeZone ?? this.envSource.KEY_QUOTA_RESET_TZ ?? 'Asia/Ho_Chi_Minh').trim() ||
       'Asia/Ho_Chi_Minh';
-    this.defaultMaxAttempts = Math.max(1, options.defaultMaxAttempts ?? 5);
+    this.defaultMaxAttempts = Math.max(1, options.defaultMaxAttempts ?? 10);
     this.nowFn = options.nowFn ?? Date.now;
     this.logger = options.logger ?? DEFAULT_LOGGER;
     const rawDefaultModel =
@@ -271,6 +273,22 @@ export class KeyPoolManager {
         });
       }
     }
+
+    let aiStudioCount = 0;
+    let vertexCount = 0;
+    let otherCount = 0;
+    for (const k of this.keys.values()) {
+      if (k.provider === 'gemini') {
+        if (detectGeminiKeyKind(k.rawKey) === 'vertex') vertexCount += 1;
+        else aiStudioCount += 1;
+      } else {
+        otherCount += 1;
+      }
+    }
+    const extraInfo = otherCount > 0 ? `, Other: ${otherCount}` : '';
+    this.logger.info(
+      `[KeyPool] Loaded ${this.keys.size} keys (AI Studio: ${aiStudioCount}, Vertex: ${vertexCount}${extraInfo})`,
+    );
   }
 
   private registerInMemoryKey(params: {
@@ -1212,35 +1230,80 @@ export class KeyPoolManager {
         return { ok: true, detail: 'Groq API Key hợp lệ.' };
       }
 
-      const mod = await import('@google/genai');
       const cleanKey = apiKey.trim();
-      const client = new mod.GoogleGenAI(
-        /^AQ\./.test(cleanKey) ? { apiKey: cleanKey, vertexai: true } : { apiKey: cleanKey },
+      const modelsToTry = Array.from(
+        new Set([this.defaultGeminiModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']),
       );
-      const modelsToTry = Array.from(new Set([this.defaultGeminiModel, 'gemini-2.5-flash', 'gemini-2.0-flash']));
       let lastModelErr: unknown = null;
-      for (const modelId of modelsToTry) {
-        try {
-          const res = await client.models.generateContent({
-            model: modelId,
-            contents: 'Trả lời duy nhất từ: OK',
-            config: {
-              maxOutputTokens: 5,
-              temperature: 0,
-            },
+
+      if (/^AQ\./.test(cleanKey)) {
+        for (const modelId of modelsToTry) {
+          const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
+              generationConfig: { maxOutputTokens: 5, temperature: 0 },
+            }),
+            signal: controller.signal,
           });
-          return {
-            ok: true,
-            detail: `Gemini (${modelId}) phản hồi thành công${res.text ? `: "${res.text.trim().slice(0, 24)}"` : ''}.`,
-          };
-        } catch (err) {
-          lastModelErr = err;
-          const msg = err instanceof Error ? err.message : String(err);
-          if (/404|not[_ ]found|not supported/i.test(msg)) {
+          if (res.ok) {
+            const data = (await res.json().catch(() => ({}))) as {
+              candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+            };
+            const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+            return {
+              ok: true,
+              detail: `Vertex AI (${modelId}) phản hồi thành công${replyText ? `: "${replyText.trim().slice(0, 24)}"` : ''}.`,
+            };
+          }
+          const errBody = await res.text().catch(() => '');
+          lastModelErr = Object.assign(
+            new Error(`Vertex AI (${modelId}) ${sanitizeUpstreamErrorReason(errBody, res.status)}`),
+            { status: res.status },
+          );
+          if (res.status === 404) {
             continue;
           }
-          throw err;
+          throw lastModelErr;
         }
+        throw lastModelErr ?? new Error('Không tìm thấy model khả dụng trên Vertex AI.');
+      }
+
+      for (const modelId of modelsToTry) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': cleanKey,
+          },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
+            generationConfig: { maxOutputTokens: 5, temperature: 0 },
+          }),
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const data = (await res.json().catch(() => ({}))) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+          };
+          const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+          return {
+            ok: true,
+            detail: `Google AI Studio (${modelId}) phản hồi thành công${replyText ? `: "${replyText.trim().slice(0, 24)}"` : ''}.`,
+          };
+        }
+        const errBody = await res.text().catch(() => '');
+        lastModelErr = Object.assign(
+          new Error(`Google AI Studio (${modelId}) ${sanitizeUpstreamErrorReason(errBody, res.status)}`),
+          { status: res.status },
+        );
+        if (res.status === 404) {
+          continue;
+        }
+        throw lastModelErr;
       }
       throw lastModelErr ?? new Error('Không tìm thấy model Gemini khả dụng.');
     } finally {
