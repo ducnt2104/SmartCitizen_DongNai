@@ -347,7 +347,7 @@ export function safeParseStructuredJson<S extends z.ZodTypeAny>(raw: string, sch
 
 let cachedLiveGeminiModel: string | null = null;
 
-/** Chuỗi model Gemini chính thức, ổn định 2026: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`. */
+/** Chuỗi model Gemini chính thức, ổn định 2026: `gemini-3.8-flash` -> `gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite`. */
 export function resolveGeminiModelChain(
   configuredModel?: string,
   options?: { preferFallbackModel?: boolean; fallbackModel?: string },
@@ -413,7 +413,7 @@ export function buildGoogleGenAiClientOptions(
 
 /**
  * Zero-Crash SmartCitizen AI Brain:
- *  1) Multi-Key Cloud Pool (`gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`, OpenRouter, Groq) có kiểm chuẩn schema an toàn.
+ *  1) Multi-Key Cloud Pool (`gemini-3.8-flash` -> `gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite`, OpenRouter, Groq) có kiểm chuẩn schema an toàn.
  *  2) Rust Native CV Engine (:8001) cho thẩm định ảnh giả/screenshot & nghiệm thu Trước–Sau (<50ms).
  *  3) Local LLM (Ollama :11434 / llama.cpp) + BM25 RAG.
  *  4) Deterministic Rule-Based SOP Fallback đảm bảo 100% không bao giờ văng lỗi 500 trong vận hành thực tế.
@@ -490,10 +490,10 @@ export class GeminiService {
   }
 
   /**
-   * Gọi Gemini qua chuỗi model ổn định (`gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`):
-   * - Chỉ key `AIzaSy*` định tuyến Google AI Studio (`x-goog-api-key`); `AQ.*` định tuyến Vertex AI Express (`aiplatform.googleapis.com`).
+   * Gọi Gemini qua chuỗi model ổn định (`gemini-3.8-flash` -> `gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite`):
+   * - Chỉ key `AIzaSy*` định tuyến Google AI Studio (Interactions API `/v1beta/interactions` với `x-goog-api-key`); `AQ.*` định tuyến Vertex AI Express (`aiplatform.googleapis.com`).
    * - Gặp HTTP 404: tự động chuyển model kế tiếp trên CÙNG một key khỏe.
-   * - Khi `preferFallbackModel` bật (sau 3 key liên tiếp 503): tự động hạ cấp sang `fallbackModel` (`gemini-2.0-flash`) cho request đó.
+   * - Khi `preferFallbackModel` bật (sau 3 key liên tiếp 503): tự động hạ cấp sang `fallbackModel` (`gemini-3.5-flash-lite`) cho request đó.
    */
   private async generateGeminiWithModelChain(
     apiKey: string,
@@ -518,7 +518,7 @@ export class GeminiService {
       models,
       contents: (modelId: string) => buildParams(modelId).contents,
       config: (modelId: string) => (buildParams(modelId).config ?? {}) as GeminiRestConfig,
-      timeoutMs: Math.min(timeoutMs, 6_000),
+      timeoutMs: Math.min(timeoutMs, 8_000),
       label,
       onModelNotFound: (modelId: string) => {
         console.warn(`[ai] Model "${modelId}" trả 404, tự động chuyển sang model dự phòng kế tiếp trên cùng key...`);
@@ -666,7 +666,7 @@ export class GeminiService {
         : 'https://api.groq.com/openai/v1/chat/completions';
     const model =
       params.provider === 'openrouter'
-        ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-2.5-flash'
+        ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-3.8-flash'
         : process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     const effectiveTimeoutMs = Math.min(params.timeoutMs, 8_000);
@@ -869,7 +869,7 @@ export class GeminiService {
                 contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
                 config: {
                   systemInstruction: BRIEFING_SYSTEM,
-                  temperature: 0.15,
+                  thinkingLevel: 'low',
                   responseMimeType: 'application/json',
                   responseSchema: BRIEFING_SCHEMA as never,
                 },
@@ -1677,7 +1677,7 @@ export class GeminiService {
           ],
           config: {
             systemInstruction: VERIFY_SYSTEM,
-            temperature: 0.1,
+            thinkingLevel: 'low',
             responseMimeType: 'application/json',
             responseSchema: VERIFY_SCHEMA as never,
           },
@@ -2003,7 +2003,7 @@ export class GeminiService {
                 contents: history
                   .slice(-10)
                   .map((m) => ({ role: m.role, parts: [{ text: sanitizeUserText(m.text) }] })),
-                config: { systemInstruction: fullSystem, temperature: 0.3 },
+                config: { systemInstruction: fullSystem, thinkingLevel: 'low' },
               }),
               8_000,
               'Gemini Chat',
@@ -2180,7 +2180,7 @@ export class GeminiService {
                 contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
                 config: {
                   systemInstruction: BULLETIN_SYSTEM,
-                  temperature: 0.1,
+                  thinkingLevel: 'low',
                   responseMimeType: 'application/json',
                   responseSchema: BULLETIN_SCHEMA as never,
                 },
@@ -2316,7 +2316,7 @@ export class GeminiService {
                 contents: [{ role: 'user', parts: [{ text: prompt }] }],
                 config: {
                   systemInstruction: DIGEST_SYSTEM,
-                  temperature: 0.15,
+                  thinkingLevel: 'low',
                   responseMimeType: 'application/json',
                   responseSchema: DAILY_DIGEST_SCHEMA as never,
                 },

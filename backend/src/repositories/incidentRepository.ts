@@ -366,7 +366,7 @@ export class IncidentRepository {
         $set: {
           kind: params.kind,
           pHash: params.pHash ?? null,
-          modelName: params.modelName ?? 'gemini-2.5-flash',
+          modelName: params.modelName ?? 'gemini-3.8-flash',
           payload: params.payload,
           expiresAt,
         },

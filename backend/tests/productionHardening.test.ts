@@ -230,7 +230,7 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
         envSource: {
           GEMINI_API_KEYS: multiFormatRaw,
           VERTEX_API_KEYS: 'AQ.Ab8RN6EnvVertexPoolKey33333',
-          GEMINI_MODEL: 'gemini-2.5-flash',
+          GEMINI_MODEL: 'gemini-3.8-flash',
         },
         logger: {
           info: () => undefined,

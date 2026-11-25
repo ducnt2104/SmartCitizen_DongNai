@@ -208,7 +208,7 @@ export class VisionAnalyzerService {
           : 'https://api.groq.com/openai/v1/chat/completions';
       const model =
         provider === 'openrouter'
-          ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-2.5-flash'
+          ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-3.8-flash'
           : process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
       const execOnce = async () => {
@@ -281,9 +281,8 @@ export class VisionAnalyzerService {
         ],
         config: {
           systemInstruction: STAGE1_SYSTEM_INSTRUCTION,
-          temperature: 0.1,
-          maxOutputTokens: 520,
-          thinkingBudget: 0,
+          maxOutputTokens: 600,
+          thinkingLevel: 'low',
           responseMimeType: 'application/json',
           responseSchema: STAGE1_GEMINI_SCHEMA,
         },

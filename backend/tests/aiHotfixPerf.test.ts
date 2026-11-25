@@ -84,7 +84,7 @@ function makeGeminiStage1Response(params: {
   };
 }
 
-describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache & KeyPool Failover', () => {
+describe('AI Vision Report Hotfix: Speed, Gemini 3.8 Flash Interactions Config, SHA-256 Cache & KeyPool Failover', () => {
   let tmpDir = '';
 
   beforeAll(() => {
@@ -100,7 +100,7 @@ describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache
     }
   });
 
-  it('POST /api/ai/analyze-image: ép gemini-2.5-flash (thinkingBudget: 0, temp 0.1, <= 600 tokens), cold call < 2s & SHA-256 cache hit < 20ms', async () => {
+  it('POST /api/ai/analyze-image: ép gemini-3.8-flash (thinking_level: low, không gửi temperature, <= 600 tokens), cold call < 2s & SHA-256 cache hit < 20ms', async () => {
     const { createRepositories } = await import('../src/repositories');
     const { createServices } = await import('../src/services/container');
     const { createApp } = await import('../src/app');
@@ -118,6 +118,7 @@ describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache
 
     let geminiCalls = 0;
     let capturedUrl = '';
+    let capturedBody: Record<string, unknown> = {};
     let capturedGenConfig: Record<string, unknown> | undefined;
 
     try {
@@ -132,20 +133,26 @@ describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache
 
         geminiCalls += 1;
         capturedUrl = url;
-        const parsedBody = init?.body ? (JSON.parse(String(init.body)) as { generationConfig?: Record<string, unknown> }) : {};
-        capturedGenConfig = parsedBody.generationConfig;
+        const parsedBody = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        capturedBody = parsedBody;
+        capturedGenConfig = (parsedBody.generation_config ?? parsedBody.generationConfig) as Record<string, unknown> | undefined;
+
+        const mockClassic = makeGeminiStage1Response({
+          standardizedCategory: 'RAC_THAI_MOI_TRUONG',
+          severity: 'HIGH',
+          suggestedUnit: 'Đội Môi trường Đô thị Phường Trấn Biên',
+          title: 'Rác thải sinh hoạt ùn ứ ven đường Phạm Văn Thuận',
+          description: 'Nhiều bao tải rác sinh hoạt tập kết trái phép lấn chiếm vỉa hè. Cần thu gom sớm để tránh ô nhiễm.',
+          addressHint: 'Gần chợ Tân Mai, đường Phạm Văn Thuận',
+        });
+        const text = mockClassic.candidates[0].content.parts[0].text;
 
         return new Response(
-          JSON.stringify(
-            makeGeminiStage1Response({
-              standardizedCategory: 'RAC_THAI_MOI_TRUONG',
-              severity: 'HIGH',
-              suggestedUnit: 'Đội Môi trường Đô thị Phường Trấn Biên',
-              title: 'Rác thải sinh hoạt ùn ứ ven đường Phạm Văn Thuận',
-              description: 'Nhiều bao tải rác sinh hoạt tập kết trái phép lấn chiếm vỉa hè. Cần thu gom sớm để tránh ô nhiễm.',
-              addressHint: 'Gần chợ Tân Mai, đường Phạm Văn Thuận',
-            }),
-          ),
+          JSON.stringify({
+            id: 'int_hotfix_bench_1',
+            status: 'completed',
+            steps: [{ type: 'model_output', content: [{ type: 'text', text }] }],
+          }),
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }) as typeof fetch;
@@ -175,21 +182,22 @@ describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache
       const coldJson = (await coldRes.json()) as Record<string, unknown>;
 
       console.info(
-        `[bench] Cold POST /api/ai/analyze-image (${Math.round(snapshotBuf.byteLength / 1024)}KB): ${coldMs.toFixed(1)}ms | model=${String(coldJson.modelUsed)} | thinkingBudget=${String((capturedGenConfig?.thinkingConfig as Record<string, unknown> | undefined)?.thinkingBudget)}`,
+        `[bench] Cold POST /api/ai/analyze-image (${Math.round(snapshotBuf.byteLength / 1024)}KB): ${coldMs.toFixed(1)}ms | model=${String(coldJson.modelUsed)} | thinking_level=${String(capturedGenConfig?.thinking_level)}`,
       );
 
       expect(geminiCalls).toBe(1);
-      expect(capturedUrl).toContain('gemini-2.5-flash');
-      expect(capturedGenConfig?.temperature).toBe(0.1);
-      expect(Number(capturedGenConfig?.maxOutputTokens)).toBeLessThanOrEqual(600);
-      expect(capturedGenConfig?.responseMimeType).toBe('application/json');
-      expect((capturedGenConfig?.thinkingConfig as Record<string, unknown> | undefined)?.thinkingBudget).toBe(0);
+      expect(capturedUrl).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
+      expect(capturedBody.model).toBe('gemini-3.8-flash');
+      expect(capturedGenConfig?.temperature).toBeUndefined();
+      expect(Number(capturedGenConfig?.max_output_tokens)).toBeLessThanOrEqual(600);
+      expect((capturedBody.response_format as Record<string, unknown> | undefined)?.mime_type).toBe('application/json');
+      expect(capturedGenConfig?.thinking_level).toBe('low');
 
       expect(coldJson.category).toBe('rac_thai');
       expect(coldJson.title).toContain('Phạm Văn Thuận');
       expect(coldJson.addressHint).toBe('Gần chợ Tân Mai, đường Phạm Văn Thuận');
       expect(coldJson.imageSha256).toBe(sha256Hex);
-      expect(coldJson.modelUsed).toBe('gemini-2.5-flash');
+      expect(coldJson.modelUsed).toBe('gemini-3.8-flash');
       expect(coldJson.cached).toBe(false);
       expect(coldJson.degraded).not.toBe(true);
       expect(coldMs).toBeLessThan(2000);
@@ -293,7 +301,7 @@ describe('AI Vision Report Hotfix: Speed, Gemini 2.5 Flash Config, SHA-256 Cache
       expect(res.category).toBe('mat_duong');
       expect(res.addressHint).toBe('Đoạn gần ngã tư Vũng Tàu, Quốc lộ 51');
       expect(res.degraded).not.toBe(true);
-      expect(res.modelUsed).toBe('gemini-2.5-flash');
+      expect(res.modelUsed).toBe('gemini-3.8-flash');
       expect(failoverMs).toBeLessThan(1500);
 
       const keysSnap = await kp.listMaskedKeys();

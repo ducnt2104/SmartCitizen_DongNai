@@ -72,7 +72,7 @@ export interface KeyPoolManagerOptions {
   sleepFn?: (ms: number) => Promise<void>;
   /** Ngưỡng số key liên tiếp gặp 503 để tự động hạ cấp sang fallbackModel (mặc định 3). */
   fallbackOn503Threshold?: number;
-  /** Model Gemini hạ cấp khi model chính quá tải 503 liên tiếp (mặc định `gemini-2.0-flash`). */
+  /** Model Gemini hạ cấp khi model chính quá tải 503 liên tiếp (mặc định `gemini-3.5-flash-lite`). */
   fallbackGeminiModel?: string;
   /** Múi giờ reset quota ngày RPD (mặc định `Asia/Ho_Chi_Minh`, hỗ trợ `America/Los_Angeles`). */
   quotaResetTimeZone?: string;
