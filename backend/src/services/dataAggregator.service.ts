@@ -131,15 +131,108 @@ function classifyRssEntryDeterministic(input: {
 
 export type FetcherLike = (url: string, init?: { timeoutMs?: number; headers?: Record<string, string> }) => Promise<Response>;
 
-function decodeXmlEntities(text: string): string {
-  return text
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+const NAMED_HTML_ENTITIES: Readonly<Record<string, string>> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  ndash: '–',
+  mdash: '—',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+  hellip: '…',
+  laquo: '«',
+  raquo: '»',
+  bull: '•',
+  middot: '·',
+  deg: '°',
+  times: '×',
+  divide: '÷',
+  plusmn: '±',
+  copy: '©',
+  reg: '®',
+  trade: '™',
+  aacute: 'á',
+  Aacute: 'Á',
+  agrave: 'à',
+  Agrave: 'À',
+  acirc: 'â',
+  Acirc: 'Â',
+  atilde: 'ã',
+  Atilde: 'Ã',
+  auml: 'ä',
+  Auml: 'Ä',
+  aring: 'å',
+  Aring: 'Å',
+  aelig: 'æ',
+  AElig: 'Æ',
+  ccedil: 'ç',
+  Ccedil: 'Ç',
+  eacute: 'é',
+  Eacute: 'É',
+  egrave: 'è',
+  Egrave: 'È',
+  ecirc: 'ê',
+  Ecirc: 'Ê',
+  euml: 'ë',
+  Euml: 'Ë',
+  iacute: 'í',
+  Iacute: 'Í',
+  igrave: 'ì',
+  Igrave: 'Ì',
+  icirc: 'î',
+  Icirc: 'Î',
+  iuml: 'ï',
+  Iuml: 'Ï',
+  ntilde: 'ñ',
+  Ntilde: 'Ñ',
+  oacute: 'ó',
+  Oacute: 'Ó',
+  ograve: 'ò',
+  Ograve: 'Ò',
+  ocirc: 'ô',
+  Ocirc: 'Ô',
+  otilde: 'õ',
+  Otilde: 'Õ',
+  ouml: 'ö',
+  Ouml: 'Ö',
+  uacute: 'ú',
+  Uacute: 'Ú',
+  ugrave: 'ù',
+  Ugrave: 'Ù',
+  ucirc: 'û',
+  Ucirc: 'Û',
+  uuml: 'ü',
+  Uuml: 'Ü',
+  yacute: 'ý',
+  Yacute: 'Ý',
+  yuml: 'ÿ',
+  Yuml: 'Ÿ',
+};
+
+export function decodeHtmlEntities(text: string): string {
+  let cur = String(text ?? '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  for (let pass = 0; pass < 3; pass++) {
+    const next = cur
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+        const cp = Number.parseInt(hex, 16);
+        return Number.isFinite(cp) && cp > 0 ? String.fromCodePoint(cp) : _;
+      })
+      .replace(/&#(\d+);/g, (_, dec) => {
+        const cp = Number.parseInt(dec, 10);
+        return Number.isFinite(cp) && cp > 0 ? String.fromCodePoint(cp) : _;
+      })
+      .replace(/&([a-z][a-z0-9]*);/gi, (full, name) => NAMED_HTML_ENTITIES[name] ?? NAMED_HTML_ENTITIES[name.toLowerCase()] ?? full);
+    if (next === cur) break;
+    cur = next;
+  }
+  return cur
     .replace(/<[^>]+>/g, ' ')
+    .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -147,7 +240,7 @@ function decodeXmlEntities(text: string): string {
 function extractTag(block: string, tag: string): string {
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const m = block.match(re);
-  return m ? decodeXmlEntities(m[1]) : '';
+  return m ? decodeHtmlEntities(m[1]) : '';
 }
 
 export interface ParsedRssItem {
@@ -644,7 +737,7 @@ export class DataAggregatorService {
         return {
           id: String(hit.id),
           dateKey: String(hit.dateKey),
-          bullets: Array.isArray(hit.bullets) ? hit.bullets.map(String) : [],
+          bullets: Array.isArray(hit.bullets) ? hit.bullets.map((b) => decodeHtmlEntities(String(b))) : [],
           highlightsCount: (hit.highlightsCount as DailyDigestItem['highlightsCount']) ?? {
             alerts: 0,
             bulletins: 0,
@@ -690,10 +783,21 @@ export class DataAggregatorService {
         .slice(0, 3)
         .map(([code]) => DONG_NAI_WARDS.find((w) => w.wardCode === code)?.name ?? code);
 
+      const cleanAlerts = activeAlerts.map((a) => ({
+        ...a,
+        title: decodeHtmlEntities(a.title),
+        description: decodeHtmlEntities(a.description),
+      }));
+      const cleanBulletins = bulletins.map((b) => ({
+        ...b,
+        title: decodeHtmlEntities(b.title),
+        cleanSummary: decodeHtmlEntities(b.cleanSummary),
+      }));
+
       const { bullets, model } = await this.gemini.generateDailyDigest({
         dateKey: todayKey,
-        activeAlerts,
-        bulletins,
+        activeAlerts: cleanAlerts,
+        bulletins: cleanBulletins,
         openIncidentsCount: openReports.length,
         hotWardNames,
       });

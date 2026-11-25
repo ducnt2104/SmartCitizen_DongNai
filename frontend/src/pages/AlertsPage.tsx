@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeRole } from '@shared/constants';
+import { decodeHtmlEntities } from '../lib/htmlDecode';
 import { inDongNaiBBox } from '@shared/geo';
 import { DynamicWeatherBackdrop, getWeatherCardGradient } from '../components/DynamicWeatherBackdrop';
 import type {
@@ -1221,7 +1222,7 @@ export default function AlertsPage() {
             {digest.bullets.map((b, i) => (
               <li key={i} className="flex items-start gap-2">
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden />
-                <span>{b.replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai')}</span>
+                <span>{decodeHtmlEntities(b).replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai')}</span>
               </li>
             ))}
           </ul>
@@ -1511,8 +1512,10 @@ export default function AlertsPage() {
                       <span className="mono ml-auto text-[11px] text-muted">{formatPubDateTime(al.createdAt)}</span>
                     </div>
 
-                    <h3 className="font-bold text-ink">{al.title}</h3>
-                    <p className="line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">{al.description}</p>
+                    <h3 className="font-bold text-ink">{decodeHtmlEntities(al.title)}</h3>
+                    <p className="line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">
+                      {decodeHtmlEntities(al.description)}
+                    </p>
 
                     {al.detourNote && (
                       <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-900 dark:text-amber-200">
@@ -1617,8 +1620,12 @@ export default function AlertsPage() {
                       </span>
                       <span className="mono font-medium text-muted">{formatPubDateTime(b.publishedAt)}</span>
                     </div>
-                    <h3 className="mt-2 text-sm font-extrabold leading-snug text-ink sm:text-base">{b.title}</h3>
-                    <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">{b.cleanSummary}</p>
+                    <h3 className="mt-2 text-sm font-extrabold leading-snug text-ink sm:text-base">
+                      {decodeHtmlEntities(b.title)}
+                    </h3>
+                    <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">
+                      {decodeHtmlEntities(b.cleanSummary)}
+                    </p>
                     <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2">
                       <span className="text-[11px] font-semibold text-muted">Xác thực nguồn RSS chính thống</span>
                       <a
