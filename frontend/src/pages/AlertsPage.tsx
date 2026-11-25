@@ -51,6 +51,7 @@ import { useSession } from '../lib/authStore';
 import { resolvePlaceSuggestion, searchPlacesDongNai, type PlaceSuggestion } from '../lib/geoClient';
 import {
   fetchDongNaiWeather,
+  searchOpenMeteoLocations,
   type DongNaiWeather,
   type WeatherKind,
 } from '../lib/weather';
@@ -270,6 +271,7 @@ export default function AlertsPage() {
   const [weatherSuggestions, setWeatherSuggestions] = useState<PlaceSuggestion[]>([]);
   const [weatherSearchOpen, setWeatherSearchOpen] = useState(false);
   const forecastAbortRef = useRef<AbortController | null>(null);
+  const lastFetchedCoordKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const q = weatherQuery.trim();
@@ -279,15 +281,30 @@ export default function AlertsPage() {
     }
     const ctrl = new AbortController();
     const timer = window.setTimeout(() => {
-      void searchPlacesDongNai(q, ctrl.signal).then((items) => {
-        if (!ctrl.signal.aborted) setWeatherSuggestions(items);
+      void Promise.all([
+        searchOpenMeteoLocations(q, lang, ctrl.signal),
+        searchPlacesDongNai(q, ctrl.signal),
+      ]).then(([omItems, dnItems]) => {
+        if (ctrl.signal.aborted) return;
+        const merged: PlaceSuggestion[] = [];
+        // Ưu tiên 95 Phường/Xã Đồng Nai khớp trực tiếp, sau đó tới Open-Meteo Geocoding và địa điểm chi tiết
+        const wardsFirst = dnItems.filter((x) => x.kind === 'ward');
+        const otherPlaces = [...omItems, ...dnItems.filter((x) => x.kind !== 'ward')];
+        const seen = new Set<string>();
+        for (const item of [...wardsFirst, ...otherPlaces]) {
+          const k = `${item.label.toLowerCase()}:${item.lat?.toFixed(2) ?? ''}:${item.lng?.toFixed(2) ?? ''}`;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          merged.push(item);
+        }
+        setWeatherSuggestions(merged.slice(0, 10));
       });
     }, 220);
     return () => {
       ctrl.abort();
       window.clearTimeout(timer);
     };
-  }, [weatherQuery]);
+  }, [weatherQuery, lang]);
 
   const handlePickWeatherPlace = async (item: PlaceSuggestion): Promise<void> => {
     setWeatherSearchOpen(false);
@@ -303,15 +320,22 @@ export default function AlertsPage() {
     });
   };
 
+  const coordKey = `${forecastCoords.lat.toFixed(4)}:${forecastCoords.lng.toFixed(4)}`;
+
   const loadForecast = useCallback(async () => {
     forecastAbortRef.current?.abort();
     const ctrl = new AbortController();
     forecastAbortRef.current = ctrl;
+    // Nếu đổi sang tọa độ mới, xóa số liệu của vị trí cũ để tránh hiển thị nhầm trong lúc đang tải
+    if (lastFetchedCoordKeyRef.current !== coordKey) {
+      setForecast(null);
+    }
     setForecastLoading(true);
     setForecastError(null);
     try {
       const data = await fetchDongNaiWeather(forecastCoords.lat, forecastCoords.lng, lang, ctrl.signal);
       if (!ctrl.signal.aborted) {
+        lastFetchedCoordKeyRef.current = coordKey;
         setForecast(data);
         setForecastError(null);
       }
@@ -324,7 +348,7 @@ export default function AlertsPage() {
         setForecastLoading(false);
       }
     }
-  }, [forecastCoords.lat, forecastCoords.lng, lang]);
+  }, [coordKey, forecastCoords.lat, forecastCoords.lng, lang]);
 
   useEffect(() => {
     void loadForecast();

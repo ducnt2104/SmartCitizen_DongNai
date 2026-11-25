@@ -1,4 +1,6 @@
-﻿import { api } from './api';
+﻿import { inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
+import { api } from './api';
+import type { PlaceSuggestion } from './geoClient';
 
 export type WeatherKind = 'sun' | 'partlyCloudy' | 'cloud' | 'rain' | 'heavyRain' | 'storm';
 
@@ -272,5 +274,53 @@ export async function fetchDongNaiWeather(
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onParentAbort);
+  }
+}
+
+interface OpenMeteoGeocodingPayload {
+  results?: Array<{
+    id?: number;
+    name?: string;
+    latitude?: number;
+    longitude?: number;
+    admin1?: string;
+    admin2?: string;
+    country?: string;
+  }>;
+}
+
+/** Tìm tọa độ chính xác tỉnh/thành phố, quận/huyện, địa danh qua Open-Meteo Geocoding API. */
+export async function searchOpenMeteoLocations(
+  query: string,
+  lang: 'vi' | 'en',
+  signal?: AbortSignal,
+): Promise<PlaceSuggestion[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=${lang}&format=json`;
+    const res = await fetch(url, { signal, cache: 'no-store' });
+    if (!res.ok) return [];
+    const data = (await res.json()) as OpenMeteoGeocodingPayload;
+    const out: PlaceSuggestion[] = [];
+    for (const r of data.results ?? []) {
+      if (typeof r.latitude !== 'number' || typeof r.longitude !== 'number' || !r.name) continue;
+      const wardCode = inDongNaiBBox(r.latitude, r.longitude)
+        ? resolveAdminUnit({ lat: r.latitude, lng: r.longitude, rawAddressText: [r.name, r.admin2, r.admin1].filter(Boolean).join(', ') }).wardCode ?? undefined
+        : undefined;
+      const sub = [r.admin2, r.admin1, r.country].filter(Boolean).join(' · ');
+      out.push({
+        id: `omgeo:${r.id ?? out.length}:${r.latitude.toFixed(4)}:${r.longitude.toFixed(4)}`,
+        label: r.name,
+        sublabel: sub || `${r.latitude.toFixed(3)}, ${r.longitude.toFixed(3)}`,
+        kind: 'place',
+        lat: r.latitude,
+        lng: r.longitude,
+        wardCode,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
