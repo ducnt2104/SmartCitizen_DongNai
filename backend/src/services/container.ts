@@ -9,6 +9,7 @@ import { GeoService } from './geo.service';
 import { KeyPoolManager } from './keyPool';
 import { LocalRagService } from './localRag.service';
 import { OtpDeliveryService } from './otpDelivery.service';
+import { FirebasePhoneVerifier, PhoneOtpService } from './otp';
 import { ReportService } from './report.service';
 import { StaffService } from './staff.service';
 import { TrustService } from './trust.service';
@@ -18,6 +19,8 @@ export interface Services {
   audit: AuditService;
   trust: TrustService;
   otpDelivery: OtpDeliveryService;
+  phoneOtp: PhoneOtpService;
+  firebaseVerifier: FirebasePhoneVerifier;
   geo: GeoService;
   keyPool: KeyPoolManager;
   cvEngine: CvEngineService;
@@ -43,18 +46,22 @@ export function createServices(repos: Repositories): Services {
   const gemini = new GeminiService(keyPool);
   gemini.attachLocalEngines(cvEngine, rag);
   const otpDelivery = new OtpDeliveryService();
+  const phoneOtp = new PhoneOtpService();
+  const firebaseVerifier = new FirebasePhoneVerifier();
   const geo = new GeoService();
   return {
     repos,
     audit,
     trust,
     otpDelivery,
+    phoneOtp,
+    firebaseVerifier,
     geo,
     keyPool,
     cvEngine,
     rag,
     gemini,
-    auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit),
+    auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit, phoneOtp),
     reports: new ReportService(repos, gemini, trust, audit, cvEngine),
     staff: new StaffService(repos, gemini, trust, audit),
     chat: new ChatService(repos, rag),

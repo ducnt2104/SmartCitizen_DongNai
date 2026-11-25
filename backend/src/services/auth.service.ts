@@ -19,6 +19,7 @@ import {
   verifyPassword,
 } from '../utils/crypto';
 import type { AuditService } from './audit.service';
+import { parseVnPhone, type ParsedVnPhone, type PhoneOtpService } from './otp';
 import type { OtpChannel, OtpDeliveryService } from './otpDelivery.service';
 import { toProfile, type TrustService } from './trust.service';
 
@@ -43,6 +44,8 @@ export interface IssuedAuth {
 function parseIdentifier(raw: string): { channel: OtpChannel; value: string; masked: string } | null {
   const email = normalizeEmail(raw);
   if (email) return { channel: 'email', value: email, masked: maskEmail(email) };
+  const vnPhone = parseVnPhone(raw);
+  if (vnPhone) return { channel: 'sms', value: vnPhone.local, masked: vnPhone.masked };
   const phone = normalizePhone(raw);
   if (phone) return { channel: 'sms', value: phone, masked: maskPhone(phone) };
   return null;
@@ -51,7 +54,7 @@ function parseIdentifier(raw: string): { channel: OtpChannel; value: string; mas
 /**
  * Hệ thống Xác thực & Quản lý Phiên Thật (Zero Mock Auth / Zero Fake OTP):
  * - Sinh mã OTP 6 số bằng CSPRNG, lưu HMAC-SHA256 + `consumedAt` chống replay.
- * - Gửi đi thật qua OtpDeliveryService (Resend / SMTP / Twilio / eSMS).
+ * - Gửi đi thật qua OtpDeliveryService (Resend / SMTP / Twilio / eSMS) và PhoneOtpService (Multi-Provider +84).
  * - Quản lý phiên bằng Access Token ngắn hạn (15m) + Refresh Token xoay vòng (rotation) lưu HTTP-only Cookie.
  */
 export class AuthService {
@@ -64,6 +67,7 @@ export class AuthService {
     private readonly delivery: OtpDeliveryService,
     private readonly trust: TrustService,
     private readonly audit: AuditService,
+    private readonly phoneOtp?: PhoneOtpService,
   ) {}
 
   private hashOtp(identifier: string, code: string): string {
@@ -236,13 +240,75 @@ export class AuthService {
     return this.issueSession(user, opts.userAgent);
   }
 
-  /** Đặt lại mật khẩu cho công dân sau khi xác thực OTP thật. */
+  /**
+   * Cấp phiên JWT + Refresh Cookie cho công dân sau khi xác thực SĐT Việt Nam (+84) thành công
+   * qua PhoneOtpService hoặc Firebase Phone Auth (`verify-firebase`).
+   */
+  async issueCitizenSessionByPhone(
+    phone: ParsedVnPhone,
+    opts: {
+      name?: string;
+      password?: string;
+      defaultWardCode?: string;
+      userAgent?: string;
+      firebaseUid?: string;
+    } = {},
+  ): Promise<IssuedAuth> {
+    const user = await this.upsertCitizenByPhone(phone.local, opts.name, phone.e164);
+
+    let changed = false;
+    if (opts.name && opts.name.trim().length >= 2) {
+      user.name = opts.name.trim().slice(0, 80);
+      changed = true;
+    }
+    if (opts.password && opts.password.length >= 8) {
+      user.passwordHash = hashPassword(opts.password);
+      changed = true;
+    }
+    if (opts.defaultWardCode && getWard(opts.defaultWardCode)) {
+      user.defaultWardCode = opts.defaultWardCode;
+      changed = true;
+    }
+    if (changed) await this.users.save(user);
+
+    if (opts.firebaseUid) {
+      await this.audit.log(
+        { id: user.id, name: user.name, role: user.role },
+        'auth.firebase_phone_login',
+        user.id,
+        null,
+        { phoneE164: phone.e164, firebaseUid: opts.firebaseUid },
+      );
+    }
+
+    return this.issueSession(user, opts.userAgent);
+  }
+
+  /** Đặt lại mật khẩu cho công dân sau khi xác thực OTP thật (hỗ trợ cả Email OTP & Phone SMS OTP). */
   async resetPassword(identifierRaw: string, code: string, newPassword: string, userAgent?: string): Promise<IssuedAuth> {
+    const parsedPhone = parseVnPhone(identifierRaw);
+    if (parsedPhone && this.phoneOtp) {
+      const challenge = await this.phoneOtp.peekChallenge(parsedPhone.e164);
+      if (challenge) {
+        await this.phoneOtp.verifyPhoneOtp(parsedPhone.e164, code);
+        const user =
+          (await this.users.getByPhone(parsedPhone.local)) ??
+          (await this.users.getByPhone(parsedPhone.e164));
+        if (!user) throw badRequest('Tài khoản chưa được đăng ký trên hệ thống.', 'account_not_found');
+        user.passwordHash = hashPassword(newPassword);
+        await this.users.save(user);
+        await this.sessions.revokeAllForUser(user.id);
+        await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'auth.password_reset', user.id, null, { channel: 'sms' });
+        return this.issueSession(user, userAgent);
+      }
+    }
+
     const parsed = await this.consumeOtpChallenge(identifierRaw, code);
     const user =
       parsed.channel === 'email'
         ? await this.users.getByEmail(parsed.value)
-        : await this.users.getByPhone(parsed.value);
+        : (await this.users.getByPhone(parsed.value)) ??
+          (parsedPhone ? await this.users.getByPhone(parsedPhone.e164) : null);
     if (!user) throw badRequest('Tài khoản chưa được đăng ký trên hệ thống.', 'account_not_found');
     user.passwordHash = hashPassword(newPassword);
     await this.users.save(user);
@@ -264,10 +330,12 @@ export class AuthService {
       throw tooMany('Đăng nhập sai nhiều lần — tạm khóa 15 phút.', 'login_locked');
     }
 
+    const parsedPhone = parseVnPhone(identifierRaw);
     const user =
       parsed.channel === 'email'
         ? await this.users.getByEmail(parsed.value)
-        : await this.users.getByPhone(parsed.value);
+        : (await this.users.getByPhone(parsed.value)) ??
+          (parsedPhone ? await this.users.getByPhone(parsedPhone.e164) : null);
     if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
       const next = { count: (fail?.count ?? 0) + 1, lockedUntil: 0 };
       if (next.count >= OTP_MAX_FAILS) next.lockedUntil = now + OTP_LOCK_MS;
@@ -278,8 +346,10 @@ export class AuthService {
     return this.issueSession(user, userAgent);
   }
 
-  private async upsertCitizenByPhone(phone: string, customName?: string): Promise<UserRecord> {
-    const found = await this.users.getByPhone(phone);
+  private async upsertCitizenByPhone(phone: string, customName?: string, phoneE164?: string): Promise<UserRecord> {
+    const found =
+      (await this.users.getByPhone(phone)) ??
+      (phoneE164 ? await this.users.getByPhone(phoneE164) : null);
     if (found) return found;
     const id = userIdFromPhone(phone);
     const u: UserRecord = {

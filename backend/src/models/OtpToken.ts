@@ -1,24 +1,39 @@
 import mongoose, { Schema, type HydratedDocument, type Model } from 'mongoose';
 
-export const OTP_TOKEN_CHANNELS = ['email', 'sms'] as const;
+export const OTP_TOKEN_CHANNELS = ['email', 'phone', 'sms'] as const;
 export type OtpTokenChannel = (typeof OTP_TOKEN_CHANNELS)[number];
 
 export const OTP_TOKEN_PURPOSES = ['login', 'reset_password', 'verify_phone'] as const;
 export type OtpTokenPurpose = (typeof OTP_TOKEN_PURPOSES)[number];
 
-/** Giữ lại bản ghi OTP tối đa 1 giờ sau khi hết hạn để bắt lỗi replay trước khi MongoDB TTL tự xóa */
-export const OTP_TOKEN_GRACE_TTL_SECONDS = 3600;
+/** Thời gian sống mặc định của mã OTP: đúng 5 phút (300 giây) */
+export const OTP_TOKEN_TTL_SECONDS = 300;
+/** Giữ hằng số tương thích ngược cho các module import cũ */
+export const OTP_TOKEN_GRACE_TTL_SECONDS = 0;
 
 export interface IOtpToken {
-  identifier: string;
+  /** Đích nhận chuẩn hóa: email chữ thường hoặc SĐT E.164 (`+84912345678`) */
+  target: string;
+  /** Alias tương thích ngược với schema cũ */
+  identifier?: string;
   channel: OtpTokenChannel;
   purpose: OtpTokenPurpose;
-  codeHash: string;
-  expiresAt: Date;
+  /** Bản băm SHA-256 (64 ký tự hex) của mã OTP 6 chữ số */
+  otpHash: string;
+  /** Alias tương thích ngược */
+  codeHash?: string;
+  /** Số lần nhập sai liên tiếp trên mã OTP này (quá 5 lần hủy ngay) */
+  attempts: number;
+  failedAttempts?: number;
+  /** Thời điểm cho phép gửi lại mã tiếp theo (cooldown 60s) */
   resendAt: Date;
-  failedAttempts: number;
+  /** Thời điểm mã bị hủy do nhập sai >= 5 lần */
+  invalidatedAt: Date | null;
   lockedUntil: Date | null;
+  /** Thời điểm mã đã được sử dụng thành công (chống replay) */
   consumedAt: Date | null;
+  /** Thời điểm hết hạn (5 phút) — gắn MongoDB TTL Index tự động xóa */
+  expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,22 +42,71 @@ export type OtpTokenDocument = HydratedDocument<IOtpToken>;
 
 const otpTokenSchema = new Schema<IOtpToken>(
   {
-    identifier: {
+    target: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
-      lowercase: true,
+      maxlength: 160,
+      index: true,
+    },
+    identifier: {
+      type: String,
+      trim: true,
       maxlength: 160,
     },
-    channel: { type: String, enum: OTP_TOKEN_CHANNELS, required: true },
-    purpose: { type: String, enum: OTP_TOKEN_PURPOSES, default: 'login', required: true },
-    codeHash: { type: String, required: true, maxlength: 128 },
-    expiresAt: { type: Date, required: true },
-    resendAt: { type: Date, required: true },
-    failedAttempts: { type: Number, default: 0, min: 0, required: true },
-    lockedUntil: { type: Date, default: null },
-    consumedAt: { type: Date, default: null },
+    channel: {
+      type: String,
+      enum: OTP_TOKEN_CHANNELS,
+      required: true,
+    },
+    purpose: {
+      type: String,
+      enum: OTP_TOKEN_PURPOSES,
+      default: 'login',
+      required: true,
+    },
+    otpHash: {
+      type: String,
+      required: true,
+      maxlength: 128,
+    },
+    codeHash: {
+      type: String,
+      maxlength: 128,
+    },
+    attempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+      required: true,
+    },
+    failedAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    resendAt: {
+      type: Date,
+      default: () => new Date(Date.now() + 60_000),
+      required: true,
+    },
+    invalidatedAt: {
+      type: Date,
+      default: null,
+    },
+    lockedUntil: {
+      type: Date,
+      default: null,
+    },
+    consumedAt: {
+      type: Date,
+      default: null,
+    },
+    expiresAt: {
+      type: Date,
+      required: true,
+      default: () => new Date(Date.now() + OTP_TOKEN_TTL_SECONDS * 1000),
+    },
   },
   {
     collection: 'otp_tokens',
@@ -51,8 +115,28 @@ const otpTokenSchema = new Schema<IOtpToken>(
   },
 );
 
-// TTL Index tự động dọn rác otp_tokens đã hết hạn để tiết kiệm dung lượng cụm MongoDB Atlas M0 (512MB)
-otpTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: OTP_TOKEN_GRACE_TTL_SECONDS });
+otpTokenSchema.pre('validate', function syncLegacyAliases() {
+  if (!this.target && this.identifier) {
+    this.target = this.identifier;
+  }
+  if (this.target && !this.identifier) {
+    this.identifier = this.target;
+  }
+  if (!this.otpHash && this.codeHash) {
+    this.otpHash = this.codeHash;
+  }
+  if (this.otpHash && !this.codeHash) {
+    this.codeHash = this.otpHash;
+  }
+  if (typeof this.attempts === 'number') {
+    this.failedAttempts = this.attempts;
+  }
+});
+
+// Compound index tra cứu nhanh mã OTP mới nhất theo kênh + đích nhận
+otpTokenSchema.index({ channel: 1, target: 1, createdAt: -1 });
+// MongoDB TTL Index: tự động xóa bản ghi ngay khi chạm mốc expiresAt (5 phút)
+otpTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const OtpToken: Model<IOtpToken> =
   (mongoose.models.OtpToken as Model<IOtpToken> | undefined) ??
