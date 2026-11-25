@@ -372,121 +372,145 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     const map = mapRef.current;
     if (!map || styleReadySeq === 0) return;
     try {
-      if (!map.getStyle()) return;
+      if (!map.getStyle() || !map.isStyleLoaded()) return;
     } catch {
       return;
     }
 
-    const overlayData = buildOverlaysGeoJson(p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay);
-    const existingOverlay = map.getSource('sc-overlays') as maplibregl.GeoJSONSource | undefined;
-    if (existingOverlay) {
-      existingOverlay.setData(overlayData);
-    } else {
-      map.addSource('sc-overlays', { type: 'geojson', data: overlayData });
-      map.addLayer({
-        id: 'sc-accuracy-fill',
-        type: 'fill',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'accuracy'],
-        paint: { 'fill-color': '#3B82F6', 'fill-opacity': 0.14 },
-      });
-      map.addLayer({
-        id: 'sc-accuracy-line',
-        type: 'line',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'accuracy'],
-        paint: { 'line-color': '#0B57D0', 'line-width': 1.5, 'line-dasharray': [3, 3] },
-      });
-      map.addLayer({
-        id: 'sc-radius-fill',
-        type: 'fill',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'radius'],
-        paint: { 'fill-color': '#0B57D0', 'fill-opacity': 0.06 },
-      });
-      map.addLayer({
-        id: 'sc-radius-line',
-        type: 'line',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'radius'],
-        paint: { 'line-color': '#0B57D0', 'line-width': 1.5 },
-      });
-      map.addLayer({
-        id: 'sc-arterial-line',
-        type: 'line',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'arterial'],
-        paint: {
-          'line-color': '#F59E0B',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 2.8, 18, 4],
-          'line-opacity': 0.68,
-          'line-dasharray': [4, 2],
-        },
-      });
-      map.addLayer({
-        id: 'sc-rescue-route-casing',
-        type: 'line',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'rescue_route'],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#0D47A1', 'line-width': 9, 'line-opacity': 0.9 },
-      });
-      map.addLayer({
-        id: 'sc-rescue-route-line',
-        type: 'line',
-        source: 'sc-overlays',
-        filter: ['==', ['get', 'kind'], 'rescue_route'],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#1A73E8', 'line-width': 6, 'line-opacity': 0.98 },
-      });
-    }
+    try {
+      const overlayData = buildOverlaysGeoJson(p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay);
+      const existingOverlay = map.getSource('sc-overlays') as maplibregl.GeoJSONSource | undefined;
+      if (existingOverlay) {
+        existingOverlay.setData(overlayData);
+      } else {
+        map.addSource('sc-overlays', { type: 'geojson', data: overlayData });
+        map.addLayer({
+          id: 'sc-accuracy-fill',
+          type: 'fill',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'accuracy'],
+          paint: { 'fill-color': '#3B82F6', 'fill-opacity': 0.14 },
+        });
+        map.addLayer({
+          id: 'sc-accuracy-line',
+          type: 'line',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'accuracy'],
+          paint: { 'line-color': '#0B57D0', 'line-width': 1.5, 'line-dasharray': [3, 3] },
+        });
+        map.addLayer({
+          id: 'sc-radius-fill',
+          type: 'fill',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'radius'],
+          paint: { 'fill-color': '#0B57D0', 'fill-opacity': 0.06 },
+        });
+        map.addLayer({
+          id: 'sc-radius-line',
+          type: 'line',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'radius'],
+          paint: { 'line-color': '#0B57D0', 'line-width': 1.5 },
+        });
+        map.addLayer({
+          id: 'sc-arterial-line',
+          type: 'line',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'arterial'],
+          paint: {
+            'line-color': '#F59E0B',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 2.8, 18, 4],
+            'line-opacity': 0.68,
+            'line-dasharray': [4, 2],
+          },
+        });
+        map.addLayer({
+          id: 'sc-rescue-route-casing',
+          type: 'line',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'rescue_route'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#0D47A1', 'line-width': 9, 'line-opacity': 0.9 },
+        });
+        map.addLayer({
+          id: 'sc-rescue-route-line',
+          type: 'line',
+          source: 'sc-overlays',
+          filter: ['==', ['get', 'kind'], 'rescue_route'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#1A73E8', 'line-width': 6, 'line-opacity': 0.98 },
+        });
+      }
 
-    const heatData = p.mode === 'heat' ? buildHeatmapGeoJson(p.reports) : { type: 'FeatureCollection' as const, features: [] };
-    const existingHeat = map.getSource('sc-heat') as maplibregl.GeoJSONSource | undefined;
-    if (existingHeat) {
-      existingHeat.setData(heatData);
-    } else {
-      map.addSource('sc-heat', { type: 'geojson', data: heatData });
-      map.addLayer({
-        id: 'sc-heat-layer',
-        type: 'heatmap',
-        source: 'sc-heat',
-        paint: {
-          'heatmap-weight': ['coalesce', ['get', 'weight'], 0.6],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 7, 1, 15, 2.5],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 7, 18, 15, 34],
-          'heatmap-opacity': 0.8,
-          'heatmap-color': [
-            'interpolate',
-            ['linear'],
-            ['heatmap-density'],
-            0,
-            'rgba(56, 189, 248, 0)',
-            0.25,
-            '#38bdf8',
-            0.5,
-            '#facc15',
-            0.75,
-            '#fb923c',
-            1,
-            '#e11d48',
-          ],
-        },
-      });
+      const heatData = p.mode === 'heat' ? buildHeatmapGeoJson(p.reports) : { type: 'FeatureCollection' as const, features: [] };
+      const existingHeat = map.getSource('sc-heat') as maplibregl.GeoJSONSource | undefined;
+      if (existingHeat) {
+        existingHeat.setData(heatData);
+      } else {
+        map.addSource('sc-heat', { type: 'geojson', data: heatData });
+        map.addLayer({
+          id: 'sc-heat-layer',
+          type: 'heatmap',
+          source: 'sc-heat',
+          paint: {
+            'heatmap-weight': ['coalesce', ['get', 'weight'], 0.6],
+            'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 7, 1, 15, 2.5],
+            'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 7, 18, 15, 34],
+            'heatmap-opacity': 0.8,
+            'heatmap-color': [
+              'interpolate',
+              ['linear'],
+              ['heatmap-density'],
+              0,
+              'rgba(56, 189, 248, 0)',
+              0.25,
+              '#38bdf8',
+              0.5,
+              '#facc15',
+              0.75,
+              '#fb923c',
+              1,
+              '#e11d48',
+            ],
+          },
+        });
+      }
+    } catch {
+      // Sẽ tự động chạy lại ngay khi sự kiện style.load tăng styleReadySeq
     }
   }, [styleReadySeq, p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay, p.mode, p.reports]);
 
-  // Tự động fitBounds khi chọn sự cố mới (nếu không bật preserveViewport trong chế độ bám đuôi GPS)
+  // Tự động fitBounds an toàn theo kích thước khung nhìn thực tế khi chọn sự cố mới
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !p.routeOverlay || p.routeOverlay.preserveViewport) return;
+    const el = containerRef.current;
+    if (!map || !el || !p.routeOverlay || p.routeOverlay.preserveViewport) return;
+    if (el.clientWidth < 80 || el.clientHeight < 80) return;
+
     const bounds = new maplibregl.LngLatBounds();
     bounds.extend([p.routeOverlay.origin.lng, p.routeOverlay.origin.lat]);
     bounds.extend([p.routeOverlay.destination.lng, p.routeOverlay.destination.lat]);
     if (p.routeOverlay.fallbackPath) {
       for (const pt of p.routeOverlay.fallbackPath) bounds.extend([pt.lng, pt.lat]);
     }
-    map.fitBounds(bounds, { padding: { top: 140, bottom: 230, left: 56, right: 56 }, maxZoom: 16.5, duration: 420 });
+
+    const padTop = Math.min(130, Math.max(24, Math.floor(el.clientHeight * 0.18)));
+    const padBottom = Math.min(210, Math.max(32, Math.floor(el.clientHeight * 0.26)));
+    const padSide = Math.min(56, Math.max(20, Math.floor(el.clientWidth * 0.08)));
+
+    try {
+      map.fitBounds(bounds, {
+        padding: { top: padTop, bottom: padBottom, left: padSide, right: padSide },
+        maxZoom: 16.5,
+        duration: 420,
+      });
+    } catch {
+      map.easeTo({
+        center: [p.routeOverlay.destination.lng, p.routeOverlay.destination.lat],
+        zoom: 15,
+        duration: 320,
+      });
+    }
   }, [
     p.routeOverlay?.destination.lat,
     p.routeOverlay?.destination.lng,
