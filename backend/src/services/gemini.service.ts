@@ -1,5 +1,10 @@
-import type { GoogleGenAI } from '@google/genai' with { 'resolution-mode': 'import' };
 import { z } from 'zod';
+
+interface GeminiRestGenerateParams {
+  model?: string;
+  contents: unknown;
+  config?: Record<string, unknown>;
+}
 import {
   computeSosPriorityScore,
   DEPARTMENT_BY_CATEGORY,
@@ -353,8 +358,6 @@ function inferSuggestedOtherLabel(text: string): string {
   return 'Sự cố trật tự & hạ tầng công cộng khác';
 }
 
-type GoogleGenAIConstructor = new (opts: { apiKey: string; vertexai?: boolean }) => GoogleGenAI;
-
 /** Tự động nhận diện Vertex AI Express Mode API Key (`AQ....`) để định tuyến sang `aiplatform.googleapis.com` thay vì `generativelanguage.googleapis.com`. */
 export function buildGoogleGenAiClientOptions(apiKey: string): { apiKey: string; vertexai?: boolean } {
   const clean = apiKey.trim();
@@ -369,12 +372,10 @@ export function buildGoogleGenAiClientOptions(apiKey: string): { apiKey: string;
  *  1) Multi-Key Cloud Pool (`gemini-2.5-flash` -> `gemini-2.0-flash`, OpenRouter, Groq) có Zod validation chặt.
  *  2) Rust Native CV Engine (:8001) cho thẩm định ảnh giả/screenshot & nghiệm thu Trước–Sau (<50ms).
  *  3) Local LLM (Ollama :11434 / llama.cpp) + BM25 RAG.
- *  4) Deterministic Rule-Based SOP Fallback đảm bảo 100% không bao giờ văng lỗi 500 khi demo.
+ *  4) Deterministic Rule-Based SOP Fallback đảm bảo 100% không bao giờ văng lỗi 500 trong vận hành thực tế.
  */
 export class GeminiService {
   readonly keyPool: KeyPoolManager;
-  private sdkConstructorPromise: Promise<GoogleGenAIConstructor> | null = null;
-  private readonly clientCache = new Map<string, GoogleGenAI>();
   private readonly cache = new LruCache<string, VisionResult>(500, 24 * 3600 * 1000);
   private readonly briefingCache = new LruCache<string, TacticalBriefing>(500, 6 * 3600 * 1000);
   private readonly chatFaqCache = new LruCache<string, string>(300, 10 * 60 * 1000);
@@ -441,31 +442,6 @@ export class GeminiService {
     };
   }
 
-  private async getGeminiClient(apiKey: string): Promise<GoogleGenAI> {
-    const cached = this.clientCache.get(apiKey);
-    if (cached) return cached;
-
-    if (!this.sdkConstructorPromise) {
-      this.sdkConstructorPromise = import('@google/genai')
-        .then((m) => m.GoogleGenAI as unknown as GoogleGenAIConstructor)
-        .catch((err) => {
-          this.sdkConstructorPromise = null;
-          throw new Error(
-            `Không nạp được @google/genai: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-    }
-
-    const Ctor = await this.sdkConstructorPromise;
-    if (this.clientCache.size >= 64) {
-      const oldestKey = this.clientCache.keys().next().value;
-      if (oldestKey) this.clientCache.delete(oldestKey);
-    }
-    const client = new Ctor(buildGoogleGenAiClientOptions(apiKey));
-    this.clientCache.set(apiKey, client);
-    return client;
-  }
-
   /**
    * Gọi trực tiếp REST endpoint tương ứng với từng định dạng API key:
    * - `AIza...`: `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
@@ -474,7 +450,7 @@ export class GeminiService {
   private async callGeminiRestByKeyKind(
     apiKey: string,
     modelId: string,
-    params: Parameters<GoogleGenAI['models']['generateContent']>[0],
+    params: GeminiRestGenerateParams,
     timeoutMs: number,
     label: string,
   ): Promise<string> {
@@ -553,7 +529,7 @@ export class GeminiService {
    */
   private async generateGeminiWithModelChain(
     apiKey: string,
-    buildParams: (modelId: string) => Parameters<GoogleGenAI['models']['generateContent']>[0],
+    buildParams: (modelId: string) => GeminiRestGenerateParams,
     timeoutMs: number,
     label: string,
   ): Promise<{ text: string; modelUsed: string }> {

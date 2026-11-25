@@ -118,26 +118,33 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
     ).toBe(true);
   });
 
-  it('migrateIndexes + seed nạp đúng 95 xã/phường (23 phường, 72 xã NQ 1662), 64 sự cố P. Trấn Biên & 1 Super Admin hoàn toàn idempotent', async () => {
+  it('migrateIndexes + seed mặc định KHÔNG bơm sự cố giả (AUTO_SEED_DEMO_REPORTS=false), chỉ giữ 95 Phường/Xã + 1 ADMIN idempotent', async () => {
     const migrated = await migrateDatabaseIndexes({ uri: mongoUri });
     expect(migrated.length).toBeGreaterThanOrEqual(10);
 
-    const run1 = await runProductionSeed({ uri: mongoUri });
+    // Mặc định Production: 0 sự cố mẫu, đủ 95 ĐVHC và 1 tài khoản ADMIN
+    const cleanRun = await runProductionSeed({ uri: mongoUri });
+    expect(cleanRun.wardsTotal).toBe(95);
+    expect(cleanRun.wardsPhuongNq1662).toBe(23);
+    expect(cleanRun.wardsXaNq1662).toBe(72);
+    expect(cleanRun.tranBienPilotTotal).toBe(0);
+    expect(cleanRun.tranBienInsertedNew).toBe(0);
+    expect(cleanRun.superAdminCreated).toBe(true);
+
+    // Khi bật tường minh includeDemo: true -> nạp idempotent 64 bản ghi phục vụ kiểm thử không gian/chỉ mục
+    const run1 = await runProductionSeed({ uri: mongoUri, includeDemo: true });
     expect(run1.wardsTotal).toBe(95);
-    expect(run1.wardsPhuongNq1662).toBe(23);
-    expect(run1.wardsXaNq1662).toBe(72);
     expect(run1.tranBienPilotTotal).toBe(64);
     expect(run1.tranBienInsertedNew).toBe(64);
-    expect(run1.superAdminCreated).toBe(true);
+    expect(run1.superAdminCreated).toBe(false);
 
-    // Chạy lại lần 2 -> không sinh thêm bản ghi trùng lặp và không tạo lại Super Admin
-    const run2 = await runProductionSeed({ uri: mongoUri });
+    // Chạy lại lần nữa -> không sinh thêm bản ghi trùng lặp
+    const run2 = await runProductionSeed({ uri: mongoUri, includeDemo: true });
     expect(run2.wardsTotal).toBe(95);
     expect(run2.tranBienPilotTotal).toBe(64);
     expect(run2.tranBienInsertedNew).toBe(0);
     expect(run2.superAdminCreated).toBe(false);
 
-    // Kết nối lại kiểm tra truy vấn thực tế trên 64 sự cố thí điểm Trấn Biên
     await connectDatabase({ uri: mongoUri, ensureIndexes: false });
     const health = await getDatabaseHealth();
     expect(health.ok).toBe(true);
@@ -146,7 +153,6 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
     expect(health.totalIncidents).toBe(64);
     expect(health.totalUsers).toBeGreaterThanOrEqual(1);
 
-    // Kiểm tra sự cố danh mục OTHER có customCategoryLabel, aiEvaluation và imageFingerprints
     const otherIncidents = await incidentRepository.listForIocDashboard({
       wardCode: 'DN-TB',
       category: 'OTHER',
@@ -158,7 +164,7 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
     expect(otherIncidents[0].imageFingerprints.length).toBeGreaterThan(0);
 
     // Kiểm tra song song 8 request Outbox cùng syncId -> chỉ đúng 1 bản ghi được tạo (Idempotent Write)
-    const admin = await User.findOne({ role: 'super_admin' }).lean();
+    const admin = await User.findOne({ role: 'admin' }).lean();
     expect(admin).toBeTruthy();
     const burstSyncId = 'outbox-concurrent-burst-001';
     const results = await Promise.all(

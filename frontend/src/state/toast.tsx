@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, Info, KeyRound, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
-export type ToastKind = 'info' | 'success' | 'error' | 'demo';
+export type ToastKind = 'info' | 'success' | 'error';
 interface ToastItem {
   id: number;
   kind: ToastKind;
@@ -15,14 +15,13 @@ interface Ctx {
 
 const ToastContext = createContext<Ctx | null>(null);
 
-const ICON = { info: Info, success: CheckCircle2, error: AlertTriangle, demo: KeyRound } as const;
+const ICON = { info: Info, success: CheckCircle2, error: AlertTriangle } as const;
 const TONE: Record<ToastKind, string> = {
   info: 'border-brand/40 bg-surface',
   success: 'border-ok/50 bg-surface',
   error: 'border-danger/60 bg-surface',
-  demo: 'border-warn/60 bg-warn-soft',
 };
-const ICON_TONE: Record<ToastKind, string> = { info: 'text-brand', success: 'text-ok', error: 'text-danger', demo: 'text-warn' };
+const ICON_TONE: Record<ToastKind, string> = { info: 'text-brand', success: 'text-ok', error: 'text-danger' };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
@@ -30,7 +29,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback((id: number) => setItems((l) => l.filter((x) => x.id !== id)), []);
   const toast = useCallback(
-    (kind: ToastKind, title: string, text?: string, ttlMs = kind === 'demo' ? 20000 : 5000) => {
+    (kind: ToastKind, title: string, text?: string, ttlMs = 5000) => {
       const id = ++seq.current;
       setItems((l) => [...l.slice(-3), { id, kind, title, text }]);
       window.setTimeout(() => dismiss(id), ttlMs);

@@ -27,6 +27,8 @@ services:
         sync: false
       - key: ALLOW_JSON_FALLBACK
         value: "false"
+      - key: AUTO_SEED_DEMO_REPORTS
+        value: "false"
       - key: ALLOW_CLOUD_AI_FALLBACK
         value: "true"
       - key: GEMINI_API_KEYS

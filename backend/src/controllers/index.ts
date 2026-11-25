@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
+import { normalizeRole } from '../shared/constants';
 import { normalizeCoordinates } from '../shared/coordinates';
 import { DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { toClientReport } from '../shared/report';
 import type { ReportStatus } from '../shared/types';
+import { purgeDemoData } from '../data/seedStore';
 import { clearAuthCookies, readCookie, REFRESH_COOKIE, setAuthCookies } from '../middleware/auth';
 import type { BoundingBoxQuery } from '../repositories/types';
 import { isAdminRole } from '../services/access';
@@ -74,8 +76,9 @@ export function authController(s: Services) {
       res.json(issued.session);
     },
     staffLogin: async (req: Request, res: Response) => {
-      const { staffCode, password, unit } = body(req, 'staffLogin');
-      const issued = await s.auth.staffLogin(staffCode, password, unit, req.get('user-agent') ?? '');
+      const b = body(req, 'staffLogin');
+      const target = (b.staffCode ?? b.identifier ?? '').trim();
+      const issued = await s.auth.staffLogin(target, b.password, b.unit, req.get('user-agent') ?? '');
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
@@ -188,8 +191,8 @@ export function reportController(s: Services) {
     },
     create: async (req: Request, res: Response) => {
       const u = req.user!;
-      if (u.role !== 'citizen' && u.role !== 'volunteer') {
-        throw forbidden('Tài khoản cán bộ / đội cứu hộ không gửi phản ánh công dân trực tiếp.');
+      if (normalizeRole(u.role) !== 'citizen') {
+        throw forbidden('Tài khoản nội bộ (Quản trị / Cán bộ / Đội cứu hộ) không gửi phản ánh công dân trực tiếp.');
       }
       const result = await s.reports.create(u, body(req, 'createReport') as CreateReportInput);
       res.status(result.outcome === 'duplicate_submit' ? 200 : 201).json(result);
@@ -252,12 +255,18 @@ export function rescueController(s: Services) {
         }),
       );
     },
+    accept: async (req: Request, res: Response) => {
+      const b = body(req, 'rescueAccept');
+      res.json(await s.staff.acceptRescueMission(req.user!, String(req.params.id), b.lat, b.lng));
+    },
     updateStatus: async (req: Request, res: Response) => {
       const b = body(req, 'rescueStatus');
-      const rawStep = (b.status ?? b.step ?? 'accepted').toLowerCase();
+      const rawStep = (b.status ?? b.step ?? 'en_route').toLowerCase();
       const normalizedStep = (rawStep === 'completed' ? 'resolved' : rawStep) as
         | 'accepted'
         | 'en_route'
+        | 'arrived'
+        | 'in_progress'
         | 'on_site'
         | 'resolved';
       res.json(
@@ -271,6 +280,23 @@ export function rescueController(s: Services) {
           b.afterPhoto,
           b.override,
           b.edge,
+        ),
+      );
+    },
+    release: async (req: Request, res: Response) => {
+      const b = body(req, 'rescueRelease');
+      res.json(await s.staff.releaseRescueMission(req.user!, String(req.params.id), b.reason, b.lat, b.lng));
+    },
+    updateLocation: async (req: Request, res: Response) => {
+      const b = body(req, 'rescueLocation');
+      res.json(
+        await s.staff.updateRescueMissionLocation(
+          req.user!,
+          String(req.params.id),
+          b.lat,
+          b.lng,
+          b.heading ?? null,
+          b.speed ?? null,
         ),
       );
     },
@@ -405,6 +431,10 @@ export function adminController(s: Services) {
         next,
       );
       res.json(next);
+    },
+    purgeDemo: async (req: Request, res: Response) => {
+      const summary = await purgeDemoData(s.repos, s.audit, req.user!);
+      res.json(summary);
     },
     export: async (req: Request, res: Response) => {
       const format = req.query.format === 'json' ? 'json' : 'csv';

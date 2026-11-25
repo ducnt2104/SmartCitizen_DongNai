@@ -267,6 +267,26 @@ h1, h2, h3, h4 { line-height: 1.35; }
   pointer-events: none;
   animation: scPulseRing 1.8s cubic-bezier(0.23, 1, 0.32, 1) infinite;
 }
+.sc-map-pin-dest {
+  width: 42px;
+  height: 50px;
+  z-index: 45;
+}
+.sc-dest-pin-pulse {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  background: rgba(225, 29, 72, 0.22);
+  border: 2.5px solid #fb7185;
+  pointer-events: none;
+  animation: scPulseRing 1.9s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+.sc-dest-pin-pulse-delay {
+  animation-delay: 0.9s;
+}
 .sc-map-pin-badge {
   position: absolute;
   top: -5px;
@@ -350,13 +370,13 @@ h1, h2, h3, h4 { line-height: 1.35; }
   position: relative;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 9999px;
   background: #1a73e8;
   border: 3px solid #ffffff;
-  box-shadow: 0 3px 12px rgba(13, 71, 161, 0.65);
-  transition: transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
+  box-shadow: 0 4px 14px rgba(13, 71, 161, 0.72);
+  will-change: transform;
 }
 .maplibregl-map {
   font-family: inherit;

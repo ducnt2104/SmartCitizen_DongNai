@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { nearestWard } from '@shared/geo';
+import { normalizeRole } from '@shared/constants';
 import type { Category, ClientReport, VisionResult } from '@shared/types';
 import { CameraCapture } from '../components/CameraCapture';
 import { PrecisionLocationPicker, type ResolvedGeoState } from '../components/map';
@@ -89,7 +90,7 @@ export default function ReportPage() {
   const { settings } = useSettings();
   const { requireAuth } = useAuthGate();
   const [params] = useSearchParams();
-  const proxy = params.get('proxy') === '1' && session?.user?.role === 'volunteer';
+  const proxy = params.get('proxy') === '1' && Boolean(session?.user && normalizeRole(session.user.role) === 'officer');
   const autoCapture = params.get('capture') === '1';
 
   const [step, setStep] = useState(1);
@@ -312,19 +313,19 @@ export default function ReportPage() {
     setLocalDup(null);
   };
 
+  const currentRole = session?.user ? normalizeRole(session.user.role) : null;
   if (
-    session?.user &&
-    (session.user.role === 'ward_officer' ||
-      session.user.role === 'city_admin' ||
-      session.user.role === 'super_admin' ||
-      session.user.role === 'rescue_team')
+    !proxy &&
+    (currentRole === 'officer' ||
+      currentRole === 'admin' ||
+      currentRole === 'rescue')
   ) {
     return (
       <div className="card p-6 text-center">
         <ShieldAlert className="mx-auto h-10 w-10 text-warn" aria-hidden />
         <p className="mt-2 font-bold">{t('report.staffBlocked')}</p>
-        <Link to={session.user.role === 'rescue_team' ? '/rescue' : '/admin'} className="btn btn-primary mt-4">
-          {session.user.role === 'rescue_team' ? 'Vào Cổng Tác Chiến Đội Cứu Hộ' : t('nav.admin')}
+        <Link to={currentRole === 'rescue' ? '/rescue' : currentRole === 'officer' ? '/ioc' : '/admin'} className="btn btn-primary mt-4">
+          {currentRole === 'rescue' ? 'Vào Cổng Tác Chiến Đội Cứu Hộ' : t('nav.admin')}
         </Link>
       </div>
     );

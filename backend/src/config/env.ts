@@ -173,10 +173,14 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   const ollamaModel = readTrimmed(source, 'OLLAMA_MODEL') || 'qwen2.5:3b';
   const llamaCppBaseUrl = readTrimmed(source, 'LLAMA_CPP_BASE_URL') ?? '';
 
-  // Super Admin bootstrap (không hardcode mật khẩu nhạy cảm trong client)
-  const superAdminCode = readTrimmed(source, 'SUPER_ADMIN_CODE') || 'SUPER-ADMIN';
-  const superAdminEmail = readTrimmed(source, 'SUPER_ADMIN_EMAIL') || 'superadmin@dongnai.gov.vn';
-  const superAdminPassword = readTrimmed(source, 'SUPER_ADMIN_PASSWORD') ?? '';
+  // Quản trị viên khởi tạo (ADMIN bootstrap — không hardcode mật khẩu nhạy cảm trong client)
+  const superAdminCode =
+    readTrimmed(source, 'ADMIN_CODE') || readTrimmed(source, 'SUPER_ADMIN_CODE') || 'SUPER-ADMIN';
+  const superAdminEmail =
+    readTrimmed(source, 'ADMIN_EMAIL') || readTrimmed(source, 'SUPER_ADMIN_EMAIL') || 'superadmin@dongnai.gov.vn';
+  const superAdminPassword =
+    readTrimmed(source, 'ADMIN_PASSWORD') ?? readTrimmed(source, 'SUPER_ADMIN_PASSWORD') ?? '';
+  const autoSeedDemoReports = parseBoolEnv(source, 'AUTO_SEED_DEMO_REPORTS', false, issues);
 
   const mongoUri = readTrimmed(source, 'MONGODB_URI') ?? '';
   if (mongoUri !== '' && !/^mongodb(\+srv)?:\/\/.+/.test(mongoUri)) {
@@ -302,6 +306,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     superAdminCode,
     superAdminEmail,
     superAdminPassword,
+    autoSeedDemoReports,
     mongoUri,
     allowJsonFallback,
     jwtSecret,

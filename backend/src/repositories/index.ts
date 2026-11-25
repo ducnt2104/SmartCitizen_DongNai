@@ -141,10 +141,14 @@ async function syncBidirectionalWithAtlas(
           else await mongoRepos.users.save(item.payload as UserRecord);
           break;
         case 'reports': {
-          const rep = item.payload as Report;
-          const existing = await mongoRepos.reports.get(rep.id);
-          if (existing) await mongoRepos.reports.update(rep);
-          else await mongoRepos.reports.insert(rep);
+          if (item.deleted) {
+            await mongoRepos.reports.delete(item.id);
+          } else {
+            const rep = item.payload as Report;
+            const existing = await mongoRepos.reports.get(rep.id);
+            if (existing) await mongoRepos.reports.update(rep);
+            else await mongoRepos.reports.insert(rep);
+          }
           break;
         }
         case 'otps':
@@ -337,6 +341,31 @@ export function createNonBlockingServerRepositories(options?: CreateRepositories
           () => hydrateCollectionItem('reports', report.id, report),
           () => localRepos.reports.update(report),
         ),
+      delete: (id) =>
+        writeResilient(
+          (m) => m.reports.delete(id),
+          () => {
+            void localRepos.reports.delete(id);
+            localRepos.clearDirtyEntry('reports', id);
+          },
+          () => localRepos.reports.delete(id),
+        ),
+      claimRescueMission: async (id, claim) => {
+        if (isMongoLive() && mongoRepos) {
+          try {
+            const claimed = await mongoRepos.reports.claimRescueMission(id, claim);
+            if (claimed) hydrateCollectionItem('reports', claimed.id, claimed);
+            return claimed;
+          } catch (err) {
+            if (isTransientMongoRuntimeError(err)) {
+              handleMongoDegraded(err);
+              return localRepos.reports.claimRescueMission(id, claim);
+            }
+            throw err;
+          }
+        }
+        return localRepos.reports.claimRescueMission(id, claim);
+      },
       findNearby: (q) => readResilient((m) => m.reports.findNearby(q), () => localRepos.reports.findNearby(q)),
       findSince: (sinceIso) =>
         readResilient((m) => m.reports.findSince(sinceIso), () => localRepos.reports.findSince(sinceIso)),

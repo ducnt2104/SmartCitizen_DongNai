@@ -1,7 +1,16 @@
 import mongoose from 'mongoose';
-import { computeSosPriorityScore, toSeverityLabel } from '../shared/constants';
+import { computeSosPriorityScore, legacyRolesFor, normalizeRole, toSeverityLabel } from '../shared/constants';
 import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint } from '../shared/coordinates';
-import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
+import type {
+  AuditEntry,
+  DynamicAiConfig,
+  Report,
+  ReportStatus,
+  RescueMissionState,
+  RescueStageCode,
+  Role,
+  TimelineEvent,
+} from '../shared/types';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import {
   AiConfigModel,
@@ -9,6 +18,7 @@ import {
   AuditLogModel,
   computePriorityScore,
   ImageFingerprintModel,
+  Incident,
   normalizeSparseString,
   OtpModel,
   ReportModel,
@@ -19,6 +29,7 @@ import type {
   AiConfigRepository,
   AiEvaluationRecord,
   AiEvaluationRepository,
+  AtomicRescueClaimInput,
   AuditRepository,
   DbHealthStats,
   FingerprintRepository,
@@ -46,6 +57,39 @@ function strip<T>(doc: Doc | null): T | null {
   return rest as T;
 }
 
+const MONGO_TO_REPORT_STATUS: Record<string, ReportStatus> = {
+  received: 'received',
+  verifying: 'verifying',
+  processing: 'processing',
+  resolved: 'resolved',
+  quarantined: 'quarantined',
+  rejected: 'rejected',
+  PENDING: 'received',
+  VERIFIED: 'verifying',
+  DISPATCHED: 'processing',
+  EN_ROUTE: 'processing',
+  ARRIVED: 'processing',
+  IN_PROGRESS: 'processing',
+  RESOLVED: 'resolved',
+};
+
+function expandMongoStatuses(statuses: ReportStatus[]): string[] {
+  const out = new Set<string>();
+  for (const s of statuses) {
+    out.add(s);
+    if (s === 'received') out.add('PENDING');
+    if (s === 'verifying') out.add('VERIFIED');
+    if (s === 'processing') {
+      out.add('DISPATCHED');
+      out.add('EN_ROUTE');
+      out.add('ARRIVED');
+      out.add('IN_PROGRESS');
+    }
+    if (s === 'resolved') out.add('RESOLVED');
+  }
+  return [...out];
+}
+
 function reportFromDoc(doc: Doc | null): Report | null {
   if (!doc) return null;
   const { location, imageHash, syncId, customCategoryLabel, ...rest } = doc;
@@ -55,6 +99,16 @@ function reportFromDoc(doc: Doc | null): Report | null {
   const parsedGeo = fromGeoJsonPoint(location as { type?: string; coordinates?: readonly number[] } | undefined);
   const base = strip<Report>(rest);
   if (!base) return null;
+  const rawStatus = String(doc.status ?? 'received');
+  base.status = MONGO_TO_REPORT_STATUS[rawStatus] ?? 'received';
+  if (!base.rescueStatus && ['PENDING', 'VERIFIED', 'DISPATCHED', 'EN_ROUTE', 'ARRIVED', 'IN_PROGRESS', 'RESOLVED'].includes(rawStatus)) {
+    base.rescueStatus = rawStatus as RescueStageCode;
+  }
+  if (doc.acceptedAt instanceof Date) {
+    base.acceptedAt = doc.acceptedAt.toISOString();
+  } else if (typeof doc.acceptedAt === 'string') {
+    base.acceptedAt = doc.acceptedAt;
+  }
   if (parsedGeo && (!Number.isFinite(base.lat) || !Number.isFinite(base.lng))) {
     base.lat = parsedGeo.lat;
     base.lng = parsedGeo.lng;
@@ -85,8 +139,19 @@ function reportToDoc(r: Report): Doc {
     });
   const severityLabel =
     r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
+
+  const mongoStatus =
+    r.status === 'processing' && r.rescueStatus && ['EN_ROUTE', 'ARRIVED', 'IN_PROGRESS'].includes(r.rescueStatus)
+      ? r.rescueStatus
+      : r.status;
+
   return {
     ...r,
+    status: mongoStatus,
+    rescueStatus: r.rescueStatus ?? null,
+    assignedRescueId: r.assignedRescueId ?? r.rescueMission?.assignedTeamId ?? null,
+    assignedRescueName: r.assignedRescueName ?? r.rescueMission?.assignedTeamName ?? null,
+    acceptedAt: r.acceptedAt ? new Date(r.acceptedAt) : null,
     lat: safeLat,
     lng: safeLng,
     ...(syncId ? { syncId } : {}),
@@ -104,7 +169,8 @@ class MongoReportRepo implements ReportRepository {
       filter.wardCode = q.wardCodes.length === 1 ? q.wardCodes[0] : { $in: q.wardCodes };
     }
     if (q.statuses?.length) {
-      filter.status = q.statuses.length === 1 ? q.statuses[0] : { $in: q.statuses };
+      const expanded = expandMongoStatuses(q.statuses);
+      filter.status = expanded.length === 1 ? expanded[0] : { $in: expanded };
     }
     if (q.category) filter.category = String(q.category);
     if (q.reporterId) {
@@ -153,6 +219,109 @@ class MongoReportRepo implements ReportRepository {
     if (res.matchedCount === 0) throw new Error(`Không tìm thấy hồ sơ ${report.id} để cập nhật`);
   }
 
+  async delete(id: string): Promise<boolean> {
+    const res = await ReportModel.deleteOne({ id: String(id) });
+    return (res.deletedCount ?? 0) > 0;
+  }
+
+  async claimRescueMission(id: string, claim: AtomicRescueClaimInput): Promise<Report | null> {
+    const idCondition = mongoose.Types.ObjectId.isValid(id)
+      ? { $or: [{ id: String(id) }, { _id: new mongoose.Types.ObjectId(id) }] }
+      : { id: String(id) };
+
+    const acceptedDate = new Date(claim.nowIso);
+    const hasCoords = typeof claim.lat === 'number' && typeof claim.lng === 'number';
+    const nextMission: RescueMissionState = {
+      status: 'en_route',
+      stageCode: 'EN_ROUTE',
+      assignedTeamId: claim.teamId,
+      assignedTeamName: claim.teamName,
+      assignedTeamCode: claim.teamCode,
+      acceptedAt: claim.nowIso,
+      enRouteAt: claim.nowIso,
+      arrivedAt: null,
+      inProgressAt: null,
+      onSiteAt: null,
+      completedAt: null,
+      lastLat: hasCoords ? claim.lat! : null,
+      lastLng: hasCoords ? claim.lng! : null,
+      lastHeading: null,
+      lastSpeedKmh: null,
+      lastLocationUpdatedAt: hasCoords ? claim.nowIso : null,
+      note: '',
+    };
+    const timelineEntry: TimelineEvent = {
+      stage: 'processing',
+      at: claim.nowIso,
+      note: `[Đội Cứu Hộ ${claim.teamCode ?? claim.teamName}] Đã tiếp nhận đơn & xuất phát tới hiện trường.`,
+    };
+
+    const claimedDoc = (await ReportModel.findOneAndUpdate(
+      {
+        $and: [
+          idCondition,
+          { status: { $in: ['received', 'verifying', 'processing', 'PENDING', 'VERIFIED', 'DISPATCHED'] } },
+          { $or: [{ assignedRescueId: null }, { assignedRescueId: { $exists: false } }] },
+          {
+            $or: [
+              { rescueMission: null },
+              { rescueMission: { $exists: false } },
+              { 'rescueMission.assignedTeamId': null },
+              { 'rescueMission.status': 'unassigned' },
+            ],
+          },
+        ],
+      },
+      {
+        $set: {
+          status: 'EN_ROUTE',
+          rescueStatus: 'EN_ROUTE',
+          assignedRescueId: claim.teamId,
+          assignedRescueName: claim.teamName,
+          acceptedAt: acceptedDate,
+          rescueMission: nextMission,
+          ...(hasCoords
+            ? {
+                rescueLiveLocation: {
+                  lat: claim.lat!,
+                  lng: claim.lng!,
+                  heading: null,
+                  speedKmh: null,
+                  updatedAt: claim.nowIso,
+                },
+              }
+            : {}),
+          updatedAt: claim.nowIso,
+        },
+        $push: {
+          timeline: timelineEntry,
+        },
+      },
+      { new: true, lean: true },
+    )) as Doc | null;
+
+    // Đồng bộ song song sang bảng incidents nếu hồ sơ có bản ghi tương ứng
+    if (claimedDoc) {
+      const code = typeof claimedDoc.code === 'string' ? claimedDoc.code : undefined;
+      if (code) {
+        await Incident.findOneAndUpdate(
+          { incidentCode: code.toUpperCase(), assignedRescueId: null },
+          {
+            $set: {
+              assignedRescueId: claim.teamId,
+              assignedRescueName: claim.teamName,
+              rescueStatus: 'EN_ROUTE',
+              acceptedAt: acceptedDate,
+              status: 'in_progress',
+            },
+          },
+        ).catch(() => undefined);
+      }
+    }
+
+    return reportFromDoc(claimedDoc);
+  }
+
   async findNearby(q: NearbyQuery): Promise<Report[]> {
     const geoPoint = toGeoJsonPoint(q.lat, q.lng);
     const filter: Record<string, unknown> = {
@@ -186,29 +355,37 @@ class MongoReportRepo implements ReportRepository {
   }
 }
 
+function userFromDoc(doc: Doc | null): UserRecord | null {
+  const base = strip<UserRecord>(doc);
+  if (!base) return null;
+  base.role = normalizeRole(base.role);
+  return base;
+}
+
 class MongoUserRepo implements UserRepository {
   async get(id: string): Promise<UserRecord | null> {
-    return strip<UserRecord>((await UserModel.findOne({ id: String(id) }).lean()) as Doc | null);
+    return userFromDoc((await UserModel.findOne({ id: String(id) }).lean()) as Doc | null);
   }
 
   async getByPhone(phone: string): Promise<UserRecord | null> {
-    return strip<UserRecord>((await UserModel.findOne({ phone: String(phone) }).lean()) as Doc | null);
+    return userFromDoc((await UserModel.findOne({ phone: String(phone) }).lean()) as Doc | null);
   }
 
   async getByEmail(email: string): Promise<UserRecord | null> {
     const escaped = String(email).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return strip<UserRecord>((await UserModel.findOne({ email: new RegExp(`^${escaped}$`, 'i') }).lean()) as Doc | null);
+    return userFromDoc((await UserModel.findOne({ email: new RegExp(`^${escaped}$`, 'i') }).lean()) as Doc | null);
   }
 
   async getByStaffCode(code: string): Promise<UserRecord | null> {
     const escaped = String(code).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return strip<UserRecord>(
+    return userFromDoc(
       (await UserModel.findOne({ staffCode: new RegExp(`^${escaped}$`, 'i') }).lean()) as Doc | null,
     );
   }
 
   async save(user: UserRecord): Promise<void> {
-    await UserModel.replaceOne({ id: user.id }, user, { upsert: true });
+    const normalized: UserRecord = { ...user, role: normalizeRole(user.role) };
+    await UserModel.replaceOne({ id: normalized.id }, normalized, { upsert: true });
   }
 
   async delete(id: string): Promise<boolean> {
@@ -217,13 +394,14 @@ class MongoUserRepo implements UserRepository {
   }
 
   async list(role?: Role): Promise<UserRecord[]> {
-    const docs = (await UserModel.find(role ? { role } : {}).sort({ createdAt: -1 }).lean()) as Doc[];
-    return docs.map((d) => strip<UserRecord>(d)!);
+    const filter = role ? { role: { $in: [...legacyRolesFor(normalizeRole(role))] } } : {};
+    const docs = (await UserModel.find(filter).sort({ createdAt: -1 }).lean()) as Doc[];
+    return docs.map((d) => userFromDoc(d)!);
   }
 
   async query(filter: UserFilterQuery = {}): Promise<UserRecord[]> {
     const f: Record<string, unknown> = {};
-    if (filter.role) f.role = filter.role;
+    if (filter.role) f.role = { $in: [...legacyRolesFor(normalizeRole(filter.role))] };
     if (filter.wardCode) f.wardCode = filter.wardCode;
     if (filter.isActive !== undefined) f.revoked = filter.isActive ? { $ne: true } : true;
     if (filter.q && filter.q.trim()) {
@@ -232,7 +410,7 @@ class MongoUserRepo implements UserRepository {
       f.$or = [{ name: re }, { email: re }, { phone: re }, { staffCode: re }, { id: re }];
     }
     const docs = (await UserModel.find(f).sort({ createdAt: -1 }).lean()) as Doc[];
-    return docs.map((d) => strip<UserRecord>(d)!);
+    return docs.map((d) => userFromDoc(d)!);
   }
 
   async count(): Promise<number> {

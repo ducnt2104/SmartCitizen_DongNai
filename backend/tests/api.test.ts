@@ -85,7 +85,7 @@ beforeAll(async () => {
   const boot = await createRepositories();
   const s = createServices(boot.repos);
   s.otpDelivery.setTestTransport(otpTransport);
-  await seedIfEmpty(boot.repos, s.audit);
+  await seedIfEmpty(boot.repos, s.audit, { includeFixtures: true });
   const server = createApp(s, boot).listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   close = async () => {

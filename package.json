@@ -19,6 +19,7 @@
     "seed": "npm run seed --prefix backend",
     "seed:dongnai": "npm run seed:dongnai --prefix backend",
     "db:seed": "npm run db:seed --prefix backend",
+    "db:purge-demo": "npm run db:purge-demo --prefix backend",
     "db:migrate-indexes": "npm run db:migrate-indexes --prefix backend",
     "db:verify": "npm run db:verify --prefix backend"
   },

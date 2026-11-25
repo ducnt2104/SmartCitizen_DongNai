@@ -21,7 +21,7 @@ export function AuditView({ scope, isCity }: { scope: string; isCity: boolean })
   const [busy, setBusy] = useState<string | null>(null);
   const [staff, setStaff] = useState<UserProfile[]>([]);
 
-  // Form cấp tài khoản Cán bộ Phường/Xã (dành cho CITY_ADMIN)
+  // Form cấp tài khoản Cán bộ Phường/Xã (dành cho ADMIN)
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -224,7 +224,7 @@ export function AuditView({ scope, isCity }: { scope: string; isCity: boolean })
                       </span>
                     </td>
                     <td className="px-3 py-1.5 text-right">
-                      {s.role !== 'city_admin' && (
+                      {s.role !== 'admin' && (
                         <button
                           type="button"
                           className={`ioc-btn !min-h-7 !px-2 !text-xs ${s.revoked ? 'ioc-btn-green' : 'ioc-btn-red'}`}

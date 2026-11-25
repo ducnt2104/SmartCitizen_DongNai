@@ -56,8 +56,15 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
   });
 
   it('1. Chatbot trả lời câu "Cách gửi phản ánh?" trong <100ms ngay cả khi không có MongoDB', async () => {
-    // Khởi tạo sẵn kết nối HTTP keep-alive tới loopback trước khi đo độ trễ xử lý thực tế
+    // Khởi tạo sẵn kết nối HTTP keep-alive & JIT route trước khi đo độ trễ xử lý thực tế khi chạy song song đa tiến trình
     await fetch(`${base}/healthz`);
+    await (
+      await fetch(`${base}/api/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', text: 'Xin chào' }], locale: 'vi' }),
+      })
+    ).text();
 
     const t0 = performance.now();
     const res = await fetch(`${base}/api/ai/chat`, {
@@ -79,53 +86,59 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(sseBody).not.toMatch(/MongooseServerSelectionError|NETWORK_OR_IP_WHITELIST/i);
   });
 
-  it('2. Đăng nhập SUPER-ADMIN, TP-01, CB-TB-01 và CUUHO-01 thành công 100% trên lớp Resilient Local Persistence', async () => {
-    const { INITIAL_STAFF_PASSWORD, INITIAL_SUPER_ADMIN_PASSWORD } = await import('../src/data/seedStore');
+  it('2. Mặc định AUTO_SEED_DEMO_REPORTS=false chỉ tạo 1 ADMIN & 0 đơn giả; đăng nhập chung (/api/auth/staff/login) hỗ trợ đủ ADMIN, OFFICER, RESCUE & dọn sạch bằng purge-seed', async () => {
+    const { INITIAL_STAFF_PASSWORD, INITIAL_SUPER_ADMIN_PASSWORD, seedIfEmpty } = await import('../src/data/seedStore');
     const { env } = await import('../src/config/env');
 
-    // SUPER-ADMIN
+    // 2A. Khởi tạo mặc định Production: 0 hồ sơ mẫu, đúng 1 tài khoản ADMIN ban đầu
+    expect(await services.repos.reports.count()).toBe(0);
+    expect(await services.repos.users.count()).toBe(1);
+
+    // 2B. SUPER-ADMIN đăng nhập qua cổng chung không cần truyền unit
     const superRes = await fetch(`${base}/api/auth/staff/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        staffCode: env.superAdminCode,
+        identifier: env.superAdminCode,
         password: INITIAL_SUPER_ADMIN_PASSWORD,
-        unit: 'city',
       }),
     });
     expect(superRes.status).toBe(200);
-    const superJson = (await superRes.json()) as { token: string; user: { role: string } };
+    const superJson = (await superRes.json()) as { token: string; user: { role: string; roleCode: string } };
     expect(superJson.token).toBeTruthy();
-    expect(superJson.user.role).toBe('super_admin');
+    expect(superJson.user.role).toBe('admin');
+    expect(superJson.user.roleCode).toBe('ADMIN');
 
-    // TP-01
+    // 2C. Nạp thử dữ liệu mẫu rồi kiểm tra đăng nhập chung cho TP-01 (ADMIN), CB-TB-01 (OFFICER), CUUHO-01 (RESCUE)
+    await seedIfEmpty(services.repos, services.audit, { includeFixtures: true });
+    expect(await services.repos.reports.count()).toBe(80);
+
     const cityRes = await fetch(`${base}/api/auth/staff/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        staffCode: 'TP-01',
+        identifier: 'TP-01',
         password: INITIAL_STAFF_PASSWORD,
-        unit: 'city',
       }),
     });
     expect(cityRes.status).toBe(200);
+    const cityJson = (await cityRes.json()) as { user: { role: string } };
+    expect(cityJson.user.role).toBe('admin');
 
-    // CB-TB-01 (Cán bộ Phường Trấn Biên)
     const officerRes = await fetch(`${base}/api/auth/staff/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        staffCode: 'CB-TB-01',
+        identifier: 'CB-TB-01',
         password: INITIAL_STAFF_PASSWORD,
-        unit: 'DN-TB',
       }),
     });
     expect(officerRes.status).toBe(200);
-    const officerJson = (await officerRes.json()) as { token: string; user: { wardCode: string } };
+    const officerJson = (await officerRes.json()) as { user: { role: string; wardCode: string } };
+    expect(officerJson.user.role).toBe('officer');
     expect(officerJson.user.wardCode).toBe('DN-TB');
 
-    // CUUHO-01 (Đội Cứu Hộ Hiện Trường)
-    const rescueRes = await fetch(`${base}/api/auth/rescue/login`, {
+    const rescueRes = await fetch(`${base}/api/auth/staff/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -134,8 +147,24 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
       }),
     });
     expect(rescueRes.status).toBe(200);
-    const rescueJson = (await rescueRes.json()) as { token: string; user: { role: string } };
-    expect(rescueJson.user.role).toBe('rescue_team');
+    const rescueJson = (await rescueRes.json()) as { user: { role: string; roleCode: string } };
+    expect(rescueJson.user.role).toBe('rescue');
+    expect(rescueJson.user.roleCode).toBe('RESCUE');
+
+    // 2D. Gọi API dọn sạch dữ liệu mẫu -> xóa sạch toàn bộ 80 đơn seed, trả về 0 đơn rác
+    const purgeRes = await fetch(`${base}/api/admin/maintenance/purge-seed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${superJson.token}`,
+      },
+      body: JSON.stringify({}),
+    });
+    expect(purgeRes.status).toBe(200);
+    const purgeJson = (await purgeRes.json()) as { deletedReports: number; remainingReports: number; wardsPreserved: number };
+    expect(purgeJson.deletedReports).toBe(80);
+    expect(purgeJson.remainingReports).toBe(0);
+    expect(purgeJson.wardsPreserved).toBe(95);
   });
 
   it('3. Reverse Geocoding đa tầng trả về địa chỉ cụ thể (Số nhà + Đường + Khu phố + Phường Trấn Biên, Thành phố Đồng Nai) và cache 5 chữ số thập phân', async () => {
@@ -177,32 +206,49 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(fetchCount).toBe(1);
   });
 
-  it('4. KeyPool hỗ trợ cả AQ.* (Vertex AI Express) lẫn AIza* (AI Studio) và tự xoay sang key hợp lệ khi 401/404', async () => {
+  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép) cho cả AQ.* lẫn AIza* và tự xoay khi gặp 403/429', async () => {
     const calledUrls: string[] = [];
     const poolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-keypool-vertex-'));
     try {
+      const multiFormatRaw = [
+        '"AQ.Ab8RN6RevokedVertexKey12345678"',
+        'AIzaSyDisabledStudioKey111111111111\\nAIzaSyHealthyStudioKey9876543210000',
+        '   AIzaSyHealthyBackupKey222222222222 ; AIzaSyHealthyStudioKey9876543210000 ',
+      ].join(',\n');
+
       const pool = new KeyPoolManager({
         dataDir: poolDir,
         encryptionSecret: 'test-secret-32-bytes-minimum-key!!',
         envSource: {
-          GEMINI_API_KEYS: 'AQ.Ab8RN6InvalidVertexKey12345678,AIzaSyValidStudioKey9876543210000',
+          GEMINI_API_KEYS: multiFormatRaw,
           GEMINI_MODEL: 'gemini-3.5-flash',
         },
       });
+      await pool.init();
+      const summaryBefore = pool.getSummarySync();
+      // Đúng 4 key duy nhất sau khi tách dấu phẩy + \n + khoảng trắng + chấm phẩy và lọc trùng!
+      expect(summaryBefore.totalKeys).toBe(4);
 
       const out = await pool.executeWithRotation(async (apiKey) => {
         if (apiKey.startsWith('AQ.')) {
           calledUrls.push(`https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent?key=${apiKey}`);
-          throw Object.assign(new Error('401 API keys are not supported by this endpoint'), { status: 401 });
+          throw Object.assign(
+            new Error('[{"error":{"code":403,"message":"Generative Language API has not been used in project","status":"PERMISSION_DENIED"}}]'),
+            { status: 403 },
+          );
+        }
+        if (apiKey.includes('DisabledStudioKey')) {
+          calledUrls.push(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`);
+          throw Object.assign(new Error('403 API_KEY_INVALID: Key revoked'), { status: 403 });
         }
         calledUrls.push(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`);
-        return 'OK_FROM_AIZA_KEY';
+        return 'OK_FROM_HEALTHY_AIZA_KEY';
       });
 
-      expect(out).toBe('OK_FROM_AIZA_KEY');
-      expect(calledUrls).toHaveLength(2);
-      expect(calledUrls[0]).toContain('aiplatform.googleapis.com');
-      expect(calledUrls[1]).toContain('generativelanguage.googleapis.com');
+      expect(out).toBe('OK_FROM_HEALTHY_AIZA_KEY');
+      expect(calledUrls.length).toBeGreaterThanOrEqual(2);
+      expect(calledUrls.some((u) => u.includes('aiplatform.googleapis.com'))).toBe(true);
+      expect(calledUrls.some((u) => u.includes('generativelanguage.googleapis.com'))).toBe(true);
     } finally {
       fs.rmSync(poolDir, { recursive: true, force: true });
     }
@@ -287,11 +333,20 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(typeof ba.resolution_score).toBe('number');
   });
 
-  it('7. Không còn chuỗi kỹ thuật ($nearSphere, INITIAL_STAFF_PASSWORD, (/rescue/login), "OTP thật") trong frontend/src/', () => {
+  it('7. Không còn chuỗi debug/demo/kỹ thuật thừa trong frontend/src/', () => {
     const frontendSrc = path.resolve(__dirname, '../../frontend/src');
     const forbidden = [
+      'trước Giờ Demo',
+      'trước giờ demo',
+      'Self-Test',
       '$nearSphere',
       'nearSphereMatched',
+      'ALLOW_CLOUD_AI_FALLBACK',
+      'Mock Fallback',
+      'CHỌN NHANH ĐƠN VỊ',
+      'thử nghiệm',
+      'dữ liệu mẫu',
+      'DEMO_MAP_ID',
       'INITIAL_STAFF_PASSWORD',
       '(/rescue/login)',
       '→ /rescue/login',

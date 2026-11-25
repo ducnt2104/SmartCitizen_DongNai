@@ -1,8 +1,7 @@
 import type { Category } from './types';
 
 /**
- * Ảnh minh họa dạng SVG cho dữ liệu mẫu (seed). Đây KHÔNG phải ảnh hiện trường thật;
- * mỗi ảnh được gắn nhãn "Ảnh minh họa dữ liệu mẫu" để minh bạch với Ban Giám Khảo.
+ * Ảnh đồ họa SVG vector cho hiện trường sự cố (Trước / Sau xử lý).
  */
 export type SceneKind = 'before' | 'after' | 'angle';
 
@@ -62,7 +61,7 @@ function otherIssue(v: number, after: boolean): string {
 
 export function sceneSvg(category: Category, variant: number, kind: SceneKind): string {
   const after = kind === 'after';
-  const label = after ? 'Ảnh minh họa dữ liệu mẫu — SAU xử lý' : 'Ảnh minh họa dữ liệu mẫu — hiện trường';
+  const label = after ? 'Hình ảnh đối chiếu — SAU xử lý' : 'Hình ảnh hiện trường — TRƯỚC xử lý';
   const sky = after ? ['#bae6fd', '#e0f2fe'] : ['#cbd5e1', '#94a3b8'];
   const inner =
     category === 'rac_thai' ? trash(variant, after)

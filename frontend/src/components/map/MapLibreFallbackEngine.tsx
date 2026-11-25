@@ -1,9 +1,7 @@
 import * as maplibregl from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef, useState } from 'react';
-
-maplibregl.setWorkerUrl(maplibreWorkerUrl);
-import { ARTERIAL_ROADS } from '@shared/geo';
+import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
 import { useI18n } from '../../i18n';
 import { QUICK_PLACES } from '../../lib/geoClient';
 import {
@@ -20,7 +18,10 @@ import {
   type MapPoint,
   type PinPriorityState,
 } from '../../lib/mapConfig';
+import { shortestAngleDeltaDeg } from '../../lib/navigationEngine';
 import type { DraggablePinSpec, RouteOverlaySpec, SharedEngineProps } from './GoogleMapEngine';
+
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 interface Bucket<T extends MapPoint> {
   items: T[];
@@ -29,7 +30,7 @@ interface Bucket<T extends MapPoint> {
   highest: PinPriorityState;
 }
 
-/** Gom cụm không gian O(N) siêu nhanh theo mức zoom thực tế cho chế độ MapLibre Marker. */
+/** Gom cụm không gian O(N) theo mức zoom thực tế cho các ghim thường (không gộp ghim đích đang điều hướng). */
 function clusterPointsByZoom<T extends MapPoint>(points: T[], zoom: number): Array<Bucket<T>> {
   if (zoom >= 15.5 || points.length <= 1) {
     return points.map((p) => ({
@@ -39,7 +40,7 @@ function clusterPointsByZoom<T extends MapPoint>(points: T[], zoom: number): Arr
       highest: getPinState(p),
     }));
   }
-  const cellDeg = 48 / (256 * Math.pow(2, Math.max(5, zoom))) * 360;
+  const cellDeg = (48 / (256 * Math.pow(2, Math.max(5, zoom)))) * 360;
   const grid = new Map<string, Bucket<T>>();
   for (const p of points) {
     const gx = Math.floor(p.lng / cellDeg);
@@ -94,7 +95,7 @@ function buildOverlaysGeoJson(
     });
   }
   if (userPos && accuracyM && accuracyM > 0) {
-    const f = createGeoJsonCircle(userPos.lat, userPos.lng, accuracyM);
+    const f = createGeoJsonCircle(userPos.lat, userPos.lng, Math.max(6, accuracyM));
     f.properties = { kind: 'accuracy' };
     features.push(f);
   }
@@ -125,9 +126,9 @@ function buildHeatmapGeoJson<T extends MapPoint>(reports: T[]): GeoJSON.FeatureC
 }
 
 /**
- * Engine Dự phòng MapLibre GL JS (WebGL 60FPS):
- * - Tự động kích hoạt khi chưa cấu hình `VITE_GOOGLE_MAPS_API_KEY`, bị chặn domain, hoặc mất kết nối Google.
- * - Nếu trình duyệt tắt cả WebGL, tự động rơi xuống bảng lưới tọa độ dự phòng cấp 2 — tuyệt đối 0% crash.
+ * Engine MapLibre GL JS (WebGL 60FPS):
+ * - Nội suy Marker xe cứu hộ 60FPS bằng `requestAnimationFrame` (~800ms) không tạo lại DOM Marker.
+ * - Auto-Follow bù chiều cao Bottom Sheet (`followPadding`) & tự nhả ngay lập tức khi người dùng chạm kéo/zoom (`originalEvent`).
  */
 export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedEngineProps<T>) {
   const { lang } = useI18n();
@@ -135,6 +136,11 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const userMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const userRotatorRef = useRef<HTMLDivElement | null>(null);
+  const userMarkerModeRef = useRef<'nav' | 'dot' | null>(null);
+  const animStateRef = useRef<{ lat: number; lng: number; heading: number } | null>(null);
+  const rafRef = useRef<number | null>(null);
+
   const draggableMarkerRef = useRef<maplibregl.Marker | null>(null);
   const draggablePinRef = useRef<DraggablePinSpec | null | undefined>(p.draggablePin);
   draggablePinRef.current = p.draggablePin;
@@ -161,8 +167,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const vectorLoadedRef = useRef(false);
   const vectorFailedRef = useRef(false);
   const lastCmdSeqRef = useRef(0);
+  const lastFitRouteSeqRef = useRef(0);
 
-  // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi chuyển route SPA
+  // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi unmount
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -192,7 +199,6 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       };
       requestAnimationFrame(collapseMobileAttrib);
       map.on('resize', collapseMobileAttrib);
-      map.on('style.load', collapseMobileAttrib);
     } catch (err) {
       console.warn('[MapLibre] Thiết bị không hỗ trợ WebGL, kích hoạt khung dự phòng 2D:', err);
       setWebglUnavailable(true);
@@ -263,7 +269,22 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
     });
 
-    map.on('dragstart', () => userPanRef.current?.());
+    // Hủy tức thì Auto-Follow chỉ khi có tương tác vật lý thật từ người dùng (`originalEvent` tồn tại)
+    const onHumanGesture = (ev: { originalEvent?: Event }) => {
+      if (!ev.originalEvent) return;
+      userPanRef.current?.();
+    };
+    map.on('dragstart', onHumanGesture);
+    map.on('zoomstart', onHumanGesture);
+    map.on('rotatestart', onHumanGesture);
+    map.on('pitchstart', onHumanGesture);
+
+    const onPointerInterrupt = () => {
+      // Hủy ngay animation camera tự động đang chạy để ngón tay/chuột kéo mượt không bị khựng
+      if (map.isMoving()) map.stop();
+    };
+    el.addEventListener('pointerdown', onPointerInterrupt, { passive: true });
+
     map.on('movestart', () => dragRef.current?.(true));
     map.on('moveend', () => {
       dragRef.current?.(false);
@@ -286,17 +307,27 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
     });
 
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => map.resize()) : null;
+    const handleResize = () => map.resize();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null;
     ro?.observe(el);
+    window.addEventListener('resize', handleResize);
 
     return () => {
       vectorDisposed = true;
       vectorAbort.abort();
       ro?.disconnect();
+      window.removeEventListener('resize', handleResize);
+      el.removeEventListener('pointerdown', onPointerInterrupt);
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       for (const m of markersRef.current) m.remove();
       markersRef.current = [];
       userMarkerRef.current?.remove();
       userMarkerRef.current = null;
+      userRotatorRef.current = null;
+      userMarkerModeRef.current = null;
       draggableMarkerRef.current?.remove();
       draggableMarkerRef.current = null;
       mapRef.current = null;
@@ -305,7 +336,15 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Đường / Tối) mượt không hủy instance Map
+  // Đảm bảo invalidate kích thước khung vẽ khi mở/đóng Bottom Sheet hoặc Sidebar
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const id = window.requestAnimationFrame(() => map.resize());
+    return () => window.cancelAnimationFrame(id);
+  }, [p.followPadding?.bottom, p.followPadding?.top, p.followPadding?.left]);
+
+  // 2) Đổi lớp nền mượt không hủy instance Map
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -341,7 +380,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     }
   }, [p.surface, lang]);
 
-  // 3) Điều khiển camera mệnh lệnh (flyTo, fitCity, fitPoints, zoomDelta)
+  // 3) Điều khiển camera mệnh lệnh (flyTo có tính bù paddingBottom, fitCity, fitPoints, zoomDelta)
   useEffect(() => {
     const map = mapRef.current;
     const cmd = p.cameraCommand;
@@ -358,7 +397,14 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       map.easeTo({
         center: [cmd.lng, cmd.lat],
         zoom: cmd.zoom ?? map.getZoom(),
-        duration: 380,
+        padding: {
+          top: p.followPadding?.top ?? 0,
+          bottom: p.followPadding?.bottom ?? 0,
+          left: p.followPadding?.left ?? 0,
+          right: p.followPadding?.right ?? 0,
+        },
+        duration: 420,
+        essential: true,
       });
     } else if (cmd.kind === 'zoomDelta' && typeof cmd.delta === 'number') {
       map.easeTo({
@@ -366,9 +412,34 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         duration: 180,
       });
     }
-  }, [p.cameraCommand, p.reports]);
+  }, [p.cameraCommand, p.reports, p.followPadding]);
 
-  // 4) Vẽ lớp phủ GeoJSON (Trục huyết mạch, Vòng tròn sai số GPS ±m, Bán kính lọc & Bản đồ nhiệt)
+  // 3b) Smart Camera Auto-Follow: tự bám mượt vị trí xe cứu hộ và giữ xe ở khoảng giữa vùng nhìn trống
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !p.autoFollow || !p.userPos) return;
+    map.easeTo({
+      center: [p.userPos.lng, p.userPos.lat],
+      zoom: Math.max(map.getZoom(), 15.8),
+      padding: {
+        top: p.followPadding?.top ?? 24,
+        bottom: p.followPadding?.bottom ?? 24,
+        left: p.followPadding?.left ?? 0,
+        right: p.followPadding?.right ?? 0,
+      },
+      duration: 680,
+      essential: true,
+    });
+  }, [
+    p.autoFollow,
+    p.userPos?.lat,
+    p.userPos?.lng,
+    p.followPadding?.bottom,
+    p.followPadding?.top,
+    p.followPadding?.left,
+  ]);
+
+  // 4) Vẽ lớp phủ GeoJSON (Tuyến đường xanh dương đậm có viền sáng, vòng tròn sai số GPS, trục chính)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || styleReadySeq === 0) return;
@@ -390,14 +461,14 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           type: 'fill',
           source: 'sc-overlays',
           filter: ['==', ['get', 'kind'], 'accuracy'],
-          paint: { 'fill-color': '#3B82F6', 'fill-opacity': 0.14 },
+          paint: { 'fill-color': '#3B82F6', 'fill-opacity': 0.15 },
         });
         map.addLayer({
           id: 'sc-accuracy-line',
           type: 'line',
           source: 'sc-overlays',
           filter: ['==', ['get', 'kind'], 'accuracy'],
-          paint: { 'line-color': '#0B57D0', 'line-width': 1.5, 'line-dasharray': [3, 3] },
+          paint: { 'line-color': '#1A73E8', 'line-width': 1.5, 'line-opacity': 0.6 },
         });
         map.addLayer({
           id: 'sc-radius-fill',
@@ -426,12 +497,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           },
         });
         map.addLayer({
-          id: 'sc-rescue-route-casing',
+          id: 'sc-rescue-route-halo',
           type: 'line',
           source: 'sc-overlays',
           filter: ['==', ['get', 'kind'], 'rescue_route'],
           layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: { 'line-color': '#0D47A1', 'line-width': 9, 'line-opacity': 0.9 },
+          paint: { 'line-color': '#ffffff', 'line-width': 10.5, 'line-opacity': 0.92 },
         });
         map.addLayer({
           id: 'sc-rescue-route-line',
@@ -439,7 +510,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           source: 'sc-overlays',
           filter: ['==', ['get', 'kind'], 'rescue_route'],
           layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: { 'line-color': '#1A73E8', 'line-width': 6, 'line-opacity': 0.98 },
+          paint: { 'line-color': p.routeOverlay?.strokeColor ?? '#1A73E8', 'line-width': 6.5, 'line-opacity': 0.98 },
         });
       }
 
@@ -477,17 +548,20 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         });
       }
     } catch {
-      // Sẽ tự động chạy lại ngay khi sự kiện style.load tăng styleReadySeq
+      // Sẽ tự động chạy lại ngay khi style.load tăng styleReadySeq
     }
   }, [styleReadySeq, p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay, p.mode, p.reports]);
 
-  // Tự động fitBounds an toàn theo kích thước khung nhìn thực tế khi chọn sự cố mới
+  // Fit toàn cảnh tuyến đường CHỈ khi `fitRouteSeq` tăng (hoặc khi preview chưa bật autoFollow lần đầu),
+  // TUYỆT ĐỐI KHÔNG phụ thuộc `preserveViewport` để không bao giờ giật ngược tay khi người dùng kéo bản đồ!
   useEffect(() => {
     const map = mapRef.current;
     const el = containerRef.current;
-    if (!map || !el || !p.routeOverlay || p.routeOverlay.preserveViewport) return;
+    if (!map || !el || !p.routeOverlay) return;
+    if (!p.fitRouteSeq || p.fitRouteSeq === lastFitRouteSeqRef.current) return;
     if (el.clientWidth < 80 || el.clientHeight < 80) return;
 
+    lastFitRouteSeqRef.current = p.fitRouteSeq;
     const bounds = new maplibregl.LngLatBounds();
     bounds.extend([p.routeOverlay.origin.lng, p.routeOverlay.origin.lat]);
     bounds.extend([p.routeOverlay.destination.lng, p.routeOverlay.destination.lat]);
@@ -495,15 +569,16 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       for (const pt of p.routeOverlay.fallbackPath) bounds.extend([pt.lng, pt.lat]);
     }
 
-    const padTop = Math.min(130, Math.max(24, Math.floor(el.clientHeight * 0.18)));
-    const padBottom = Math.min(210, Math.max(32, Math.floor(el.clientHeight * 0.26)));
-    const padSide = Math.min(56, Math.max(20, Math.floor(el.clientWidth * 0.08)));
+    const padTop = Math.min(160, Math.max(36, (p.followPadding?.top ?? 64) + 16));
+    const padBottom = Math.min(340, Math.max(48, (p.followPadding?.bottom ?? 220) + 20));
+    const padLeft = Math.min(380, Math.max(24, (p.followPadding?.left ?? 20) + 16));
+    const padRight = Math.min(96, Math.max(24, (p.followPadding?.right ?? 20) + 16));
 
     try {
       map.fitBounds(bounds, {
-        padding: { top: padTop, bottom: padBottom, left: padSide, right: padSide },
-        maxZoom: 16.5,
-        duration: 420,
+        padding: { top: padTop, bottom: padBottom, left: padLeft, right: padRight },
+        maxZoom: 16.2,
+        duration: 450,
       });
     } catch {
       map.easeTo({
@@ -512,12 +587,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         duration: 320,
       });
     }
-  }, [
-    p.routeOverlay?.destination.lat,
-    p.routeOverlay?.destination.lng,
-    p.routeOverlay?.preserveViewport,
-    p.routeOverlay?.fallbackPath?.length,
-  ]);
+  }, [p.fitRouteSeq, p.routeOverlay, p.followPadding]);
 
   // Ghim kéo thả trực tiếp (Interactive Pin Drop)
   useEffect(() => {
@@ -546,38 +616,114 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     }
   }, [p.draggablePin?.lat, p.draggablePin?.lng, styleReadySeq]);
 
-  // 5) Chấm xanh vị trí người dùng + mũi tên hướng di chuyển (Live Navigation Puck)
+  // 5) Chuyển động Marker Xe Cứu Hộ mượt 60FPS (`requestAnimationFrame` ~800ms, tái sử dụng DOM 100%)
   useEffect(() => {
     const map = mapRef.current;
-    userMarkerRef.current?.remove();
-    userMarkerRef.current = null;
-    if (!map || !p.userPos) return;
-    const el = document.createElement('div');
-    const hasHeading = p.navigationMode || (typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg));
-    if (hasHeading) {
-      const deg = typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg) ? p.userHeadingDeg : 0;
-      el.className = 'sc-nav-puck';
-      el.innerHTML = `<span class="sc-nav-puck-radar"></span><div style="position:relative;display:grid;place-items:center;transform:rotate(${deg}deg);"><span class="sc-nav-puck-cone"></span><span class="sc-nav-puck-arrow"><svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg></span></div>`;
-    } else {
-      el.className = 'sc-user-dot';
+    if (!map || !p.userPos) {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      userMarkerRef.current?.remove();
+      userMarkerRef.current = null;
+      userRotatorRef.current = null;
+      userMarkerModeRef.current = null;
+      animStateRef.current = null;
+      return;
     }
-    userMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' })
-      .setLngLat([p.userPos.lng, p.userPos.lat])
-      .addTo(map);
-  }, [p.userPos?.lat, p.userPos?.lng, p.userHeadingDeg, p.navigationMode, styleReadySeq]);
 
-  // 6) Các ghim sự cố và cụm gom nhóm thông minh
+    const wantMode: 'nav' | 'dot' =
+      p.navigationMode || (typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg)) ? 'nav' : 'dot';
+
+    if (!userMarkerRef.current || userMarkerModeRef.current !== wantMode) {
+      userMarkerRef.current?.remove();
+      const el = document.createElement('div');
+      if (wantMode === 'nav') {
+        el.className = 'sc-nav-puck';
+        el.innerHTML =
+          '<span class="sc-nav-puck-radar"></span><div data-puck-rotator="1" style="position:relative;display:grid;place-items:center;"><span class="sc-nav-puck-cone"></span><span class="sc-nav-puck-arrow"><svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg></span></div>';
+        userRotatorRef.current = el.querySelector('[data-puck-rotator="1"]') as HTMLDivElement | null;
+      } else {
+        el.className = 'sc-user-dot';
+        userRotatorRef.current = null;
+      }
+      userMarkerModeRef.current = wantMode;
+      userMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([p.userPos.lng, p.userPos.lat])
+        .addTo(map);
+    }
+
+    const mk = userMarkerRef.current;
+    const targetLat = p.userPos.lat;
+    const targetLng = p.userPos.lng;
+    const targetHeading = typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg) ? p.userHeadingDeg : 0;
+    const cur = animStateRef.current;
+
+    if (!cur || haversineMeters(cur.lat, cur.lng, targetLat, targetLng) > 1500) {
+      animStateRef.current = { lat: targetLat, lng: targetLng, heading: targetHeading };
+      mk.setLngLat([targetLng, targetLat]);
+      if (userRotatorRef.current) {
+        userRotatorRef.current.style.transform = `rotate(${targetHeading.toFixed(1)}deg)`;
+      }
+      return;
+    }
+
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+
+    const startLat = cur.lat;
+    const startLng = cur.lng;
+    const startHeading = cur.heading;
+    const dHeading = shortestAngleDeltaDeg(startHeading, targetHeading);
+    const startTime = performance.now();
+    const durationMs = 780;
+
+    const animateFrame = (now: number) => {
+      const rawT = Math.min(1, (now - startTime) / durationMs);
+      const easeT = 1 - Math.pow(1 - rawT, 2);
+      const lat = startLat + (targetLat - startLat) * easeT;
+      const lng = startLng + (targetLng - startLng) * easeT;
+      const heading = (startHeading + dHeading * easeT + 360) % 360;
+
+      animStateRef.current = { lat, lng, heading };
+      mk.setLngLat([lng, lat]);
+      if (userRotatorRef.current) {
+        userRotatorRef.current.style.transform = `rotate(${heading.toFixed(1)}deg)`;
+      }
+
+      if (rawT < 1) {
+        rafRef.current = window.requestAnimationFrame(animateFrame);
+      } else {
+        rafRef.current = null;
+      }
+    };
+
+    rafRef.current = window.requestAnimationFrame(animateFrame);
+    return () => {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [p.userPos?.lat, p.userPos?.lng, p.userHeadingDeg, p.navigationMode]);
+
+  // 6) Các ghim sự cố (tách riêng Ghim Đích đến nhấp nháy không bị gom cụm)
   useEffect(() => {
     const map = mapRef.current;
     for (const m of markersRef.current) m.remove();
     markersRef.current = [];
     if (!map || p.mode !== 'pins') return;
 
-    const buckets = clusterPointsByZoom(p.reports, map.getZoom());
+    const destReport = p.activeDestinationId ? p.reports.find((r) => r.id === p.activeDestinationId) : undefined;
+    const normalReports = destReport ? p.reports.filter((r) => r.id !== destReport.id) : p.reports;
+
+    const buckets = clusterPointsByZoom(normalReports, map.getZoom());
     for (const b of buckets) {
       if (b.items.length === 1) {
         const r = b.items[0];
-        const el = createIncidentPinElement(r, () => selectRef.current?.(r));
+        const el = createIncidentPinElement(r, () => selectRef.current?.(r), false);
         const mk = new maplibregl.Marker({ element: el, anchor: 'bottom' })
           .setLngLat([r.lng, r.lat])
           .addTo(map);
@@ -594,9 +740,16 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         markersRef.current.push(mk);
       }
     }
-  }, [p.reports, p.mode, zoomTick, styleReadySeq]);
 
-  // Dự phòng cấp cuối cùng nếu môi trường tắt cứng WebGL (ví dụ trình duyệt cổ / kiểm thử không GPU)
+    if (destReport) {
+      const destEl = createIncidentPinElement(destReport, () => selectRef.current?.(destReport), true);
+      const destMk = new maplibregl.Marker({ element: destEl, anchor: 'bottom' })
+        .setLngLat([destReport.lng, destReport.lat])
+        .addTo(map);
+      markersRef.current.push(destMk);
+    }
+  }, [p.reports, p.mode, p.activeDestinationId, zoomTick, styleReadySeq]);
+
   if (webglUnavailable) {
     return (
       <div className="flex h-full w-full flex-col justify-between bg-surface-2 p-4 text-xs">

@@ -72,20 +72,21 @@ describe('Validation địa lý Đồng Nai & Schema constraints', () => {
     expect(isWithinDongNaiBounds(10.9465, 106.8243)).toBe(false); // Bị đảo ngược [lat, lng]
   });
 
-  it('User: chuẩn hóa SĐT +84, mặc định trustScore = 100, bắt buộc assignedArea với ward_officer', () => {
+  it('User: chuẩn hóa SĐT +84, tương thích ngược role cũ về 4 vai trò chuẩn, bắt buộc assignedArea với officer', () => {
     const citizen = new User({ phoneNumber: '+84 912 345 678', fullName: 'Nguyễn Văn A' });
     expect(citizen.validateSync()).toBeUndefined();
     expect(citizen.phoneNumber).toBe('0912345678');
     expect(citizen.trustScore).toBe(100);
     expect(citizen.syncStatus).toBe('synced');
 
-    const officerMissingArea = new User({ phoneNumber: '0912345679', fullName: 'Cán bộ thiếu địa bàn', role: 'ward_officer' });
+    const officerMissingArea = new User({ phoneNumber: '0912345679', fullName: 'Cán bộ thiếu địa bàn', role: 'ward_officer' as any });
+    expect(officerMissingArea.role).toBe('officer');
     expect(officerMissingArea.validateSync()?.errors.assignedArea).toBeDefined();
 
     const officerOk = new User({
       phoneNumber: '0912345679',
       fullName: 'Cán bộ Xã Tà Lài',
-      role: 'ward_officer',
+      role: 'officer',
       assignedArea: { district: 'Huyện Tân Phú', ward: 'Xã Tà Lài' },
     });
     expect(officerOk.validateSync()).toBeUndefined();
@@ -253,7 +254,7 @@ describe('Kết nối MongoDB Atlas & Bộ dữ liệu Seed Đồng Nai', () => 
     const seed = buildDongNaiSeedDataset();
     expect(seed.users).toHaveLength(6);
     expect(seed.users.filter((u) => u.role === 'admin')).toHaveLength(1);
-    expect(seed.users.filter((u) => u.role === 'ward_officer')).toHaveLength(2);
+    expect(seed.users.filter((u) => u.role === 'officer')).toHaveLength(2);
     expect(seed.users.filter((u) => u.role === 'citizen')).toHaveLength(3);
     expect(seed.users.some((u) => u.assignedArea?.ward === 'Phường Trấn Biên')).toBe(true);
     expect(seed.users.some((u) => u.assignedArea?.ward === 'Xã Tà Lài' && u.assignedArea?.district === 'Huyện Tân Phú')).toBe(true);

@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import type { AuthSession, Role } from '../shared/types';
-import { UNIT_CODE_REGEX } from '../shared/constants';
+import { normalizeRole, UNIT_CODE_REGEX } from '../shared/constants';
 import { getWard } from '../shared/dongNaiWards';
 import { maskEmail, maskPhone, normalizeEmail, normalizePhone } from '../shared/geo';
 import { env } from '../config/env';
@@ -75,7 +75,7 @@ export class AuthService {
   }
 
   signAccessToken(u: UserRecord): string {
-    const claims: JwtClaims = { sub: u.id, role: u.role, wardCode: u.wardCode };
+    const claims: JwtClaims = { sub: u.id, role: normalizeRole(u.role), wardCode: u.wardCode };
     return jwt.sign(claims, env.jwtSecret, {
       expiresIn: ACCESS_TOKEN_EXPIRES_IN,
       issuer: 'smartcitizen-dongnai',
@@ -85,10 +85,11 @@ export class AuthService {
 
   verifyToken(token: string): JwtClaims {
     try {
-      return jwt.verify(token, env.jwtSecret, {
+      const raw = jwt.verify(token, env.jwtSecret, {
         issuer: 'smartcitizen-dongnai',
         algorithms: ['HS256'],
       }) as unknown as JwtClaims;
+      return { ...raw, role: normalizeRole(raw.role) };
     } catch {
       throw unauthorized('Phiên đăng nhập không hợp lệ hoặc đã hết hạn.');
     }
@@ -391,36 +392,57 @@ export class AuthService {
     return u;
   }
 
-  async staffLogin(staffIdentifier: string, password: string, unit: string, userAgent?: string): Promise<IssuedAuth> {
+  /**
+   * Đăng nhập Cổng Nội bộ Thống nhất (`/auth`):
+   * Dành chung cho cả Quản trị viên (`ADMIN`), Cán bộ xử lý (`OFFICER`), và Đội cứu hộ (`RESCUE`)
+   * bằng Mã tài khoản / Email / Số điện thoại + Mật khẩu.
+   */
+  async staffLogin(staffIdentifier: string, password: string, unit?: string, userAgent?: string): Promise<IssuedAuth> {
     const trimmed = staffIdentifier.trim();
     const key = `staff:${trimmed.toLowerCase()}`;
     const now = Date.now();
     const f = this.staffFails.get(key);
-    if (f && f.lockedUntil > now) throw tooMany('Tài khoản cán bộ tạm khóa do nhập sai nhiều lần.', 'staff_locked');
+    if (f && f.lockedUntil > now) throw tooMany('Tài khoản tạm khóa do nhập sai nhiều lần.', 'staff_locked');
+
+    const normalizedPhone = normalizePhone(trimmed);
     const u = trimmed.includes('@')
       ? await this.users.getByEmail(trimmed.toLowerCase())
-      : await this.users.getByStaffCode(trimmed);
+      : normalizedPhone
+        ? (await this.users.getByPhone(normalizedPhone)) ?? (await this.users.getByStaffCode(trimmed))
+        : await this.users.getByStaffCode(trimmed);
+
     if (u?.revoked) {
-      throw forbidden('Tài khoản cán bộ đã bị khóa hoặc thu hồi quyền truy cập.');
+      throw forbidden('Tài khoản đã bị khóa hoặc thu hồi quyền truy cập.');
     }
-    const ok = !!u && !!u.passwordHash && verifyPassword(password, u.passwordHash);
+
+    const role = u ? normalizeRole(u.role) : null;
+    const isInternalRole = role === 'admin' || role === 'officer' || role === 'rescue';
+    const pwOk = !!u && !!u.passwordHash && verifyPassword(password, u.passwordHash);
+
+    const explicitWardUnit = unit && unit !== 'city' && unit !== 'auto' ? unit : null;
     const scopeOk =
-      !!u &&
-      (u.role === 'super_admin' ||
-        (u.role === 'rescue_team' && (!u.wardCode || unit === 'city' || u.wardCode === unit)) ||
-        (unit === 'city' ? u.role === 'city_admin' : u.role === 'ward_officer' && u.wardCode === unit));
-    if (!ok || !scopeOk || !u) {
+      isInternalRole &&
+      (!explicitWardUnit ||
+        role === 'admin' ||
+        !u?.wardCode ||
+        u.wardCode === explicitWardUnit);
+
+    if (!pwOk || !scopeOk || !u || !role) {
       const next = { count: (f?.count ?? 0) + 1, lockedUntil: 0 };
       if (next.count >= OTP_MAX_FAILS) next.lockedUntil = now + OTP_LOCK_MS;
       this.staffFails.set(key, next);
-      throw unauthorized('Mã cán bộ/Email, mật khẩu hoặc cấp đơn vị không đúng.');
+      throw unauthorized('Mã tài khoản, Email/SĐT hoặc mật khẩu không đúng.');
     }
+
+    u.role = role;
     this.staffFails.delete(key);
-    await this.audit.log({ id: u.id, name: u.name, role: u.role }, 'auth.staff_login', u.id, null, { unit });
+    await this.audit.log({ id: u.id, name: u.name, role: u.role }, 'auth.staff_login', u.id, null, {
+      unit: unit ?? u.wardCode ?? 'city',
+    });
     return this.issueSession(u, userAgent);
   }
 
-  /** Đăng nhập Cổng Tác chiến Đội Cứu Hộ (`/rescue/login`) cho vai trò `rescue_team` (hoặc `super_admin` / `city_admin`). */
+  /** Tương thích ngược API cho Đội Cứu Hộ (`RESCUE` / `ADMIN`), ủy quyền về luồng đăng nhập nội bộ chuẩn. */
   async rescueLogin(identifierRaw: string, password: string, userAgent?: string): Promise<IssuedAuth> {
     const trimmed = identifierRaw.trim();
     const key = `rescue:${trimmed.toLowerCase()}`;
@@ -438,14 +460,16 @@ export class AuthService {
     if (u?.revoked) {
       throw forbidden('Tài khoản Đội Cứu Hộ đã bị khóa hoặc thu hồi quyền truy cập.');
     }
-    const roleOk = !!u && (u.role === 'rescue_team' || u.role === 'super_admin' || u.role === 'city_admin');
+    const role = u ? normalizeRole(u.role) : null;
+    const roleOk = role === 'rescue' || role === 'admin';
     const pwOk = !!u && !!u.passwordHash && verifyPassword(password, u.passwordHash);
-    if (!roleOk || !pwOk || !u) {
+    if (!roleOk || !pwOk || !u || !role) {
       const next = { count: (f?.count ?? 0) + 1, lockedUntil: 0 };
       if (next.count >= OTP_MAX_FAILS) next.lockedUntil = now + OTP_LOCK_MS;
       this.staffFails.set(key, next);
-      throw unauthorized('Mã Đội Cứu Hộ / Email hoặc mật khẩu không đúng (yêu cầu quyền RESCUE_TEAM).');
+      throw unauthorized('Mã tài khoản / Email hoặc mật khẩu không đúng (yêu cầu quyền RESCUE).');
     }
+    u.role = role;
     this.staffFails.delete(key);
     await this.audit.log(
       { id: u.id, name: u.name, role: u.role },
@@ -494,6 +518,7 @@ export class AuthService {
     const u = await this.users.get(userId);
     if (!u) throw unauthorized('Tài khoản không còn tồn tại.');
     if (u.revoked) throw forbidden('Tài khoản đã bị thu hồi quyền truy cập.');
+    u.role = normalizeRole(u.role);
     return u;
   }
 
@@ -532,15 +557,17 @@ export class AuthService {
 
   async registerVolunteer(userId: string, wardCode: string, unitCode: string): Promise<IssuedAuth> {
     const u = await this.me(userId);
-    if (u.role !== 'citizen' && u.role !== 'volunteer') throw forbidden('Chỉ công dân mới đăng ký làm Đoàn viên Tình nguyện.');
     if (!getWard(wardCode)) throw badRequest('Phường/Xã công tác không hợp lệ.', 'invalid_ward');
-    if (!UNIT_CODE_REGEX.test(unitCode)) throw badRequest('Mã chi đoàn không hợp lệ (ví dụ: DN-TB-01).', 'invalid_unit');
+    if (!UNIT_CODE_REGEX.test(unitCode)) throw badRequest('Mã đơn vị không hợp lệ (ví dụ: DN-TB-01).', 'invalid_unit');
     const before = { role: u.role, wardCode: u.wardCode, unitCode: u.unitCode };
-    u.role = 'volunteer';
-    u.wardCode = wardCode;
+    u.defaultWardCode = wardCode;
     u.unitCode = unitCode;
     await this.users.save(u);
-    await this.audit.log({ id: u.id, name: u.name, role: 'volunteer' }, 'volunteer.register', u.id, before, { role: u.role, wardCode, unitCode });
+    await this.audit.log({ id: u.id, name: u.name, role: u.role }, 'citizen.unit_register', u.id, before, {
+      role: u.role,
+      wardCode,
+      unitCode,
+    });
     return this.issueSession(u);
   }
 }

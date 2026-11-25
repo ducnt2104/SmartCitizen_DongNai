@@ -50,6 +50,7 @@ const argsByAction = {
   typecheck: ['run', 'typecheck'],
   test: ['run', 'test'],
   seed: ['run', 'seed'],
+  'db:purge-demo': ['run', 'db:purge-demo'],
   start: ['start'],
 };
 

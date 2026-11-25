@@ -10,8 +10,7 @@ async function main(): Promise<void> {
   const { boot, localRepos } = bootCtrl;
   const services = createServices(boot.repos);
 
-  // 2. Seed sẵn SUPER-ADMIN, TP-01, CB-TB-01, CUUHO-01 và dữ liệu nền vào bộ đệm cục bộ TRƯỚC khi mở cổng HTTP (<5ms)
-  //    Đảm bảo đăng nhập, gửi phản ánh & Chatbot hoạt động 100% ngay lập tức dù MongoDB Atlas đang cold-start hay mất kết nối!
+  // 2. Đảm bảo danh mục 95 Phường/Xã + 1 tài khoản ADMIN khởi tạo trên bộ đệm cục bộ TRƯỚC khi mở cổng HTTP (<5ms)
   const localSeeded = await seedIfEmpty(localRepos, services.audit);
 
   // 3. Bind cổng HTTP ngay lập tức để phục vụ SPA tĩnh và Liveness Probe `/healthz`

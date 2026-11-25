@@ -50,45 +50,59 @@ export const DEPARTMENTS: readonly Department[] = [
 /** Mã chi đoàn hợp lệ: DN-TB-01, DN-BH-12 ... */
 export const UNIT_CODE_REGEX = /^DN-[A-Z]{2,4}-\d{2}$/;
 
-export function toRoleCode(role: Role): RoleCode {
-  switch (role) {
+export function normalizeRoleInput(raw: string): Role | null {
+  switch (raw.trim().toLowerCase()) {
     case 'super_admin':
-      return 'SUPER_ADMIN';
+    case 'superadmin':
     case 'city_admin':
-      return 'ADMIN';
+    case 'admin':
+      return 'admin';
     case 'ward_officer':
-      return 'OFFICER';
-    case 'rescue_team':
-      return 'RESCUE_TEAM';
+    case 'officer':
     case 'volunteer':
-      return 'YOUTH_UNION';
+    case 'youth_union':
+      return 'officer';
+    case 'rescue_team':
+    case 'rescue':
+    case 'cuu_ho':
+      return 'rescue';
+    case 'citizen':
+      return 'citizen';
+    default:
+      return null;
+  }
+}
+
+/** Chuẩn hóa tương thích ngược mọi vai trò cũ từ MongoDB / localStorage về đúng 4 vai trò chuẩn. */
+export function normalizeRole(raw: unknown, fallback: Role = 'citizen'): Role {
+  if (typeof raw !== 'string') return fallback;
+  return normalizeRoleInput(raw) ?? fallback;
+}
+
+export function toRoleCode(role: Role | string): RoleCode {
+  switch (normalizeRole(role)) {
+    case 'admin':
+      return 'ADMIN';
+    case 'officer':
+      return 'OFFICER';
+    case 'rescue':
+      return 'RESCUE';
     case 'citizen':
       return 'CITIZEN';
   }
 }
 
-export function normalizeRoleInput(raw: string): Role | null {
-  switch (raw.trim().toLowerCase()) {
-    case 'super_admin':
-    case 'superadmin':
-      return 'super_admin';
-    case 'city_admin':
+/** Danh sách các giá trị role cũ tương ứng trong DB phục vụ truy vấn trước/trong khi migration. */
+export function legacyRolesFor(role: Role): readonly string[] {
+  switch (role) {
     case 'admin':
-      return 'city_admin';
-    case 'ward_officer':
+      return ['admin', 'super_admin', 'city_admin', 'SUPER_ADMIN', 'ADMIN'];
     case 'officer':
-      return 'ward_officer';
-    case 'rescue_team':
+      return ['officer', 'ward_officer', 'volunteer', 'OFFICER', 'YOUTH_UNION'];
     case 'rescue':
-    case 'cuu_ho':
-      return 'rescue_team';
-    case 'volunteer':
-    case 'youth_union':
-      return 'volunteer';
+      return ['rescue', 'rescue_team', 'RESCUE', 'RESCUE_TEAM'];
     case 'citizen':
-      return 'citizen';
-    default:
-      return null;
+      return ['citizen', 'CITIZEN'];
   }
 }
 

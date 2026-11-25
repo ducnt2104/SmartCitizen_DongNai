@@ -1,6 +1,7 @@
 import { ShieldAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
+import { normalizeRole } from '@shared/constants';
 import type { Role } from '@shared/types';
 import { authStore, useSession } from '../lib/authStore';
 
@@ -11,8 +12,8 @@ export interface RoleGuardProps {
 }
 
 /**
- * Bảo vệ phân quyền RBAC nghiêm ngặt trên Frontend (Zero-Crash Route Protection):
- * - Chưa đăng nhập -> điều hướng mượt tới cổng đăng nhập tương ứng (`/rescue/login` hoặc `/auth`).
+ * Bảo vệ phân quyền RBAC 4 vai trò trên Frontend:
+ * - Chưa đăng nhập -> điều hướng tới cổng đăng nhập thống nhất `/auth`.
  * - Sai vai trò -> hiển thị thông báo rõ ràng kèm lối tắt về đúng cổng được phân quyền.
  */
 export function RoleGuard({ allowedRoles, redirectTo = '/auth', children }: RoleGuardProps) {
@@ -23,15 +24,15 @@ export function RoleGuard({ allowedRoles, redirectTo = '/auth', children }: Role
     return <Navigate to={redirectTo} state={{ from: loc.pathname }} replace />;
   }
 
-  const role = session.user.role;
+  const role = normalizeRole(session.user.role);
   if (!allowedRoles.includes(role)) {
     const homeForRole =
-      role === 'rescue_team'
-        ? '/rescue'
-        : role === 'super_admin' || role === 'city_admin' || role === 'ward_officer'
-          ? '/admin'
-          : role === 'volunteer'
-            ? '/volunteer'
+      role === 'admin'
+        ? '/admin'
+        : role === 'officer'
+          ? '/ioc'
+          : role === 'rescue'
+            ? '/rescue'
             : '/';
 
     return (

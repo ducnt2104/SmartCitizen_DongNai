@@ -12,6 +12,7 @@
     "seed": "tsx src/seed/seedAll.ts",
     "seed:dongnai": "tsx src/seed/seedDongNai.ts",
     "db:seed": "tsx src/scripts/seed.ts",
+    "db:purge-demo": "tsx src/scripts/purgeDemo.ts",
     "db:migrate-indexes": "tsx src/scripts/migrateIndexes.ts",
     "db:verify": "tsx src/scripts/verifyDb.ts"
   },

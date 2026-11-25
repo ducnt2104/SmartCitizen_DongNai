@@ -1,7 +1,9 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Camera, Clock, ExternalLink, Navigation, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
+import { Camera, Clock, ExternalLink, Navigation, Radio, ShieldCheck, Star, ThumbsUp, Truck } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { normalizeRole } from '@shared/constants';
+import { haversineMeters } from '@shared/geo';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
 import { db } from '../db/localDb';
 import { useI18n } from '../i18n';
@@ -144,7 +146,7 @@ export function ReportDetail({
               <span className="mono text-muted">{r.lat.toFixed(5)}, {r.lng.toFixed(5)} · {ward?.name}</span>
               <div className="flex flex-wrap items-center gap-2">
                 {session?.user &&
-                  ['ward_officer', 'rescue_team', 'city_admin', 'super_admin'].includes(session.user.role) && (
+                  ['officer', 'rescue', 'admin'].includes(normalizeRole(session.user.role)) && (
                     <Link
                       to={`/rescue?missionId=${encodeURIComponent(r.id)}`}
                       onClick={onClose}
@@ -172,6 +174,27 @@ export function ReportDetail({
           {r.department && <div className="col-span-2 rounded-xl bg-surface-2 p-3"><dt className="text-xs text-muted">{t('detail.department')}</dt><dd className="font-semibold">{t(DEPT_KEY[r.department])}</dd></div>}
         </dl>
 
+        {r.status !== 'resolved' && (r.assignedRescueName || r.rescueMission?.assignedTeamName) && (
+          <div className="rounded-2xl border border-brand/40 bg-brand-soft p-3 text-sm">
+            <p className="flex items-center gap-2 font-bold text-brand">
+              <Truck className="h-4 w-4 shrink-0" aria-hidden />
+              {r.assignedRescueName ?? r.rescueMission?.assignedTeamName}
+            </p>
+            <p className="mt-1 text-xs font-medium text-ink">
+              {r.rescueStatus === 'IN_PROGRESS'
+                ? 'Đội cứu hộ đang triển khai xử lý sự cố tại hiện trường.'
+                : r.rescueStatus === 'ARRIVED'
+                  ? 'Đội cứu hộ đã có mặt tại hiện trường.'
+                  : (() => {
+                      if (!r.rescueLiveLocation) return 'Đội cứu hộ đã tiếp nhận đơn và đang di chuyển tới hiện trường.';
+                      const dKm = Math.round((haversineMeters(r.rescueLiveLocation.lat, r.rescueLiveLocation.lng, r.lat, r.lng) / 1000) * 100) / 100;
+                      const eta = Math.max(1, Math.round(((dKm * 1.24) / 36) * 60));
+                      return `Đang di chuyển tới hiện trường · Còn khoảng ${dKm} km (~${eta} phút).`;
+                    })()}
+            </p>
+          </div>
+        )}
+
         {r.dispatches.length > 0 && (
           <div className="rounded-2xl border border-danger/40 bg-danger-soft p-3">
             <p className="flex items-center gap-2 text-sm font-bold text-danger"><Radio className="h-4 w-4" aria-hidden />{t('detail.dispatch')}</p>
@@ -194,7 +217,7 @@ export function ReportDetail({
           {r.ai.fraudFlags.length > 0 && <p className="mt-1 break-words text-xs font-semibold text-danger">{r.ai.fraudFlags.join(' · ')}</p>}
           {r.ai.safetyHazards.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-muted">{r.ai.safetyHazards.map((h) => <li key={h}>{h}</li>)}</ul>}
           <p className="mt-1 text-[11px] font-semibold text-warn">
-            {r.ai.mode === 'fallback' ? t('ai.fallbackLabel') : r.ai.mode === 'seed' ? t('ai.seedLabel') : t('ai.geminiLabel')}
+            {r.ai.mode === 'fallback' ? t('ai.fallbackLabel') : t('ai.geminiLabel')}
           </p>
           {r.quarantine && <p className="mt-2 break-words rounded-lg bg-surface-2 p-2 text-xs">{r.quarantine.detail}</p>}
         </div>
@@ -215,9 +238,6 @@ export function ReportDetail({
                     )}
                     {r.resolution.resolutionScore !== undefined && (
                       <span>{t('detail.resScore')}: <strong className="mono">{r.resolution.resolutionScore}%</strong></span>
-                    )}
-                    {r.resolution.inlierKeypoints !== undefined && r.resolution.inlierKeypoints > 0 && (
-                      <span className="mono">RANSAC {r.resolution.inlierKeypoints} inliers</span>
                     )}
                   </div>
                 )}

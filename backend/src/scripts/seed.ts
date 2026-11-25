@@ -410,17 +410,26 @@ export function buildTranBien64PilotIncidents(
   return incidents;
 }
 
+export function buildProductionSeedOptions(options: { uri?: string; ephemeral?: boolean; includeDemo?: boolean } = {}) {
+  const envAutoDemo = ['1', 'true', 'yes'].includes((process.env.AUTO_SEED_DEMO_REPORTS ?? '').trim().toLowerCase());
+  return {
+    ...options,
+    includeDemo: options.includeDemo ?? envAutoDemo,
+  };
+}
+
 /**
  * Seed Idempotent chuẩn Production cho SmartCitizen Đồng Nai:
  * 1) 95 đơn vị hành chính cấp xã TP. Đồng Nai (23 phường, 72 xã theo NQ 1662; đồng thời lưu chuẩn 2026).
- * 2) 1 tài khoản Super Admin đọc từ `.env` (chỉ tạo nếu chưa tồn tại — tuyệt đối không ghi đè mật khẩu đang chạy).
- * 3) 64 sự cố thí điểm tại Phường Trấn Biên (`DN-TB`) với `syncId` chống trùng lặp tuyệt đối.
+ * 2) 1 tài khoản Quản trị viên (`ADMIN`) đọc từ `.env` (chỉ tạo nếu chưa tồn tại — tuyệt đối không ghi đè mật khẩu đang chạy).
+ * 3) Mặc định KHÔNG bơm 64 sự cố mẫu, trừ khi truyền `includeDemo: true` hoặc `AUTO_SEED_DEMO_REPORTS=true`.
  */
 export async function runProductionSeed(
-  options: { uri?: string; ephemeral?: boolean } = {},
+  options: { uri?: string; ephemeral?: boolean; includeDemo?: boolean } = {},
 ): Promise<SeedDatabaseResult> {
+  const resolvedOpts = buildProductionSeedOptions(options);
   let memoryServer: { stop: () => Promise<unknown> } | null = null;
-  let targetUri = (options.uri ?? process.env.MONGODB_URI ?? '').trim();
+  let targetUri = (resolvedOpts.uri ?? process.env.MONGODB_URI ?? '').trim();
 
   if (!targetUri && options.ephemeral) {
     const { MongoMemoryServer } = await import('mongodb-memory-server');
@@ -452,13 +461,13 @@ export async function runProductionSeed(
     const wardsXa2026 = await Ward.countDocuments({ kind: 'Xã' });
     const wardsTotal = await Ward.countDocuments();
 
-    // 2. Khởi tạo 1 Super Admin từ .env (CHỈ tạo nếu chưa tồn tại)
+    // 2. Khởi tạo 1 tài khoản Quản trị viên (ADMIN) từ .env (CHỈ tạo nếu chưa tồn tại)
     const adminCfg = readSuperAdminConfig();
     const passwordHash = hashPassword(adminCfg.passwordPlain);
 
-    let existingSuperAdmin = await User.findOne({
+    const existingSuperAdmin = await User.findOne({
       $or: [
-        { role: 'super_admin' },
+        { role: { $in: ['admin', 'super_admin'] } },
         { phoneNumber: adminCfg.phoneNumber },
         { email: adminCfg.email },
         { staffCode: adminCfg.staffCode },
@@ -476,7 +485,7 @@ export async function runProductionSeed(
         passwordHash,
         wardCode: null,
         fullName: adminCfg.fullName,
-        role: 'super_admin',
+        role: 'admin',
         assignedArea: { district: 'TP. Đồng Nai', ward: 'Trung tâm IOC Toàn Thành phố' },
         trustScore: 100,
         otpVerification: {
@@ -496,12 +505,12 @@ export async function runProductionSeed(
 
     // Đồng bộ sang bảng app_users cho tầng AuthService nếu chưa tồn tại
     const existingAppAdmin = await UserModel.findOne({
-      $or: [{ staffCode: adminCfg.staffCode }, { email: adminCfg.email }],
+      $or: [{ staffCode: adminCfg.staffCode }, { email: adminCfg.email }, { role: { $in: ['admin', 'super_admin', 'city_admin'] } }],
     }).lean();
     if (!existingAppAdmin) {
       await UserModel.create({
         id: 'u_super_admin_env',
-        role: 'city_admin',
+        role: 'admin',
         name: adminCfg.fullName,
         phone: adminCfg.phoneNumber,
         email: adminCfg.email,
@@ -513,7 +522,7 @@ export async function runProductionSeed(
         notificationsEnabled: true,
         revoked: false,
         trustScore: 100,
-        badges: ['Super Admin IOC'],
+        badges: ['Quản trị viên IOC'],
         volunteerHours: 0,
         points: 0,
         notifications: [],
@@ -521,65 +530,65 @@ export async function runProductionSeed(
       });
     }
 
-    // 2B. Khởi tạo Idempotent 1 tài khoản Đội Cứu Hộ mẫu (RESCUE_TEAM: CUUHO-01) để test ngay cổng /rescue
-    const rescueStaffPw = hashPassword(process.env.INITIAL_STAFF_PASSWORD || 'DongNai@2026!');
-    const existingRescueUser = await User.findOne({
-      $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }, { phoneNumber: '0900000114' }],
-    }).lean();
-    if (!existingRescueUser) {
-      await User.create({
-        phoneNumber: '0900000114',
-        email: 'cuuho01@dongnai.gov.vn',
-        staffCode: 'CUUHO-01',
-        passwordHash: rescueStaffPw,
-        wardCode: 'DN-TB',
-        fullName: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
-        role: 'rescue_team',
-        assignedArea: { district: 'TP. Đồng Nai', ward: 'Phường Trấn Biên (Cơ động liên phường)' },
-        trustScore: 100,
-        otpVerification: {
-          isVerified: true,
-          lastVerifiedAt: new Date(),
-          dailyReportCount: 0,
-          lastReportDate: null,
-        },
-        clientOfflineId: 'seed-rescue-team-01',
-        syncStatus: 'synced',
-      });
-    }
-    const existingAppRescue = await UserModel.findOne({
-      $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }],
-    }).lean();
-    if (!existingAppRescue) {
-      await UserModel.create({
-        id: 'u_rescue_01',
-        role: 'rescue_team',
-        name: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
-        phone: '0900000114',
-        email: 'cuuho01@dongnai.gov.vn',
-        staffCode: 'CUUHO-01',
-        passwordHash: rescueStaffPw,
-        wardCode: 'DN-TB',
-        unitCode: 'RESCUE-TB-01',
-        defaultWardCode: 'DN-TB',
-        notificationsEnabled: true,
-        revoked: false,
-        trustScore: 100,
-        badges: ['Đội Cứu Hộ SOS 24/7'],
-        volunteerHours: 0,
-        points: 0,
-        notifications: [],
-        createdAt: new Date().toISOString(),
-      });
-    }
-
-    // 3. Nạp Idempotent 64 sự cố thí điểm Phường Trấn Biên qua incidentRepository.upsertBySyncId()
-    const pilotIncidents = buildTranBien64PilotIncidents(superAdminId);
     let insertedNewCount = 0;
-    for (const item of pilotIncidents) {
-      const res = await incidentRepository.upsertBySyncId(item);
-      if (res.created) {
-        insertedNewCount += 1;
+    if (resolvedOpts.includeDemo) {
+      const rescueStaffPw = hashPassword(process.env.INITIAL_STAFF_PASSWORD || 'DongNai@2026!');
+      const existingRescueUser = await User.findOne({
+        $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }, { phoneNumber: '0900000114' }],
+      }).lean();
+      if (!existingRescueUser) {
+        await User.create({
+          phoneNumber: '0900000114',
+          email: 'cuuho01@dongnai.gov.vn',
+          staffCode: 'CUUHO-01',
+          passwordHash: rescueStaffPw,
+          wardCode: 'DN-TB',
+          fullName: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
+          role: 'rescue',
+          assignedArea: { district: 'TP. Đồng Nai', ward: 'Phường Trấn Biên (Cơ động liên phường)' },
+          trustScore: 100,
+          otpVerification: {
+            isVerified: true,
+            lastVerifiedAt: new Date(),
+            dailyReportCount: 0,
+            lastReportDate: null,
+          },
+          clientOfflineId: 'seed-rescue-team-01',
+          syncStatus: 'synced',
+        });
+      }
+      const existingAppRescue = await UserModel.findOne({
+        $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }],
+      }).lean();
+      if (!existingAppRescue) {
+        await UserModel.create({
+          id: 'u_rescue_01',
+          role: 'rescue',
+          name: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
+          phone: '0900000114',
+          email: 'cuuho01@dongnai.gov.vn',
+          staffCode: 'CUUHO-01',
+          passwordHash: rescueStaffPw,
+          wardCode: 'DN-TB',
+          unitCode: 'RESCUE-TB-01',
+          defaultWardCode: 'DN-TB',
+          notificationsEnabled: true,
+          revoked: false,
+          trustScore: 100,
+          badges: ['Đội Cứu Hộ SOS 24/7'],
+          volunteerHours: 0,
+          points: 0,
+          notifications: [],
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      const pilotIncidents = buildTranBien64PilotIncidents(superAdminId);
+      for (const item of pilotIncidents) {
+        const res = await incidentRepository.upsertBySyncId(item);
+        if (res.created) {
+          insertedNewCount += 1;
+        }
       }
     }
 

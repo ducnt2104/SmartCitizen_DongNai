@@ -1,6 +1,4 @@
 import {
-  Activity,
-  Cpu,
   Database,
   Edit3,
   KeyRound,
@@ -9,17 +7,17 @@ import {
   RefreshCw,
   Save,
   Search,
-  ShieldCheck,
   Sliders,
   Trash2,
   Unlock,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { normalizeRole, toRoleCode } from '@shared/constants';
 import type { DynamicAiConfig, Role, UserProfile } from '@shared/types';
 import { Spinner } from '../../components/ui';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
-import { useI18n } from '../../i18n';
+import { purgeLocalSeedReports } from '../../db/hydrate';
 import { api, ApiError, NetworkError } from '../../lib/api';
 import { useSession } from '../../lib/authStore';
 import { useToast } from '../../state/toast';
@@ -28,75 +26,45 @@ const WARDS_PHUONG = DONG_NAI_WARDS.filter((w) => w.kind === 'Phường');
 const WARDS_XA = DONG_NAI_WARDS.filter((w) => w.kind === 'Xã');
 
 const ROLE_OPTIONS: Array<{ value: Role; code: string; label: string }> = [
-  { value: 'super_admin', code: 'SUPER_ADMIN', label: 'SUPER_ADMIN — Quản trị Tối cao' },
-  { value: 'city_admin', code: 'ADMIN', label: 'ADMIN — Quản trị Cấp Thành phố' },
-  { value: 'ward_officer', code: 'OFFICER', label: 'OFFICER — Cán bộ Phường/Xã' },
-  { value: 'rescue_team', code: 'RESCUE_TEAM', label: 'RESCUE_TEAM — Đội Cứu Hộ Hiện Trường' },
-  { value: 'volunteer', code: 'YOUTH_UNION', label: 'YOUTH_UNION — Đoàn viên Tình nguyện' },
+  { value: 'admin', code: 'ADMIN', label: 'ADMIN — Quản trị viên hệ thống' },
+  { value: 'officer', code: 'OFFICER', label: 'OFFICER — Cán bộ xử lý (Phường/Xã hoặc Toàn TP)' },
+  { value: 'rescue', code: 'RESCUE', label: 'RESCUE — Đội cứu hộ hiện trường' },
   { value: 'citizen', code: 'CITIZEN', label: 'CITIZEN — Người dân' },
 ];
 
-interface AiMonitorPayload {
+interface AiConfigPayload {
   config: DynamicAiConfig;
   engines: {
-    cvEngine: {
-      online: boolean;
-      url: string;
-      engine: string;
-      latencyMs: number | null;
-      indexedFingerprints: number;
-      onnxModelPath: string | null;
-    };
-    localLlm: {
-      online: boolean;
-      provider: string;
-      endpoint: string;
-      model: string;
-      latencyMs: number | null;
-    };
-    ragDocs: number;
     db: {
-      mode: 'mongodb' | 'json';
       ok: boolean;
-      latencyMs: number;
       counts: {
         reports: number;
         users: number;
-        fingerprints: number;
-        evaluations: number;
-        auditLogs: number;
       };
     };
   };
-  recentEvaluations: Array<{
-    id: string;
-    reportId: string;
-    kind: string;
-    authenticityScore: number | null;
-    sceneMatchScore: number | null;
-    resolutionScore: number | null;
-    inlierCount: number;
-    flags: string[];
-    engineMode: string;
-    latencyMs: number;
-    summary: string;
-    createdAt: string;
-  }>;
+}
+
+interface PurgeSeedResponse {
+  ok: boolean;
+  deletedReports: number;
+  deletedIncidents: number;
+  remainingReports: number;
+  remainingUsers: number;
 }
 
 export function SystemAdminView() {
-  const { fmtDate } = useI18n();
   const toast = useToast();
   const session = useSession();
   const me = session?.user;
-  const isSuper = me?.role === 'super_admin';
 
-  // ── AI & System Monitor State ──
-  const [monitor, setMonitor] = useState<AiMonitorPayload | null>(null);
+  // ── Cấu hình AI & Dữ liệu hệ thống ──
   const [cfgDraft, setCfgDraft] = useState<DynamicAiConfig | null>(null);
+  const [dbCounts, setDbCounts] = useState<{ reports: number; users: number } | null>(null);
   const [savingCfg, setSavingCfg] = useState(false);
+  const [purging, setPurging] = useState(false);
 
-  // ── User Management State ──
+  // ── Quản lý Tài khoản 4 Vai trò ──
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [q, setQ] = useState('');
@@ -108,7 +76,7 @@ export function SystemAdminView() {
   // Modals: Create / Edit / Reset Password
   const [createOpen, setCreateOpen] = useState(false);
   const [cName, setCName] = useState('');
-  const [cRole, setCRole] = useState<Role>('ward_officer');
+  const [cRole, setCRole] = useState<Role>('officer');
   const [cWard, setCWard] = useState(WARDS_PHUONG[0]?.wardCode ?? 'DN-TB');
   const [cStaffCode, setCStaffCode] = useState('');
   const [cEmail, setCEmail] = useState('');
@@ -136,11 +104,11 @@ export function SystemAdminView() {
     [toast],
   );
 
-  const loadMonitor = useCallback(async () => {
+  const loadConfig = useCallback(async () => {
     try {
-      const data = await api<AiMonitorPayload>('/api/admin/ai-config');
-      setMonitor(data);
+      const data = await api<AiConfigPayload>('/api/admin/ai-config');
       setCfgDraft(data.config);
+      setDbCounts(data.engines.db.counts);
     } catch (e) {
       showErr(e);
     }
@@ -165,8 +133,8 @@ export function SystemAdminView() {
   }, [filterRole, filterWard, filterActive, q, showErr]);
 
   useEffect(() => {
-    void loadMonitor();
-  }, [loadMonitor]);
+    void loadConfig();
+  }, [loadConfig]);
 
   useEffect(() => {
     void loadUsers();
@@ -188,12 +156,40 @@ export function SystemAdminView() {
         },
       });
       setCfgDraft(saved);
-      toast('success', 'Đã cập nhật ngưỡng AI động thành công (áp dụng tức thì)');
-      void loadMonitor();
+      toast('success', 'Đã lưu cấu hình kiểm định hình ảnh AI');
+      void loadConfig();
     } catch (e) {
       showErr(e);
     } finally {
       setSavingCfg(false);
+    }
+  };
+
+  const handlePurgeSeedData = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        'Xác nhận xóa toàn bộ hồ sơ khởi tạo tự động khỏi cơ sở dữ liệu? Danh mục 95 Phường/Xã và các hồ sơ người dân gửi sẽ được giữ nguyên.',
+      )
+    ) {
+      return;
+    }
+    setPurging(true);
+    try {
+      const res = await api<PurgeSeedResponse>('/api/admin/maintenance/purge-seed', {
+        method: 'POST',
+        body: {},
+      });
+      await purgeLocalSeedReports();
+      toast(
+        'success',
+        `Đã làm sạch ${res.deletedReports + res.deletedIncidents} bản ghi khởi tạo`,
+        `Hiện còn ${res.remainingReports} phản ánh và ${res.remainingUsers} tài khoản trên hệ thống.`,
+      );
+      await Promise.all([loadConfig(), loadUsers()]);
+    } catch (e) {
+      showErr(e);
+    } finally {
+      setPurging(false);
     }
   };
 
@@ -206,10 +202,7 @@ export function SystemAdminView() {
         body: {
           name: cName.trim(),
           role: cRole,
-          wardCode:
-            cRole === 'ward_officer' || cRole === 'volunteer'
-              ? cWard || (WARDS_PHUONG[0]?.wardCode ?? 'DN-TB')
-              : cWard || null,
+          wardCode: cRole === 'admin' ? null : cWard || null,
           staffCode: cStaffCode.trim() || null,
           email: cEmail.trim() || null,
           phone: cPhone.trim() || null,
@@ -223,7 +216,7 @@ export function SystemAdminView() {
       setCEmail('');
       setCPhone('');
       setCPassword('');
-      toast('success', `Đã tạo tài khoản ${created.name} (${created.roleCode ?? created.role})`);
+      toast('success', `Đã tạo tài khoản ${created.name} (${created.roleCode ?? toRoleCode(created.role)})`);
     } catch (err) {
       showErr(err);
     } finally {
@@ -234,7 +227,7 @@ export function SystemAdminView() {
   const openEdit = (u: UserProfile): void => {
     setEditTarget(u);
     setEName(u.name);
-    setERole(u.role);
+    setERole(normalizeRole(u.role));
     setEWard(u.wardCode ?? '');
     setEStaffCode(u.staffCode ?? '');
     setEEmail(u.email ?? '');
@@ -315,173 +308,27 @@ export function SystemAdminView() {
     }
   };
 
-  const eng = monitor?.engines;
-
   return (
     <div className="space-y-4">
-      {/* ── 1. Trạng thái Hạ tầng Xử lý & Cơ sở dữ liệu ── */}
-      <section className="ioc-panel p-3" aria-label="Giám sát hạ tầng xử lý & Cơ sở dữ liệu">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
-              <Activity className="h-4 w-4" aria-hidden /> Giám sát Hạ tầng Xử lý Ảnh, Tri thức & Cơ sở dữ liệu
-            </h2>
-            <p className="text-xs text-ioc-dim">Đo độ trễ kết nối cơ sở dữ liệu, bộ xử lý hình ảnh hiện trường và kho tri thức điều hành</p>
-          </div>
-          <button type="button" className="ioc-btn" onClick={() => void loadMonitor()}>
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Làm mới trạng thái
-          </button>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          {/* Database Card */}
-          <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <Database className="h-4 w-4 text-ioc-cyan" aria-hidden /> Hệ thống Lưu trữ ({eng?.db.mode?.toUpperCase() ?? '…'})
-              </span>
-              <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.db.ok ? 'bg-emerald-500/20 text-ioc-green' : 'bg-red-500/20 text-ioc-red'}`}>
-                {eng?.db.ok ? `ONLINE · ${eng.db.latencyMs}ms` : 'DỰ PHÒNG'}
-              </span>
-            </div>
-            <p className="mono mt-2 text-xs text-ioc-text">
-              Hồ sơ: <strong>{eng?.db.counts.reports ?? 0}</strong> · Tài khoản: <strong>{eng?.db.counts.users ?? 0}</strong>
-            </p>
-            <p className="mono mt-1 text-[11px] text-ioc-dim">
-              Dấu vân tay ảnh: {eng?.db.counts.fingerprints ?? 0} · Thẩm định: {eng?.db.counts.evaluations ?? 0} · Nhật ký: {eng?.db.counts.auditLogs ?? 0}
-            </p>
-          </div>
-
-          {/* CV Engine Card */}
-          <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <Cpu className="h-4 w-4 text-ioc-cyan" aria-hidden /> Bộ Kiểm định Hình ảnh
-              </span>
-              <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.cvEngine.online ? 'bg-emerald-500/20 text-ioc-green' : 'bg-cyan-500/20 text-ioc-cyan'}`}>
-                {eng?.cvEngine.online ? `TỐC ĐỘ CAO · ${eng.cvEngine.latencyMs}ms` : 'XỬ LÝ NỘI BỘ'}
-              </span>
-            </div>
-            <p className="mono mt-2 truncate text-xs text-ioc-text">Kiểm tra EXIF, độ nét & đối chiếu Trước/Sau</p>
-            <p className="mono mt-1 truncate text-[11px] text-ioc-dim">
-              Bộ nhớ đối chiếu: {eng?.cvEngine.indexedFingerprints ?? 0} ảnh
-            </p>
-          </div>
-
-          {/* Knowledge Engine Card */}
-          <div className="rounded border border-ioc-line bg-ioc-raised/50 p-3">
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-bold uppercase text-ioc-dim">
-                <ShieldCheck className="h-4 w-4 text-ioc-cyan" aria-hidden /> Trợ lý & Kho Tri thức Đô thị
-              </span>
-              <span className={`mono rounded px-1.5 py-0.5 text-[10px] font-bold ${eng?.localLlm.online ? 'bg-emerald-500/20 text-ioc-green' : 'bg-cyan-500/20 text-ioc-cyan'}`}>
-                {eng?.localLlm.online ? `${eng.localLlm.provider.toUpperCase()} · ${eng.localLlm.latencyMs}ms` : 'SẴN SÀNG TỨC THÌ'}
-              </span>
-            </div>
-            <p className="mono mt-2 truncate text-xs text-ioc-text">Mô hình: {eng?.localLlm.model ?? 'qwen2.5:3b'}</p>
-            <p className="mono mt-1 text-[11px] text-ioc-dim">Cơ sở tri thức: {eng?.ragDocs ?? 99} tài liệu (95 ĐVHC + Quy trình)</p>
-          </div>
-        </div>
-
-        {/* Sliders chỉnh ngưỡng thẩm định động */}
-        {cfgDraft && (
-          <div className="mt-3 rounded border border-ioc-line p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-text">
-                <Sliders className="h-3.5 w-3.5 text-ioc-cyan" aria-hidden /> Tinh chỉnh Ngưỡng Kiểm định Hình ảnh (Áp dụng tức thì)
-              </h3>
-              <button type="button" className="ioc-btn ioc-btn-cyan" disabled={savingCfg} onClick={() => void saveAiConfig()}>
-                {savingCfg ? <Spinner /> : <Save className="h-3.5 w-3.5" aria-hidden />} Lưu cấu hình
-              </button>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              <label className="block text-xs">
-                <span className="text-ioc-dim">Chặn ảnh màn hình (&lt; điểm):</span>{' '}
-                <strong className="mono text-ioc-cyan">{cfgDraft.screenshotThreshold}</strong>
-                <input
-                  type="range"
-                  min={25}
-                  max={85}
-                  value={cfgDraft.screenshotThreshold}
-                  onChange={(e) => setCfgDraft({ ...cfgDraft, screenshotThreshold: Number(e.target.value) })}
-                  className="mt-1 w-full accent-cyan-400"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="text-ioc-dim">Ngưỡng phát hiện ảnh trùng:</span>{' '}
-                <strong className="mono text-ioc-cyan">{cfgDraft.duplicateThreshold}</strong>
-                <input
-                  type="range"
-                  min={2}
-                  max={16}
-                  value={cfgDraft.duplicateThreshold}
-                  onChange={(e) => setCfgDraft({ ...cfgDraft, duplicateThreshold: Number(e.target.value) })}
-                  className="mt-1 w-full accent-cyan-400"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="text-ioc-dim">Điểm đặc trưng phát hiện ảnh cắt:</span>{' '}
-                <strong className="mono text-ioc-cyan">{cfgDraft.minKeypointInliers}</strong>
-                <input
-                  type="range"
-                  min={10}
-                  max={35}
-                  value={cfgDraft.minKeypointInliers}
-                  onChange={(e) => setCfgDraft({ ...cfgDraft, minKeypointInliers: Number(e.target.value) })}
-                  className="mt-1 w-full accent-cyan-400"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="text-ioc-dim">Khớp hiện trường (%):</span>{' '}
-                <strong className="mono text-ioc-cyan">{cfgDraft.sceneMatchThreshold}%</strong>
-                <input
-                  type="range"
-                  min={45}
-                  max={90}
-                  value={cfgDraft.sceneMatchThreshold}
-                  onChange={(e) => setCfgDraft({ ...cfgDraft, sceneMatchThreshold: Number(e.target.value) })}
-                  className="mt-1 w-full accent-cyan-400"
-                />
-              </label>
-              <label className="block text-xs">
-                <span className="text-ioc-dim">Mức độ khắc phục (%):</span>{' '}
-                <strong className="mono text-ioc-cyan">{cfgDraft.resolutionThreshold}%</strong>
-                <input
-                  type="range"
-                  min={50}
-                  max={92}
-                  value={cfgDraft.resolutionThreshold}
-                  onChange={(e) => setCfgDraft({ ...cfgDraft, resolutionThreshold: Number(e.target.value) })}
-                  className="mt-1 w-full accent-cyan-400"
-                />
-              </label>
-            </div>
-            <label className="mt-2 inline-flex items-center gap-2 text-xs text-ioc-dim">
-              <input
-                type="checkbox"
-                checked={cfgDraft.allowCloudFallback}
-                onChange={(e) => setCfgDraft({ ...cfgDraft, allowCloudFallback: e.target.checked })}
-              />
-              Cho phép kết nối dịch vụ phân tích đám mây dự phòng khi cần suy luận chuyên sâu
-            </label>
-          </div>
-        )}
-      </section>
-
-      {/* ── 2. Quản lý Toàn bộ Tài khoản & RBAC 5 Cấp ── */}
-      <section className="ioc-panel overflow-hidden" aria-label="Quản lý Tài khoản & Phân quyền RBAC">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ioc-line p-3">
+      {/* ── 1. Quản lý Tài khoản & Phân quyền 4 Vai trò Chuẩn ── */}
+      <section className="ioc-panel overflow-hidden" aria-label="Quản lý Tài khoản & Phân quyền">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ioc-line p-3.5">
           <div>
             <h2 className="text-xs font-bold uppercase tracking-wider text-ioc-cyan">
-              Quản lý Tài khoản & Phân quyền RBAC ({users.length} tài khoản)
+              Quản lý Tài khoản & Phân quyền ({users.length} tài khoản)
             </h2>
-            <p className="text-xs text-ioc-dim">
-              Hỗ trợ 6 vai trò: SUPER_ADMIN · ADMIN · OFFICER (95 Phường/Xã) · RESCUE_TEAM (Đội cứu hộ) · YOUTH_UNION · CITIZEN
+            <p className="mt-0.5 text-xs text-ioc-dim">
+              Hệ thống 4 vai trò chuẩn: ADMIN (Quản trị viên) · OFFICER (Cán bộ xử lý) · RESCUE (Đội cứu hộ) · CITIZEN (Người dân)
             </p>
           </div>
-          <button type="button" className="ioc-btn ioc-btn-cyan" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden /> Tạo tài khoản mới
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="ioc-btn" onClick={() => void loadUsers()}>
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Tải lại
+            </button>
+            <button type="button" className="ioc-btn ioc-btn-cyan" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" aria-hidden /> Tạo tài khoản mới
+            </button>
+          </div>
         </div>
 
         {/* Bộ lọc tìm kiếm */}
@@ -490,13 +337,13 @@ export function SystemAdminView() {
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-ioc-dim" aria-hidden />
             <input
               className="ioc-field w-full !pl-8"
-              placeholder="Tìm tên, mã CB, email, SĐT…"
+              placeholder="Tìm tên, mã tài khoản, email, SĐT…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
           <select className="ioc-field" value={filterRole} onChange={(e) => setFilterRole(e.target.value)} aria-label="Lọc theo vai trò">
-            <option value="">Tất cả vai trò (6 cấp)</option>
+            <option value="">Tất cả 4 vai trò</option>
             {ROLE_OPTIONS.map((r) => (
               <option key={r.value} value={r.code}>{r.label}</option>
             ))}
@@ -512,8 +359,8 @@ export function SystemAdminView() {
           </select>
           <select className="ioc-field" value={filterActive} onChange={(e) => setFilterActive(e.target.value)} aria-label="Lọc theo trạng thái">
             <option value="">Mọi trạng thái</option>
-            <option value="true">Đang hoạt động (Active)</option>
-            <option value="false">Đã khóa (Locked)</option>
+            <option value="true">Đang hoạt động</option>
+            <option value="false">Đã khóa</option>
           </select>
         </div>
 
@@ -521,12 +368,12 @@ export function SystemAdminView() {
           <div className="flex justify-center p-6"><Spinner /></div>
         ) : (
           <div className="max-h-[58dvh] overflow-auto">
-            <table className="w-full min-w-[56rem] text-xs">
+            <table className="w-full min-w-[54rem] text-xs">
               <thead className="sticky top-0 bg-ioc-panel">
                 <tr className="border-b border-ioc-line">
                   <th className="ioc-th">Họ tên / Định danh</th>
-                  <th className="ioc-th">Vai trò (RBAC)</th>
-                  <th className="ioc-th">Địa bàn phụ trách</th>
+                  <th className="ioc-th">Vai trò</th>
+                  <th className="ioc-th">Đơn vị / Địa bàn</th>
                   <th className="ioc-th">Điểm uy tín</th>
                   <th className="ioc-th">Trạng thái</th>
                   <th className="ioc-th text-right">Thao tác quản trị</th>
@@ -535,12 +382,13 @@ export function SystemAdminView() {
               <tbody>
                 {users.map((u) => {
                   const isSelf = u.id === me?.id;
-                  const protectedTarget = (u.role === 'super_admin' || u.role === 'city_admin') && !isSuper && !isSelf;
+                  const role = normalizeRole(u.role);
+                  const badgeCode = u.roleCode ?? toRoleCode(role);
                   return (
                     <tr key={u.id} className="border-b border-ioc-line/60 hover:bg-ioc-raised/60">
                       <td className="px-3 py-2">
                         <p className="font-semibold text-ioc-text">
-                          {u.name} {isSelf && <span className="mono text-[10px] text-ioc-cyan">(Bạn)</span>}
+                          {u.name} {isSelf && <span className="mono text-[10px] text-ioc-cyan">(Đang đăng nhập)</span>}
                         </p>
                         <p className="mono text-[11px] text-ioc-dim">
                           {u.staffCode ? `${u.staffCode} · ` : ''}
@@ -550,18 +398,16 @@ export function SystemAdminView() {
                       <td className="px-3 py-2">
                         <span
                           className={`mono inline-block rounded border px-2 py-0.5 text-[10px] font-bold ${
-                            u.role === 'super_admin'
-                              ? 'border-purple-400/50 bg-purple-500/15 text-purple-300'
-                              : u.role === 'city_admin'
-                                ? 'border-cyan-400/50 bg-cyan-500/15 text-ioc-cyan'
-                                : u.role === 'rescue_team'
-                                  ? 'border-rose-400/50 bg-rose-500/15 text-rose-300'
-                                  : u.role === 'ward_officer'
-                                    ? 'border-amber-400/50 bg-amber-500/15 text-ioc-amber'
-                                    : 'border-ioc-line text-ioc-dim'
+                            role === 'admin'
+                              ? 'border-cyan-400/50 bg-cyan-500/15 text-ioc-cyan'
+                              : role === 'rescue'
+                                ? 'border-rose-400/50 bg-rose-500/15 text-rose-300'
+                                : role === 'officer'
+                                  ? 'border-amber-400/50 bg-amber-500/15 text-ioc-amber'
+                                  : 'border-ioc-line text-ioc-dim'
                           }`}
                         >
-                          {u.roleCode ?? u.role.toUpperCase()}
+                          {badgeCode}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-ioc-dim">
@@ -578,7 +424,7 @@ export function SystemAdminView() {
                           <button
                             type="button"
                             className="ioc-btn !min-h-7 !px-2 !text-xs"
-                            disabled={protectedTarget || busyId !== null}
+                            disabled={busyId !== null}
                             onClick={() => openEdit(u)}
                             title="Sửa thông tin & phân quyền"
                           >
@@ -587,7 +433,7 @@ export function SystemAdminView() {
                           <button
                             type="button"
                             className="ioc-btn !min-h-7 !px-2 !text-xs"
-                            disabled={protectedTarget || busyId !== null}
+                            disabled={busyId !== null}
                             onClick={() => { setPwTarget(u); setNewPw(''); }}
                             title="Đặt lại mật khẩu"
                           >
@@ -596,13 +442,14 @@ export function SystemAdminView() {
                           <button
                             type="button"
                             className={`ioc-btn !min-h-7 !px-2 !text-xs ${u.revoked ? 'ioc-btn-green' : 'ioc-btn-red'}`}
-                            disabled={isSelf || protectedTarget || busyId !== null}
+                            disabled={isSelf || busyId !== null}
                             onClick={() => void toggleActive(u)}
+                            title={isSelf ? 'Không thể tự khóa tài khoản đang đăng nhập' : undefined}
                           >
                             {u.revoked ? <Unlock className="h-3.5 w-3.5" aria-hidden /> : <Lock className="h-3.5 w-3.5" aria-hidden />}
                             {u.revoked ? 'Mở khóa' : 'Khóa'}
                           </button>
-                          {isSuper && !isSelf && (
+                          {!isSelf && (
                             <button
                               type="button"
                               className="ioc-btn ioc-btn-red !min-h-7 !px-2 !text-xs"
@@ -624,46 +471,103 @@ export function SystemAdminView() {
         )}
       </section>
 
-      {/* ── 3. Nhật ký Đánh giá AI/CV Gần nhất ── */}
-      {monitor && monitor.recentEvaluations.length > 0 && (
-        <section className="ioc-panel overflow-hidden" aria-label="Nhật ký thẩm định AI/CV">
-          <div className="border-b border-ioc-line p-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-ioc-dim">
-              Nhật ký Kiểm định Hình ảnh Gần nhất ({monitor.recentEvaluations.length})
-            </h2>
+      {/* ── 2. Cấu hình Ngưỡng Kiểm định Hình ảnh AI ── */}
+      {cfgDraft && (
+        <section className="ioc-panel p-3.5" aria-label="Cấu hình kiểm định hình ảnh AI">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
+                <Sliders className="h-4 w-4" aria-hidden /> Cấu hình Kiểm định Hình ảnh & Nghiệm thu Tự động
+              </h2>
+              <p className="mt-0.5 text-xs text-ioc-dim">
+                Điều chỉnh ngưỡng lọc ảnh chụp lại màn hình, phát hiện trùng lặp và đối chiếu Trước – Sau xử lý
+              </p>
+            </div>
+            <button type="button" className="ioc-btn ioc-btn-cyan" disabled={savingCfg} onClick={() => void saveAiConfig()}>
+              {savingCfg ? <Spinner /> : <Save className="h-3.5 w-3.5" aria-hidden />} Lưu cấu hình
+            </button>
           </div>
-          <div className="max-h-64 overflow-auto">
-            <table className="w-full min-w-[44rem] text-xs">
-              <thead className="sticky top-0 bg-ioc-panel">
-                <tr className="border-b border-ioc-line">
-                  <th className="ioc-th">Thời gian</th>
-                  <th className="ioc-th">Loại kiểm tra</th>
-                  <th className="ioc-th">Hồ sơ</th>
-                  <th className="ioc-th">Điểm số</th>
-                  <th className="ioc-th">Tốc độ</th>
-                  <th className="ioc-th">Kết luận chi tiết</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monitor.recentEvaluations.map((ev) => (
-                  <tr key={ev.id} className="border-b border-ioc-line/50">
-                    <td className="mono whitespace-nowrap px-3 py-1.5 text-ioc-dim">{fmtDate(ev.createdAt)}</td>
-                    <td className="mono px-3 py-1.5 text-ioc-cyan">{ev.kind.toUpperCase()}</td>
-                    <td className="mono px-3 py-1.5">{ev.reportId}</td>
-                    <td className="mono px-3 py-1.5">
-                      {ev.authenticityScore !== null && `Auth:${ev.authenticityScore}%`}
-                      {ev.sceneMatchScore !== null && `Scene:${ev.sceneMatchScore}% · Res:${ev.resolutionScore}%`}
-                      {ev.kind === 'duplicate' && `${ev.inlierCount} inliers`}
-                    </td>
-                    <td className="mono px-3 py-1.5 text-ioc-green">{ev.latencyMs}ms</td>
-                    <td className="max-w-md truncate px-3 py-1.5 text-ioc-dim" title={ev.summary}>{ev.summary}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="block text-xs">
+              <span className="text-ioc-dim">Chặn ảnh màn hình (&lt; điểm):</span>{' '}
+              <strong className="mono text-ioc-cyan">{cfgDraft.screenshotThreshold}</strong>
+              <input
+                type="range"
+                min={25}
+                max={85}
+                value={cfgDraft.screenshotThreshold}
+                onChange={(e) => setCfgDraft({ ...cfgDraft, screenshotThreshold: Number(e.target.value) })}
+                className="mt-1 w-full accent-cyan-400"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="text-ioc-dim">Ngưỡng phát hiện ảnh trùng:</span>{' '}
+              <strong className="mono text-ioc-cyan">{cfgDraft.duplicateThreshold}</strong>
+              <input
+                type="range"
+                min={2}
+                max={16}
+                value={cfgDraft.duplicateThreshold}
+                onChange={(e) => setCfgDraft({ ...cfgDraft, duplicateThreshold: Number(e.target.value) })}
+                className="mt-1 w-full accent-cyan-400"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="text-ioc-dim">Khớp hiện trường (%):</span>{' '}
+              <strong className="mono text-ioc-cyan">{cfgDraft.sceneMatchThreshold}%</strong>
+              <input
+                type="range"
+                min={45}
+                max={90}
+                value={cfgDraft.sceneMatchThreshold}
+                onChange={(e) => setCfgDraft({ ...cfgDraft, sceneMatchThreshold: Number(e.target.value) })}
+                className="mt-1 w-full accent-cyan-400"
+              />
+            </label>
+            <label className="block text-xs">
+              <span className="text-ioc-dim">Mức độ khắc phục (%):</span>{' '}
+              <strong className="mono text-ioc-cyan">{cfgDraft.resolutionThreshold}%</strong>
+              <input
+                type="range"
+                min={50}
+                max={92}
+                value={cfgDraft.resolutionThreshold}
+                onChange={(e) => setCfgDraft({ ...cfgDraft, resolutionThreshold: Number(e.target.value) })}
+                className="mt-1 w-full accent-cyan-400"
+              />
+            </label>
           </div>
+          <label className="mt-3 inline-flex items-center gap-2 text-xs text-ioc-dim">
+            <input
+              type="checkbox"
+              checked={cfgDraft.allowCloudFallback}
+              onChange={(e) => setCfgDraft({ ...cfgDraft, allowCloudFallback: e.target.checked })}
+            />
+            Bật phân tích tăng cường qua mô hình ngôn ngữ lớn khi cần suy luận sâu
+          </label>
         </section>
       )}
+
+      {/* ── 3. Bảo trì Cơ sở Dữ liệu Vận hành ── */}
+      <section className="ioc-panel flex flex-wrap items-center justify-between gap-3 p-3.5" aria-label="Bảo trì cơ sở dữ liệu">
+        <div className="min-w-0 flex-1">
+          <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
+            <Database className="h-4 w-4" aria-hidden /> Bảo trì Dữ liệu Vận hành
+          </h2>
+          <p className="mt-0.5 text-xs text-ioc-dim">
+            Hiện có <strong className="text-ioc-text">{dbCounts?.reports ?? 0}</strong> hồ sơ phản ánh và{' '}
+            <strong className="text-ioc-text">{dbCounts?.users ?? users.length}</strong> tài khoản (giữ nguyên danh mục 95 Phường/Xã TP. Đồng Nai).
+          </p>
+        </div>
+        <button
+          type="button"
+          className="ioc-btn ioc-btn-red"
+          disabled={purging}
+          onClick={() => void handlePurgeSeedData()}
+        >
+          {purging ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" aria-hidden />} Dọn dẹp hồ sơ khởi tạo
+        </button>
+      </section>
 
       {/* ── Modal Tạo mới Tài khoản ── */}
       {createOpen && (
@@ -678,22 +582,20 @@ export function SystemAdminView() {
               <input className="ioc-field w-full" required minLength={2} value={cName} onChange={(e) => setCName(e.target.value)} placeholder="Nguyễn Văn Bình" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-ioc-dim">Vai trò (RBAC) *</label>
+              <label className="mb-1 block text-xs text-ioc-dim">Vai trò *</label>
               <select className="ioc-field w-full" value={cRole} onChange={(e) => setCRole(e.target.value as Role)}>
-                {ROLE_OPTIONS.filter((r) => isSuper || (r.value !== 'super_admin' && r.value !== 'city_admin')).map((r) => (
+                {ROLE_OPTIONS.map((r) => (
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
             </div>
-            {(cRole === 'ward_officer' || cRole === 'volunteer' || cRole === 'rescue_team') && (
+            {(cRole === 'officer' || cRole === 'rescue' || cRole === 'citizen') && (
               <div>
                 <label className="mb-1 block text-xs text-ioc-dim">
-                  {cRole === 'rescue_team' ? 'Phạm vi trực chiến (Phường/Xã hoặc Cơ động toàn TP)' : 'Đơn vị Phường/Xã (95 ĐVHC) *'}
+                  Đơn vị Phường/Xã (95 ĐVHC hoặc Toàn TP. Đồng Nai)
                 </label>
                 <select className="ioc-field w-full" value={cWard} onChange={(e) => setCWard(e.target.value)}>
-                  {cRole === 'rescue_team' && (
-                    <option value="">Cơ động liên khu vực — Toàn TP. Đồng Nai</option>
-                  )}
+                  <option value="">Toàn TP. Đồng Nai</option>
                   <optgroup label="33 Phường">{WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
                   <optgroup label="62 Xã">{WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
                 </select>
@@ -701,8 +603,8 @@ export function SystemAdminView() {
             )}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="mb-1 block text-xs text-ioc-dim">Mã cán bộ (tuỳ chọn)</label>
-                <input className="ioc-field mono w-full" value={cStaffCode} onChange={(e) => setCStaffCode(e.target.value)} placeholder="CB-TB-02" />
+                <label className="mb-1 block text-xs text-ioc-dim">Mã tài khoản (tuỳ chọn)</label>
+                <input className="ioc-field mono w-full" value={cStaffCode} onChange={(e) => setCStaffCode(e.target.value)} placeholder="CB-TB-02 / CUUHO-02" />
               </div>
               <div>
                 <label className="mb-1 block text-xs text-ioc-dim">Số điện thoại</label>
@@ -714,8 +616,15 @@ export function SystemAdminView() {
               <input type="email" className="ioc-field w-full" value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="canbo@dongnai.gov.vn" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-ioc-dim">Mật khẩu khởi tạo (≥ 8 ký tự)</label>
-              <input type="password" className="ioc-field w-full" minLength={8} value={cPassword} onChange={(e) => setCPassword(e.target.value)} required={cRole === 'super_admin' || cRole === 'city_admin' || cRole === 'ward_officer' || cRole === 'rescue_team'} />
+              <label className="mb-1 block text-xs text-ioc-dim">Mật khẩu (≥ 8 ký tự)</label>
+              <input
+                type="password"
+                className="ioc-field w-full"
+                minLength={8}
+                value={cPassword}
+                onChange={(e) => setCPassword(e.target.value)}
+                required={cRole === 'admin' || cRole === 'officer' || cRole === 'rescue'}
+              />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="ioc-btn" onClick={() => setCreateOpen(false)}>Hủy</button>
@@ -740,24 +649,24 @@ export function SystemAdminView() {
               <input className="ioc-field w-full" required minLength={2} value={eName} onChange={(e) => setEName(e.target.value)} />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-ioc-dim">Vai trò (RBAC)</label>
+              <label className="mb-1 block text-xs text-ioc-dim">Vai trò</label>
               <select className="ioc-field w-full" value={eRole} onChange={(e) => setERole(e.target.value as Role)} disabled={editTarget.id === me?.id}>
-                {ROLE_OPTIONS.filter((r) => isSuper || (r.value !== 'super_admin' && r.value !== 'city_admin')).map((r) => (
+                {ROLE_OPTIONS.map((r) => (
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-ioc-dim">Phường/Xã phụ trách</label>
+              <label className="mb-1 block text-xs text-ioc-dim">Đơn vị / Phường/Xã phụ trách</label>
               <select className="ioc-field w-full" value={eWard} onChange={(e) => setEWard(e.target.value)}>
-                <option value="">Toàn TP. Đồng Nai (Không giới hạn 1 phường)</option>
+                <option value="">Toàn TP. Đồng Nai</option>
                 <optgroup label="33 Phường">{WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
                 <optgroup label="62 Xã">{WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
               </select>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="mb-1 block text-xs text-ioc-dim">Mã cán bộ</label>
+                <label className="mb-1 block text-xs text-ioc-dim">Mã tài khoản</label>
                 <input className="ioc-field mono w-full" value={eStaffCode} onChange={(e) => setEStaffCode(e.target.value)} />
               </div>
               <div>

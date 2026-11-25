@@ -157,6 +157,17 @@ export interface IIncident extends HybridSyncFields {
   priorityScore: number;
   duplicateControl: IncidentDuplicateControl;
   status: IncidentStatus;
+  assignedRescueId?: string | null;
+  assignedRescueName?: string | null;
+  rescueStatus?: string | null;
+  acceptedAt?: Date | null;
+  rescueLocation?: {
+    lat: number;
+    lng: number;
+    heading: number | null;
+    speedKmh: number | null;
+    updatedAt: Date;
+  } | null;
   timeline: IncidentTimelineEntry[];
   createdAt: Date;
   updatedAt: Date;
@@ -489,6 +500,39 @@ const incidentSchema = new Schema<IIncident>(
       default: 'pending_verify',
       required: true,
     },
+    assignedRescueId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    assignedRescueName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: null,
+    },
+    rescueStatus: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
+    rescueLocation: {
+      type: new Schema(
+        {
+          lat: { type: Number, required: true },
+          lng: { type: Number, required: true },
+          heading: { type: Number, default: null },
+          speedKmh: { type: Number, default: null },
+          updatedAt: { type: Date, default: Date.now },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
     timeline: {
       type: [timelineEntrySchema],
       default: [],
@@ -617,6 +661,7 @@ incidentSchema.index({ syncId: 1 }, { unique: true, sparse: true });
 applyHybridSyncIndex(incidentSchema);
 // 6. Index sắp xếp điểm ưu tiên toàn cục
 incidentSchema.index({ priorityScore: -1 });
+incidentSchema.index({ assignedRescueId: 1, status: 1 });
 
 export const Incident: Model<IIncident> =
   (mongoose.models.Incident as Model<IIncident> | undefined) ??

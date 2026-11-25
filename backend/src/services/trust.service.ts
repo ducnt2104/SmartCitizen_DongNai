@@ -1,7 +1,7 @@
 import type { Notification, UserProfile } from '../shared/types';
 import { maskPhone } from '../shared/geo';
 import {
-  toRoleCode, TRUST_SPAM_PENALTY, TRUST_START, TRUST_SUPERVISED_BELOW, TRUST_VERIFIED_BONUS,
+  normalizeRole, toRoleCode, TRUST_SPAM_PENALTY, TRUST_START, TRUST_SUPERVISED_BELOW, TRUST_VERIFIED_BONUS,
 } from '../shared/constants';
 import type { UserRecord, UserRepository } from '../repositories/types';
 import { newId } from '../utils/crypto';
@@ -10,10 +10,11 @@ export const CIVIC_BADGE = 'Công dân Văn minh Đồng Nai';
 
 export function toProfile(u: UserRecord): UserProfile {
   const revoked = Boolean(u.revoked);
+  const role = normalizeRole(u.role);
   return {
     id: u.id,
-    role: u.role,
-    roleCode: toRoleCode(u.role),
+    role,
+    roleCode: toRoleCode(role),
     name: u.name,
     phoneMasked: u.phone ? maskPhone(u.phone) : null,
     email: u.email,

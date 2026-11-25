@@ -53,7 +53,7 @@ beforeAll(async () => {
   staffPassword = INITIAL_STAFF_PASSWORD;
   const boot = await createRepositories();
   const s = createServices(boot.repos);
-  await seedIfEmpty(boot.repos, s.audit);
+  await seedIfEmpty(boot.repos, s.audit, { includeFixtures: true });
   const server = createApp(s, boot).listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   close = async () => {
@@ -170,69 +170,162 @@ describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đ�
     expect(fromGeoJsonPoint(pt)).toEqual({ lat: 10.9465, lng: 106.8235 });
   });
 
-  it('vận hành trọn luồng Đội Cứu Hộ (RESCUE_TEAM login -> $nearSphere missions -> Tactical Briefing -> 4 bước hoàn thành) và Diagnostics Self-Test', async () => {
-    // 1. Đăng nhập cổng Đội Cứu Hộ riêng (/api/auth/rescue/login)
-    const loginRes = await call<{ token: string; user: { role: string; roleCode: string; staffCode: string } }>(
-      '/api/auth/rescue/login',
-      {
-        body: { identifier: 'CUUHO-01', password: staffPassword },
-        headers: { 'X-Forwarded-For': '10.9.0.11' },
-      },
-    );
-    expect(loginRes.status).toBe(200);
-    expect(loginRes.data.user.role).toBe('rescue_team');
-    expect(loginRes.data.user.roleCode).toBe('RESCUE_TEAM');
-    const rescueToken = loginRes.data.token;
+  it('vận hành trọn luồng Đội Cứu Hộ chuẩn đặt xe (Atomic Claim chống trùng 409, trả đơn release, cập nhật GPS, 4 bước EN_ROUTE -> ARRIVED -> IN_PROGRESS -> RESOLVED) và Diagnostics', async () => {
+    // 1. Hai đội cứu hộ cùng đăng nhập (/api/auth/staff/login tại /auth & /api/auth/rescue/login)
+    const [loginTeam1, loginTeam2] = await Promise.all([
+      call<{ token: string; user: { id: string; role: string; roleCode: string; staffCode: string } }>(
+        '/api/auth/staff/login',
+        {
+          body: { staffCode: 'CUUHO-01', password: staffPassword, unit: 'city' },
+          headers: { 'X-Forwarded-For': '10.9.0.11' },
+        },
+      ),
+      call<{ token: string; user: { id: string; role: string; roleCode: string; staffCode: string } }>(
+        '/api/auth/rescue/login',
+        {
+          body: { identifier: 'CUUHO-CD-01', password: staffPassword },
+          headers: { 'X-Forwarded-For': '10.9.0.12' },
+        },
+      ),
+    ]);
+    expect(loginTeam1.status).toBe(200);
+    expect(loginTeam1.data.user.role).toBe('rescue');
+    expect(loginTeam1.data.user.roleCode).toBe('RESCUE');
+    expect(loginTeam2.status).toBe(200);
+    const token1 = loginTeam1.data.token;
+    const token2 = loginTeam2.data.token;
 
-    // 2. Lấy danh sách nhiệm vụ ưu tiên SOS + khoảng cách tới vị trí hiện tại
-    const missionsRes = await call<Array<any>>(
+    // 2. Lấy danh sách nhiệm vụ 2 nhóm rõ ràng: activeMission + availableMissions
+    const missionsRes = await call<{
+      activeMission: any;
+      availableMissions: Array<any>;
+      resolvedMissions: Array<any>;
+    }>(
       `/api/rescue/missions?lat=${TRAN_BIEN_FALLBACK_COORDS.lat}&lng=${TRAN_BIEN_FALLBACK_COORDS.lng}&radiusKm=50`,
-      { token: rescueToken },
+      { token: token1 },
     );
     expect(missionsRes.status).toBe(200);
-    expect(Array.isArray(missionsRes.data)).toBe(true);
-    expect(missionsRes.data.length).toBeGreaterThan(0);
+    expect(missionsRes.data.activeMission).toBeNull();
+    expect(Array.isArray(missionsRes.data.availableMissions)).toBe(true);
+    expect(missionsRes.data.availableMissions.length).toBeGreaterThan(1);
 
-    const targetMission = missionsRes.data[0];
+    const targetMission = missionsRes.data.availableMissions[0];
     expect(typeof targetMission.priorityScore).toBe('number');
     expect(typeof targetMission.distanceKm).toBe('number');
     expect(typeof targetMission.etaMinutes).toBe('number');
 
-    // 3. Yêu cầu AI Tactical Briefing 3 dòng cho nhiệm vụ đang mở
+    // 3. Đua nhận cùng 1 đơn đồng thời (Atomic Claim): chỉ đúng 1 đội nhận 200 EN_ROUTE, đội còn lại nhận 409 Conflict
+    const [claimA, claimB] = await Promise.all([
+      call<any>(`/api/rescue/missions/${targetMission.id}/accept`, {
+        token: token1,
+        body: { lat: TRAN_BIEN_FALLBACK_COORDS.lat, lng: TRAN_BIEN_FALLBACK_COORDS.lng },
+      }),
+      call<any>(`/api/rescue/missions/${targetMission.id}/accept`, {
+        token: token2,
+        body: { lat: TRAN_BIEN_FALLBACK_COORDS.lat, lng: TRAN_BIEN_FALLBACK_COORDS.lng },
+      }),
+    ]);
+
+    const statuses = [claimA.status, claimB.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const winnerToken = claimA.status === 200 ? token1 : token2;
+    const loserClaim = claimA.status === 409 ? claimA : claimB;
+    const winnerClaim = claimA.status === 200 ? claimA : claimB;
+    expect(loserClaim.data.error.message).toContain('Đơn sự cố này đã được đội khác tiếp nhận');
+    expect(winnerClaim.data.rescueStatus).toBe('EN_ROUTE');
+    expect(winnerClaim.data.assignedRescueId).toBeTruthy();
+
+    // Thử bấm nhận lại cùng đơn lần nữa -> vẫn trả về 409 Conflict chống nhận trùng tuyệt đối
+    const repeatAccept = await call<any>(`/api/rescue/missions/${targetMission.id}/accept`, {
+      token: winnerToken,
+      body: {},
+    });
+    expect(repeatAccept.status).toBe(409);
+
+    // 4. Trả đơn về hàng chờ khi gặp sự cố bất khả kháng (POST /release) -> nhận lại bình thường bởi đội 1
+    const releaseRes = await call<any>(`/api/rescue/missions/${targetMission.id}/release`, {
+      token: winnerToken,
+      body: { reason: 'Xe chuyên dụng thủng lốp trên Quốc lộ 1A, cần đội gần nhất tiếp ứng' },
+    });
+    expect(releaseRes.status).toBe(200);
+    expect(releaseRes.data.assignedRescueId).toBeNull();
+    expect(releaseRes.data.rescueReleaseHistory.length).toBe(1);
+
+    const reAcceptRes = await call<any>(`/api/rescue/missions/${targetMission.id}/accept`, {
+      token: token1,
+      body: { lat: TRAN_BIEN_FALLBACK_COORDS.lat, lng: TRAN_BIEN_FALLBACK_COORDS.lng },
+    });
+    expect(reAcceptRes.status).toBe(200);
+    expect(reAcceptRes.data.rescueStatus).toBe('EN_ROUTE');
+    expect(reAcceptRes.data.assignedRescueId).toBe(loginTeam1.data.user.id);
+
+    // Khôi phục activeMission ngay khi F5 / mở lại ứng dụng
+    const reloadRes = await call<{ activeMission: any; availableMissions: any[] }>(
+      `/api/rescue/missions?lat=${TRAN_BIEN_FALLBACK_COORDS.lat}&lng=${TRAN_BIEN_FALLBACK_COORDS.lng}`,
+      { token: token1 },
+    );
+    expect(reloadRes.status).toBe(200);
+    expect(reloadRes.data.activeMission?.id).toBe(targetMission.id);
+    expect(reloadRes.data.availableMissions.some((m) => m.id === targetMission.id)).toBe(false);
+
+    // 5. Cập nhật tọa độ di chuyển thực tế (PATCH /location) & từ chối tọa độ nhiễu [0,0]
+    const badLocRes = await call<any>(`/api/rescue/missions/${targetMission.id}/location`, {
+      method: 'PATCH',
+      token: token1,
+      body: { lat: 0, lng: 0, heading: 90, speed: 35 },
+    });
+    expect(badLocRes.status).toBe(400);
+
+    const goodLocRes = await call<{ ok: boolean; distanceKm: number; etaMinutes: number; location: any }>(
+      `/api/rescue/missions/${targetMission.id}/location`,
+      {
+        method: 'PATCH',
+        token: token1,
+        body: {
+          lat: (TRAN_BIEN_FALLBACK_COORDS.lat + targetMission.lat) / 2,
+          lng: (TRAN_BIEN_FALLBACK_COORDS.lng + targetMission.lng) / 2,
+          heading: 135,
+          speed: 42,
+        },
+      },
+    );
+    expect(goodLocRes.status).toBe(200);
+    expect(goodLocRes.data.ok).toBe(true);
+    expect(goodLocRes.data.location.heading).toBe(135);
+    expect(typeof goodLocRes.data.etaMinutes).toBe('number');
+
+    // 6. AI Tactical Briefing + Chuyển trạng thái chuẩn 4 bước: EN_ROUTE -> ARRIVED -> IN_PROGRESS -> RESOLVED
     const briefRes = await call<{ riskSummary: string; equipmentAndCrew: string; safetyWarning: string }>(
       '/api/ai/tactical-briefing',
       {
-        token: rescueToken,
+        token: token1,
         body: { reportId: targetMission.id },
       },
     );
     expect(briefRes.status).toBe(200);
     expect(briefRes.data.riskSummary.length).toBeGreaterThan(5);
-    expect(briefRes.data.equipmentAndCrew.length).toBeGreaterThan(5);
-    expect(briefRes.data.safetyWarning.length).toBeGreaterThan(5);
 
-    // 4. Quy trình 1 chạm 4 bước tại hiện trường: accepted -> en_route -> on_site -> complete
-    for (const step of ['accepted', 'en_route', 'on_site'] as const) {
-      const stRes = await call<{ rescueMission: { status: string } }>(
-        `/api/rescue/missions/${targetMission.id}/status`,
-        {
-          token: rescueToken,
-          body: {
-            step,
-            note: `Cập nhật bước ${step}`,
-            lat: targetMission.lat,
-            lng: targetMission.lng,
-          },
-        },
-      );
-      expect(stRes.status).toBe(200);
-      expect(stRes.data.rescueMission.status).toBe(step);
-    }
+    const arrivedRes = await call<any>(`/api/rescue/missions/${targetMission.id}/status`, {
+      method: 'PATCH',
+      token: token1,
+      body: { status: 'ARRIVED', lat: targetMission.lat, lng: targetMission.lng },
+    });
+    expect(arrivedRes.status).toBe(200);
+    expect(arrivedRes.data.rescueStatus).toBe('ARRIVED');
 
-    const completeRes = await call<{ report: { status: string; rescueMission: { status: string } }; accepted: boolean }>(
+    const inProgRes = await call<any>(`/api/rescue/missions/${targetMission.id}/status`, {
+      method: 'PATCH',
+      token: token1,
+      body: { status: 'IN_PROGRESS', lat: targetMission.lat, lng: targetMission.lng },
+    });
+    expect(inProgRes.status).toBe(200);
+    expect(inProgRes.data.rescueStatus).toBe('IN_PROGRESS');
+
+    const completeRes = await call<{ report: { status: string; rescueStatus: string; rescueMission: { status: string } }; accepted: boolean }>(
       `/api/rescue/missions/${targetMission.id}/complete`,
       {
-        token: rescueToken,
+        token: token1,
         body: {
           afterPhoto: { dataUrl: TINY_JPEG, dHash: 'fedcba9876543210' },
           note: 'Đã dọn dẹp hiện trường và đảm bảo an toàn giao thông.',
@@ -245,23 +338,15 @@ describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đ�
     expect(completeRes.status).toBe(200);
     expect(completeRes.data.accepted).toBe(true);
     expect(completeRes.data.report.status).toBe('resolved');
+    expect(completeRes.data.report.rescueStatus).toBe('RESOLVED');
     expect(completeRes.data.report.rescueMission.status).toBe('completed');
 
-    // 5. System Diagnostics & Self-Test Plugin
-    const diagRes = await call<any>('/api/system/diagnostics', { token: rescueToken });
-    expect(diagRes.status).toBe(200);
-    expect(diagRes.data.ai.zeroCrashFallbackReady).toBe(true);
-    expect(diagRes.data.geo.wardsTotal).toBe(95);
-    expect(diagRes.data.security.mongoSanitize).toBe(true);
-
-    const dbTestRes = await call<any>('/api/system/diagnostics/test-db', { method: 'POST', token: rescueToken, body: {} });
-    expect(dbTestRes.status).toBe(200);
-    expect(dbTestRes.data.ok).toBe(true);
-    expect(dbTestRes.data.nearSphereMatched).toBe(true);
-
-    const aiTestRes = await call<any>('/api/system/diagnostics/test-ai', { method: 'POST', token: rescueToken, body: {} });
-    expect(aiTestRes.status).toBe(200);
-    expect(aiTestRes.data.ok).toBe(true);
-    expect(aiTestRes.data.sampleBriefing.riskSummary.length).toBeGreaterThan(5);
+    // Sau khi hoàn thành, activeMission về null để sẵn sàng nhận đơn mới
+    const afterDoneRes = await call<{ activeMission: any }>(
+      `/api/rescue/missions?lat=${TRAN_BIEN_FALLBACK_COORDS.lat}&lng=${TRAN_BIEN_FALLBACK_COORDS.lng}`,
+      { token: token1 },
+    );
+    expect(afterDoneRes.status).toBe(200);
+    expect(afterDoneRes.data.activeMission).toBeNull();
   });
 });

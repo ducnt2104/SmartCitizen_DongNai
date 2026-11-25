@@ -10,6 +10,7 @@
     "typecheck": "node ../scripts/render-compat.mjs typecheck backend",
     "test": "node ../scripts/render-compat.mjs test backend",
     "seed": "node ../scripts/render-compat.mjs seed backend",
+    "db:purge-demo": "node ../scripts/render-compat.mjs db:purge-demo backend",
     "start": "node ../scripts/render-compat.mjs start backend"
   },
   "devDependencies": {

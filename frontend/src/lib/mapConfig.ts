@@ -68,25 +68,32 @@ export function getPinState(r: MapPoint): PinPriorityState {
 }
 
 /** Tạo phần tử DOM ghim SVG sắc nét dùng chung cho cả Google AdvancedMarker và MapLibre Marker (an toàn XSS). */
-export function createIncidentPinElement(r: MapPoint, onActivate?: () => void): HTMLButtonElement {
+export function createIncidentPinElement(
+  r: MapPoint,
+  onActivate?: () => void,
+  isDestination = false,
+): HTMLButtonElement {
   const state = getPinState(r);
-  const color = PIN_STATE_COLOR[state];
+  const color = isDestination ? '#E11D48' : PIN_STATE_COLOR[state];
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'sc-map-pin group';
+  btn.className = isDestination ? 'sc-map-pin sc-map-pin-dest group' : 'sc-map-pin group';
   btn.setAttribute('aria-label', r.title);
   btn.title = r.title;
 
-  const pulse =
-    state === 'emergency'
+  const pulse = isDestination
+    ? '<span class="sc-dest-pin-pulse" aria-hidden="true"></span><span class="sc-dest-pin-pulse sc-dest-pin-pulse-delay" aria-hidden="true"></span>'
+    : state === 'emergency'
       ? '<span class="sc-map-pin-pulse" aria-hidden="true"></span>'
       : '';
   const badge =
     r.clusterCount > 1
       ? `<span class="sc-map-pin-badge" aria-hidden="true">${Math.min(99, r.clusterCount)}</span>`
       : '';
+  const svgW = isDestination ? 42 : 36;
+  const svgH = isDestination ? 50 : 44;
 
-  btn.innerHTML = `${pulse}${badge}<svg viewBox="0 0 34 42" width="36" height="44" aria-hidden="true" class="sc-map-pin-svg"><path d="M17 1C8.7 1 2 7.5 2 15.8 2 27 17 41 17 41s15-14 15-25.2C32 7.5 25.3 1 17 1Z" fill="${color}" stroke="#ffffff" stroke-width="2.2"/>${CAT_SVG_MARKUP[r.category]}</svg>`;
+  btn.innerHTML = `${pulse}${badge}<svg viewBox="0 0 34 42" width="${svgW}" height="${svgH}" aria-hidden="true" class="sc-map-pin-svg"><path d="M17 1C8.7 1 2 7.5 2 15.8 2 27 17 41 17 41s15-14 15-25.2C32 7.5 25.3 1 17 1Z" fill="${color}" stroke="#ffffff" stroke-width="2.4"/>${CAT_SVG_MARKUP[r.category]}</svg>`;
 
   if (onActivate) {
     btn.addEventListener('click', (ev) => {
@@ -192,7 +199,7 @@ function readRawApiKey(): string {
 
 export const GOOGLE_MAPS_API_KEY = readRawApiKey();
 export const GOOGLE_MAPS_MAP_ID =
-  ((import.meta.env as Record<string, string | undefined>).VITE_GOOGLE_MAPS_MAP_ID ?? '').trim() || 'DEMO_MAP_ID';
+  ((import.meta.env as Record<string, string | undefined>).VITE_GOOGLE_MAPS_MAP_ID ?? '').trim() || 'SMARTCITIZEN_DN_MAP';
 
 let googleRuntimeFailed = false;
 let googleFailureReason: string | null = GOOGLE_MAPS_API_KEY ? null : 'missing_api_key';

@@ -104,6 +104,15 @@ export interface NearbyQuery {
   category?: string;
 }
 
+export interface AtomicRescueClaimInput {
+  teamId: string;
+  teamName: string;
+  teamCode: string | null;
+  nowIso: string;
+  lat?: number | null;
+  lng?: number | null;
+}
+
 export interface UserFilterQuery {
   role?: Role;
   wardCode?: string;
@@ -117,6 +126,8 @@ export interface ReportRepository {
   getByCode(code: string): Promise<Report | null>;
   insert(report: Report): Promise<void>;
   update(report: Report): Promise<void>;
+  delete(id: string): Promise<boolean>;
+  claimRescueMission(id: string, claim: AtomicRescueClaimInput): Promise<Report | null>;
   findNearby(q: NearbyQuery): Promise<Report[]>;
   findSince(sinceIso: string): Promise<Report[]>;
   countByReporterSince(reporterId: string, sinceIso: string): Promise<number>;

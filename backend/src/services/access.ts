@@ -1,27 +1,29 @@
+import { normalizeRole } from '../shared/constants';
 import type { Report, Role } from '../shared/types';
 import type { UserRecord } from '../repositories/types';
 import { badRequest, forbidden } from '../utils/errors';
 
-export const STAFF_ROLES: readonly Role[] = ['ward_officer', 'city_admin', 'super_admin'];
-export const RESCUE_CAPABLE_ROLES: readonly Role[] = ['rescue_team', 'ward_officer', 'city_admin', 'super_admin'];
-export const ADMIN_ROLES: readonly Role[] = ['city_admin', 'super_admin'];
+export const STAFF_ROLES: readonly Role[] = ['officer', 'admin'];
+export const RESCUE_CAPABLE_ROLES: readonly Role[] = ['rescue', 'officer', 'admin'];
+export const ADMIN_ROLES: readonly Role[] = ['admin'];
 
 export function isStaff(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
-  return !!u && STAFF_ROLES.includes(u.role);
+  return !!u && STAFF_ROLES.includes(normalizeRole(u.role));
 }
 
 export function isRescueCapable(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
-  return !!u && RESCUE_CAPABLE_ROLES.includes(u.role);
+  return !!u && RESCUE_CAPABLE_ROLES.includes(normalizeRole(u.role));
 }
 
 export function isAdminRole(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
-  return !!u && ADMIN_ROLES.includes(u.role);
+  return !!u && ADMIN_ROLES.includes(normalizeRole(u.role));
 }
 
-/** Cán bộ phường chỉ thao tác trong wardCode của mình; Đội cứu hộ SOS, cấp Thành phố & Super Admin cơ động liên phường. */
+/** Cán bộ gắn phường chỉ thao tác trong wardCode của mình; Cán bộ toàn TP (`wardCode = null`), Đội cứu hộ & Admin cơ động liên phường. */
 export function inScope(u: Pick<UserRecord, 'role' | 'wardCode'>, wardCode: string): boolean {
-  if (u.role === 'super_admin' || u.role === 'city_admin' || u.role === 'rescue_team') return true;
-  if (u.role === 'ward_officer') return u.wardCode === wardCode;
+  const role = normalizeRole(u.role);
+  if (role === 'admin' || role === 'rescue') return true;
+  if (role === 'officer') return !u.wardCode || u.wardCode === wardCode;
   return false;
 }
 
@@ -38,7 +40,6 @@ export function canSee(u: UserRecord | null, r: Report): boolean {
   if (!u) return false;
   if (isOwner(u, r)) return true;
   if (isRescueCapable(u)) return inScope(u, r.wardCode);
-  if (u.role === 'volunteer') return r.needsFieldVerification && (u.wardCode === r.wardCode || r.assignedVolunteerId === u.id);
   return false;
 }
 

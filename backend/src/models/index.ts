@@ -18,6 +18,10 @@ const reportSchema = mk({
   customCategoryLabel: { type: String, default: null },
   priorityScore: { type: Number, default: 50, min: 0, max: 100 },
   status: { type: String, required: true },
+  rescueStatus: { type: String, default: null },
+  assignedRescueId: { type: String, default: null },
+  assignedRescueName: { type: String, default: null },
+  acceptedAt: { type: Date, default: null },
   wardCode: { type: String, required: true },
   reporterId: { type: String, required: true },
   imageHash: { type: String, default: '' },
@@ -37,8 +41,9 @@ reportSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });
 reportSchema.index({ imageHash: 1, createdAt: -1 });
+reportSchema.index({ assignedRescueId: 1, status: 1, updatedAt: -1 });
 
-/** Người dùng & Phân quyền RBAC 6 cấp (`SUPER_ADMIN`, `ADMIN`, `OFFICER`, `RESCUE_TEAM`, `YOUTH_UNION`, `CITIZEN`). */
+/** Người dùng & Phân quyền RBAC 4 vai trò chuẩn (`ADMIN`, `OFFICER`, `RESCUE`, `CITIZEN`). */
 const appUserSchema = mk({
   id: { type: String, required: true, unique: true },
   role: { type: String, required: true, index: true },

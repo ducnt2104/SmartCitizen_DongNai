@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeRole } from '../shared/constants';
 import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
 import { haversineMeters } from '../shared/geo';
 import { createJsonRepositories } from './jsonRepositories';
@@ -7,6 +8,7 @@ import type {
   AiConfigRepository,
   AiEvaluationRecord,
   AiEvaluationRepository,
+  AtomicRescueClaimInput,
   AuditRepository,
   FingerprintRepository,
   ImageFingerprintRecord,
@@ -152,9 +154,12 @@ class SqliteHybridEngine {
       case 'reports':
         this.reports.set(id, value as Report);
         break;
-      case 'users':
-        this.users.set(id, value as UserRecord);
+      case 'users': {
+        const u = value as UserRecord;
+        u.role = normalizeRole(u.role);
+        this.users.set(id, u);
         break;
+      }
       case 'fingerprints':
         this.fingerprints.set(id, value as ImageFingerprintRecord);
         break;
@@ -264,6 +269,16 @@ export function createLocalPersistentRepositories(
           await jsonRepos.reports.update(r);
           recordDirty('reports', r.id, r);
         },
+        delete: async (id) => {
+          const ok = await jsonRepos.reports.delete(id);
+          if (ok) recordDirty('reports', id, null, true);
+          return ok;
+        },
+        claimRescueMission: async (id, claim) => {
+          const claimed = await jsonRepos.reports.claimRescueMission(id, claim);
+          if (claimed) recordDirty('reports', claimed.id, claimed);
+          return claimed;
+        },
       },
       users: {
         ...jsonRepos.users,
@@ -350,6 +365,64 @@ export function createLocalPersistentRepositories(
     async update(report: Report): Promise<void> {
       engine.put('reports', report.id, report, writeDirtyFlag);
     },
+    async delete(id: string): Promise<boolean> {
+      return engine.remove('reports', id, writeDirtyFlag);
+    },
+    async claimRescueMission(id: string, claim: AtomicRescueClaimInput): Promise<Report | null> {
+      const cur = engine.reports.get(id);
+      if (!cur) return null;
+      if (!['received', 'verifying', 'processing'].includes(cur.status)) return null;
+      if (
+        cur.assignedRescueId ||
+        (cur.rescueMission?.assignedTeamId && cur.rescueMission.status !== 'unassigned')
+      ) {
+        return null;
+      }
+      const hasCoords = typeof claim.lat === 'number' && typeof claim.lng === 'number';
+      const next = structuredClone(cur);
+      next.status = 'processing';
+      next.rescueStatus = 'EN_ROUTE';
+      next.assignedRescueId = claim.teamId;
+      next.assignedRescueName = claim.teamName;
+      next.acceptedAt = claim.nowIso;
+      next.rescueMission = {
+        status: 'en_route',
+        stageCode: 'EN_ROUTE',
+        assignedTeamId: claim.teamId,
+        assignedTeamName: claim.teamName,
+        assignedTeamCode: claim.teamCode,
+        acceptedAt: claim.nowIso,
+        enRouteAt: claim.nowIso,
+        arrivedAt: null,
+        inProgressAt: null,
+        onSiteAt: null,
+        completedAt: null,
+        lastLat: hasCoords ? claim.lat! : null,
+        lastLng: hasCoords ? claim.lng! : null,
+        lastHeading: null,
+        lastSpeedKmh: null,
+        lastLocationUpdatedAt: hasCoords ? claim.nowIso : null,
+        note: '',
+        releaseHistory: cur.rescueReleaseHistory ?? cur.rescueMission?.releaseHistory ?? [],
+      };
+      if (hasCoords) {
+        next.rescueLiveLocation = {
+          lat: claim.lat!,
+          lng: claim.lng!,
+          heading: null,
+          speedKmh: null,
+          updatedAt: claim.nowIso,
+        };
+      }
+      next.timeline.push({
+        stage: 'processing',
+        at: claim.nowIso,
+        note: `[Đội Cứu Hộ ${claim.teamCode ?? claim.teamName}] Đã tiếp nhận đơn & xuất phát tới hiện trường.`,
+      });
+      next.updatedAt = claim.nowIso;
+      engine.put('reports', next.id, next, writeDirtyFlag);
+      return structuredClone(next);
+    },
     async findNearby(q: NearbyQuery): Promise<Report[]> {
       const out: Report[] = [];
       for (const r of engine.reports.values()) {
@@ -405,18 +478,22 @@ export function createLocalPersistentRepositories(
       return null;
     },
     async save(user: UserRecord): Promise<void> {
-      engine.put('users', user.id, user, writeDirtyFlag);
+      engine.put('users', user.id, { ...user, role: normalizeRole(user.role) }, writeDirtyFlag);
     },
     async delete(id: string): Promise<boolean> {
       return engine.remove('users', id, writeDirtyFlag);
     },
     async list(role?: Role): Promise<UserRecord[]> {
+      const target = role ? normalizeRole(role) : undefined;
       const rows = [...engine.users.values()];
-      return structuredClone(role ? rows.filter((u) => u.role === role) : rows);
+      return structuredClone(target ? rows.filter((u) => normalizeRole(u.role) === target) : rows);
     },
     async query(filter: UserFilterQuery = {}): Promise<UserRecord[]> {
       let rows = [...engine.users.values()];
-      if (filter.role) rows = rows.filter((u) => u.role === filter.role);
+      if (filter.role) {
+        const target = normalizeRole(filter.role);
+        rows = rows.filter((u) => normalizeRole(u.role) === target);
+      }
       if (filter.wardCode) rows = rows.filter((u) => u.wardCode === filter.wardCode);
       if (filter.isActive !== undefined) rows = rows.filter((u) => Boolean(!u.revoked) === filter.isActive);
       if (filter.q && filter.q.trim()) {

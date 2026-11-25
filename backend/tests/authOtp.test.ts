@@ -103,7 +103,7 @@ beforeAll(async () => {
 
   const boot = await createRepositories();
   services = createServices(boot.repos);
-  await seedIfEmpty(boot.repos, services.audit);
+  await seedIfEmpty(boot.repos, services.audit, { includeFixtures: true });
   const server = createApp(services, boot).listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   close = async () => {

@@ -25,7 +25,7 @@ export const TRAN_BIEN_FALLBACK_COORDS = {
 
 export interface GeoJsonPoint {
   type: 'Point';
-  /** Chuẩn bắt buộc MongoDB 2dsphere: [longitude, latitude] */
+  /** Chuẩn GeoJSON quốc tế RFC 7946: [longitude, latitude] */
   coordinates: [number, number];
 }
 
@@ -43,7 +43,7 @@ export type NormalizedCoordinatesResult =
       lat: number;
       /** Frontend & Google Maps chuẩn: Kinh độ (102..110 tại VN) */
       lng: number;
-      /** MongoDB GeoJSON 2dsphere chuẩn: { type: 'Point', coordinates: [lng, lat] } */
+      /** Chuẩn GeoJSON: { type: 'Point', coordinates: [lng, lat] } */
       geoJson: GeoJsonPoint;
       /** True nếu đầu vào bị đảo ngược [lng, lat] và đã được tự động sửa lại */
       swapped: boolean;
@@ -111,7 +111,7 @@ function toFiniteNumber(val: unknown): number | null {
  * Chuẩn hóa hệ tọa độ thống nhất toàn dự án (`client/` + `server/`):
  * - Loại bỏ triệt để `[0, 0]` (Zero Island), `NaN`, `Infinity`, ngoài biên thế giới.
  * - Tự động phát hiện & sửa lỗi đảo ngược `[lat, lng]` vs `[lng, lat]` trong lãnh thổ Việt Nam (`lat` 8–24, `lng` 102–110).
- * - Xuất đồng thời `{ lat, lng }` cho Frontend/Google Maps và `{ type: 'Point', coordinates: [lng, lat] }` cho MongoDB 2dsphere.
+ * - Xuất đồng thời `{ lat, lng }` cho bản đồ và `{ type: 'Point', coordinates: [lng, lat] }` chuẩn GeoJSON.
  */
 export function normalizeCoordinates(
   input: RawCoordinateInput,

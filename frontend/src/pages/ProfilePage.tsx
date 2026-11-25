@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { UserProfile } from '@shared/types';
 import { CitizenLogin } from '../components/CitizenLogin';
 import { Spinner } from '../components/ui';
+import { normalizeRole } from '@shared/constants';
 import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
 import { useI18n } from '../i18n';
 import { api, ApiError, NetworkError } from '../lib/api';
@@ -106,7 +107,7 @@ export default function ProfilePage() {
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-xl font-extrabold">{u.name}</h1>
           <p className="text-sm text-muted">
-            {t(`role.${u.role}`)}
+            {t(`role.${normalizeRole(u.role)}`)}
             {u.email ? ` · ${u.email}` : ''}
             {u.phoneMasked ? ` · ${u.phoneMasked}` : ''}
           </p>

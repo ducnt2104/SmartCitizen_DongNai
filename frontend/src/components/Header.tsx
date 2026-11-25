@@ -1,6 +1,7 @@
-import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound, Users } from 'lucide-react';
+import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { normalizeRole } from '@shared/constants';
 import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
 import { useStats } from '../db/hooks';
 import { useI18n } from '../i18n';
@@ -27,7 +28,7 @@ export function ScopePicker({ dark = false }: { dark?: boolean }) {
     <div
       className={
         dark
-          ? 'flex w-full flex-wrap items-center gap-1.5'
+          ? 'flex flex-wrap items-center gap-1.5'
           : 'flex w-full flex-wrap items-center gap-1.5 rounded-2xl border border-line/70 bg-surface-2/75 p-1 sm:w-auto sm:flex-nowrap sm:border-0 sm:bg-transparent sm:p-0'
       }
       role="group"
@@ -35,7 +36,7 @@ export function ScopePicker({ dark = false }: { dark?: boolean }) {
     >
       <button type="button" aria-pressed={isCity} className={`${dark ? darkCls : lightCls} max-w-full shrink-0`} onClick={() => set({ scope: 'city' })}>
         <Globe2 className="h-4 w-4 shrink-0" aria-hidden />
-        <span className="truncate">{t('scope.cityAll', { n: cityStats?.total ?? 80 })}</span>
+        <span className="truncate">{t('scope.cityAll', { n: cityStats?.total ?? 0 })}</span>
       </button>
       {selectedWard && (
         <span className={`inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold ${dark ? 'border border-ioc-cyan/40 bg-ioc-raised text-ioc-cyan' : 'border border-brand/15 bg-brand-soft text-brand'}`}>
@@ -50,7 +51,7 @@ export function ScopePicker({ dark = false }: { dark?: boolean }) {
         onChange={(e) => set({ scope: e.target.value || 'city' })}
         className={
           dark
-            ? 'ioc-field min-w-0'
+            ? 'ioc-field min-w-0 max-w-[14rem]'
             : 'field !h-9 !min-h-9 min-w-0 flex-1 !rounded-xl !px-2.5 !py-0 leading-normal !text-xs sm:!h-10 sm:!min-h-10 sm:w-auto sm:flex-none sm:!text-sm'
         }
       >
@@ -93,6 +94,7 @@ function UserMenu() {
     );
   }
   const u = session.user;
+  const role = normalizeRole(u.role);
   return (
     <div className="relative" ref={ref}>
       <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} aria-label={t('nav.account')}>
@@ -103,23 +105,23 @@ function UserMenu() {
         <div role="menu" className="absolute right-0 z-50 mt-2 w-64 animate-pop rounded-2xl border border-line bg-surface p-2 shadow-lift">
           <div className="px-3 py-2">
             <p className="truncate font-semibold">{u.name}</p>
-            <p className="text-xs text-muted">{t(`role.${u.role}`)} · {t('auth.trust')}: <span className="mono">{u.trustScore}</span></p>
+            <p className="text-xs text-muted">{t(`role.${role}`)} · {t('auth.trust')}: <span className="mono">{u.trustScore}</span></p>
             {u.supervised && <p className="mt-1 text-xs font-semibold text-danger">{t('auth.supervised')}</p>}
           </div>
           <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/profile'); }}>
             <UserCog className="h-4 w-4" aria-hidden /> {t('nav.profile')}
           </button>
-          {u.role === 'volunteer' && (
-            <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/volunteer'); }}>
-              <Users className="h-4 w-4" aria-hidden /> {t('nav.volunteer')}
-            </button>
-          )}
-          {u.role === 'rescue_team' && (
+          {role === 'rescue' && (
             <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/rescue'); }}>
-              <Siren className="h-4 w-4 text-danger" aria-hidden /> Cổng Điều phối Cứu hộ (/rescue)
+              <Siren className="h-4 w-4 text-danger" aria-hidden /> Cổng Điều phối Cứu hộ
             </button>
           )}
-          {(u.role === 'ward_officer' || u.role === 'city_admin' || u.role === 'super_admin') && (
+          {role === 'officer' && (
+            <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/ioc'); }}>
+              <ShieldCheck className="h-4 w-4" aria-hidden /> {t('nav.admin')}
+            </button>
+          )}
+          {role === 'admin' && (
             <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/admin'); }}>
               <ShieldCheck className="h-4 w-4" aria-hidden /> {t('nav.admin')}
             </button>

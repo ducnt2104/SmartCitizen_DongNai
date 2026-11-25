@@ -304,7 +304,7 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     const s = createServices(boot.repos);
     s.cvEngine.setBaseUrl(`http://127.0.0.1:${cvPort}`);
     s.otpDelivery.setTestTransport(otp);
-    await seedIfEmpty(boot.repos, s.audit);
+    await seedIfEmpty(boot.repos, s.audit, { includeFixtures: true });
 
     const srv = createApp(s, boot).listen(0);
     base = `http://127.0.0.1:${(srv.address() as net.AddressInfo).port}`;
@@ -338,8 +338,8 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
       body: { staffCode: 'SUPER-ADMIN', password: superPassword, unit: 'city' },
     });
     expect(login.status).toBe(200);
-    expect(login.data.user.role).toBe('super_admin');
-    expect(login.data.user.roleCode).toBe('SUPER_ADMIN');
+    expect(login.data.user.role).toBe('admin');
+    expect(login.data.user.roleCode).toBe('ADMIN');
     const saToken = login.data.token as string;
     const saId = login.data.user.id as string;
 
@@ -356,7 +356,7 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
       },
     });
     expect(created.status).toBe(201);
-    expect(created.data.role).toBe('ward_officer');
+    expect(created.data.role).toBe('officer');
     expect(created.data.roleCode).toBe('OFFICER');
     const officerId = created.data.id as string;
 
@@ -366,14 +366,14 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
     });
     expect(offLogin1.status).toBe(200);
 
-    // Sửa thông tin & đổi quyền sang ADMIN (city_admin)
+    // Sửa thông tin & đổi quyền sang ADMIN
     const updated = await call<any>(`/api/admin/users/${officerId}`, {
       method: 'PATCH',
       token: saToken,
       body: { role: 'ADMIN', wardCode: null, name: 'Võ Minh Quân (TP)' },
     });
     expect(updated.status).toBe(200);
-    expect(updated.data.role).toBe('city_admin');
+    expect(updated.data.role).toBe('admin');
     expect(updated.data.roleCode).toBe('ADMIN');
 
     // Reset mật khẩu

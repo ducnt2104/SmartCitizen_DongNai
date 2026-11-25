@@ -386,7 +386,7 @@ describe('4. Tích hợp E2E API (/api/auth/otp/send, /verify, /verify-firebase)
 
     const boot = await createRepositories();
     services = createServices(boot.repos);
-    await seedIfEmpty(boot.repos, services.audit);
+    await seedIfEmpty(boot.repos, services.audit, { includeFixtures: true });
     services.otpDelivery.setTestTransport(emailTransport);
     services.phoneOtp.smsDispatcher.setOverrideProvider({
       name: 'android_gateway',

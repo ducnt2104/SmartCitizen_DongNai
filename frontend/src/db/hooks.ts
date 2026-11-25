@@ -1,5 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
+import { normalizeRole } from '@shared/constants';
 import { computeStats } from '@shared/report';
 import type { ClientReport, Role, ScopeStats } from '@shared/types';
 import { useSession } from '../lib/authStore';
@@ -20,16 +21,17 @@ export function useOnline(): boolean {
   return on;
 }
 
-export function isStaffRole(role: Role | undefined): boolean {
-  return role === 'ward_officer' || role === 'city_admin' || role === 'super_admin';
+export function isStaffRole(role: Role | string | undefined): boolean {
+  if (!role) return false;
+  const r = normalizeRole(role);
+  return r === 'admin' || r === 'officer' || r === 'rescue';
 }
 
-/** Quy tắc hiển thị: hồ sơ cách ly/từ chối chỉ chủ đơn, cán bộ, hoặc tình nguyện viên (nhiệm vụ) mới thấy. */
+/** Quy tắc hiển thị: hồ sơ cách ly/từ chối chỉ chủ đơn hoặc nhân sự nội bộ mới thấy. */
 export function visibleTo(r: ClientReport, role: Role | undefined): boolean {
   if (r.status !== 'quarantined' && r.status !== 'rejected') return true;
   if (r.mine) return true;
-  if (isStaffRole(role)) return true;
-  return role === 'volunteer' && r.needsFieldVerification;
+  return isStaffRole(role);
 }
 
 export function inScope(r: ClientReport, scope: string): boolean {
@@ -49,7 +51,7 @@ export function useScopedReports(scope: string): ClientReport[] | undefined {
   return useMemo(() => all?.filter((r) => inScope(r, scope)), [all, scope]);
 }
 
-/** Số liệu KPI: ưu tiên bản chụp từ máy chủ/seed (đủ 64 hồ sơ), dự phòng tính từ dữ liệu cục bộ. */
+/** Số liệu KPI: ưu tiên bản chụp đồng bộ từ máy chủ, dự phòng tính trực tiếp trên thiết bị. */
 export function useStats(scope: string): ScopeStats | undefined {
   const snap = useLiveQuery(() => db.settings.get(`stats:${scope}`), [scope]);
   const local = useLiveQuery(async () => {

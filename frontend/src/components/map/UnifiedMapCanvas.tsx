@@ -45,6 +45,10 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   accuracyM?: number | null;
   radiusM?: number | null;
   showArterials?: boolean;
+  activeDestinationId?: string | null;
+  autoFollow?: boolean;
+  followPadding?: { top?: number; bottom?: number; left?: number; right?: number };
+  fitRouteSeq?: number;
   onSelect?: (r: T) => void;
   onViewportChange?: (bbox: MapBbox) => void;
   onUserPan?: () => void;
@@ -120,6 +124,10 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     accuracyM: p.accuracyM,
     radiusM: p.radiusM,
     showArterials: p.showArterials,
+    activeDestinationId: p.activeDestinationId,
+    autoFollow: p.autoFollow,
+    followPadding: p.followPadding,
+    fitRouteSeq: p.fitRouteSeq,
     onSelect: p.onSelect,
     onViewportChange: p.onViewportChange,
     crosshairActive: Boolean(p.crosshairPin),

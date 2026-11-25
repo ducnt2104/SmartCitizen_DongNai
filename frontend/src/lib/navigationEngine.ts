@@ -51,6 +51,107 @@ export interface ActiveStepProgress {
   remainingDistanceKm: number;
   remainingDurationMin: number;
   suggestedBearingDeg: number | null;
+  /** Độ lệch vuông góc (mét) từ vị trí xe hiện tại tới tuyến đường đang dẫn */
+  offRouteMeters: number;
+  /** Phần lộ trình còn lại phía trước tính từ mũi xe tới điểm sự cố */
+  aheadPath: Array<{ lat: number; lng: number }>;
+}
+
+/** Độ lệch góc ngắn nhất (-180..+180 độ) phục vụ nội suy góc xoay xe mượt mà không bị lật ngược qua mốc 0°/360°. */
+export function shortestAngleDeltaDeg(fromDeg: number, toDeg: number): number {
+  return ((((toDeg - fromDeg) % 360) + 540) % 360) - 180;
+}
+
+export interface PolylineProjection {
+  minDistanceM: number;
+  closestPoint: { lat: number; lng: number };
+  segmentIndex: number;
+  remainingPathMeters: number;
+  aheadPath: Array<{ lat: number; lng: number }>;
+  forwardBearingDeg: number | null;
+}
+
+/** Chiếu vuông góc tọa độ GPS hiện tại lên đa tuyến `path` để tính độ lệch off-route (mét) và quãng đường thực còn lại. */
+export function projectPointOntoPolyline(
+  pos: { lat: number; lng: number },
+  path: ReadonlyArray<{ lat: number; lng: number }>,
+): PolylineProjection {
+  if (path.length === 0) {
+    return {
+      minDistanceM: 0,
+      closestPoint: pos,
+      segmentIndex: 0,
+      remainingPathMeters: 0,
+      aheadPath: [pos],
+      forwardBearingDeg: null,
+    };
+  }
+  if (path.length === 1) {
+    const d = haversineMeters(pos.lat, pos.lng, path[0].lat, path[0].lng);
+    return {
+      minDistanceM: d,
+      closestPoint: path[0],
+      segmentIndex: 0,
+      remainingPathMeters: d,
+      aheadPath: [pos, path[0]],
+      forwardBearingDeg: d > 2 ? computeBearingDeg(pos, path[0]) : null,
+    };
+  }
+
+  const cosLat = Math.max(0.2, Math.cos((pos.lat * Math.PI) / 180));
+  const mPerDegLat = 110_574;
+  const mPerDegLng = 111_320 * cosLat;
+
+  let bestDistSq = Infinity;
+  let bestSeg = 0;
+  let bestProj = path[0];
+
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const a = path[i];
+    const b = path[i + 1];
+    const ax = (a.lng - pos.lng) * mPerDegLng;
+    const ay = (a.lat - pos.lat) * mPerDegLat;
+    const bx = (b.lng - pos.lng) * mPerDegLng;
+    const by = (b.lat - pos.lat) * mPerDegLat;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq > 1e-6 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lenSq)) : 0;
+    const px = ax + dx * t;
+    const py = ay + dy * t;
+    const dSq = px * px + py * py;
+    if (dSq < bestDistSq) {
+      bestDistSq = dSq;
+      bestSeg = i;
+      bestProj = {
+        lat: a.lat + (b.lat - a.lat) * t,
+        lng: a.lng + (b.lng - a.lng) * t,
+      };
+    }
+  }
+
+  const segEnd = path[bestSeg + 1];
+  let remainingM = haversineMeters(bestProj.lat, bestProj.lng, segEnd.lat, segEnd.lng);
+  for (let j = bestSeg + 1; j < path.length - 1; j += 1) {
+    remainingM += haversineMeters(path[j].lat, path[j].lng, path[j + 1].lat, path[j + 1].lng);
+  }
+
+  const tailVertices = path.slice(bestSeg + 1);
+  const aheadPath = [bestProj, ...tailVertices];
+  const lookAhead = tailVertices[0] ?? bestProj;
+  const forwardBearingDeg =
+    haversineMeters(bestProj.lat, bestProj.lng, lookAhead.lat, lookAhead.lng) > 1.5
+      ? computeBearingDeg(bestProj, lookAhead)
+      : null;
+
+  return {
+    minDistanceM: Math.sqrt(bestDistSq),
+    closestPoint: bestProj,
+    segmentIndex: bestSeg,
+    remainingPathMeters: remainingM,
+    aheadPath: aheadPath.length >= 2 ? aheadPath : [pos, path[path.length - 1]],
+    forwardBearingDeg,
+  };
 }
 
 /** Tính góc phương vị (0..360 độ theo chiều kim đồng hồ từ hướng Bắc) giữa 2 tọa độ GPS. */
@@ -606,48 +707,47 @@ export function computeActiveStepProgress(
   route: NavigationRoute,
   currentPos: { lat: number; lng: number },
 ): ActiveStepProgress {
+  const proj = projectPointOntoPolyline(currentPos, route.path);
   const steps = route.steps;
   if (steps.length === 0) {
-    const d = haversineMeters(currentPos.lat, currentPos.lng, currentPos.lat, currentPos.lng);
     const fallbackStep: NavigationStep = {
       index: 0,
       instructionVi: 'Di chuyển tới hiện trường sự cố',
       shortRoadName: 'Hiện trường',
       maneuver: 'straight',
-      distanceM: d,
+      distanceM: Math.round(proj.remainingPathMeters),
       durationSec: 60,
       startLocation: currentPos,
-      endLocation: currentPos,
+      endLocation: route.path[route.path.length - 1] ?? currentPos,
     };
     return {
       activeStepIndex: 0,
       currentStep: fallbackStep,
       nextStep: null,
-      distanceToTurnM: 0,
-      remainingDistanceKm: route.distanceKm,
+      distanceToTurnM: Math.round(proj.remainingPathMeters),
+      remainingDistanceKm: Math.max(0.05, Math.round((proj.remainingPathMeters / 1000) * 100) / 100),
       remainingDurationMin: route.durationMin,
-      suggestedBearingDeg: null,
+      suggestedBearingDeg: proj.forwardBearingDeg,
+      offRouteMeters: Math.round(proj.minDistanceM),
+      aheadPath: proj.aheadPath,
     };
   }
 
-  // Tìm bước có điểm rẽ (endLocation / startLocation) gần và hợp lý nhất với vị trí hiện tại
+  // Chiếu vị trí xe lên từng đoạn step [startLocation -> endLocation] để chọn đúng chặng ngay cả trên quốc lộ dài
   let bestIdx = 0;
-  let bestDist = Infinity;
+  let bestScore = Infinity;
   for (let i = 0; i < steps.length; i += 1) {
     const s = steps[i];
-    const dStart = haversineMeters(currentPos.lat, currentPos.lng, s.startLocation.lat, s.startLocation.lng);
+    const stepProj = projectPointOntoPolyline(currentPos, [s.startLocation, s.endLocation]);
     const dEnd = haversineMeters(currentPos.lat, currentPos.lng, s.endLocation.lat, s.endLocation.lng);
-    const score = Math.min(dStart, dEnd);
-    if (score < bestDist) {
-      bestDist = score;
-      // Nếu đã sát điểm cuối của bước hiện tại (< 22m) và chưa phải bước cuối -> chuyển sang bước rẽ kế tiếp
+    if (stepProj.minDistanceM < bestScore) {
+      bestScore = stepProj.minDistanceM;
       bestIdx = dEnd < 22 && i + 1 < steps.length ? i + 1 : i;
     }
   }
 
-  // Ở điểm xuất phát: thay vì chỉ báo "Xuất phát...", ưu tiên hiển thị hành động rẽ kế tiếp nếu có ngay phía trước
   const displayIdx =
-    bestIdx === 0 && steps.length > 1 && steps[0].maneuver === 'depart' && steps[0].distanceM < 35
+    bestIdx === 0 && steps.length > 1 && steps[0].maneuver === 'depart' && steps[0].distanceM < 45
       ? 1
       : bestIdx;
 
@@ -665,19 +765,17 @@ export function computeActiveStepProgress(
   const distanceToTurnM =
     currentStep.maneuver === 'arrive' ? Math.round(rawTurnDist) : Math.max(5, Math.round(rawTurnDist));
 
-  let tailDistM = distanceToTurnM;
-  let tailDurSec = Math.round(
-    currentStep.distanceM > 0
-      ? (distanceToTurnM / currentStep.distanceM) * currentStep.durationSec
-      : currentStep.durationSec,
+  // Quãng đường và thời gian còn lại bám chính xác theo phần đa tuyến phía trước
+  const effectiveRemainingM = Math.max(
+    currentStep.maneuver === 'arrive' ? rawTurnDist : 15,
+    proj.remainingPathMeters > 0 ? proj.remainingPathMeters : rawTurnDist,
   );
-  for (let j = displayIdx + 1; j < steps.length; j += 1) {
-    tailDistM += steps[j].distanceM;
-    tailDurSec += steps[j].durationSec;
-  }
+  const totalRouteM = Math.max(1, route.distanceM);
+  const ratio = Math.min(1.25, effectiveRemainingM / totalRouteM);
+  const remainingDurSec = Math.max(20, Math.round(route.durationSec * ratio));
 
   const suggestedBearingDeg =
-    rawTurnDist > 4 ? computeBearingDeg(currentPos, maneuverTarget) : null;
+    proj.forwardBearingDeg ?? (rawTurnDist > 4 ? computeBearingDeg(currentPos, maneuverTarget) : null);
 
   return {
     activeStepIndex: displayIdx,
@@ -695,8 +793,10 @@ export function computeActiveStepProgress(
           : null
         : nextStep,
     distanceToTurnM,
-    remainingDistanceKm: Math.max(0.05, Math.round((tailDistM / 1000) * 100) / 100),
-    remainingDurationMin: Math.max(1, Math.round(tailDurSec / 60)),
+    remainingDistanceKm: Math.max(0.05, Math.round((effectiveRemainingM / 1000) * 100) / 100),
+    remainingDurationMin: Math.max(1, Math.round(remainingDurSec / 60)),
     suggestedBearingDeg,
+    offRouteMeters: Math.round(proj.minDistanceM),
+    aheadPath: proj.aheadPath,
   };
 }

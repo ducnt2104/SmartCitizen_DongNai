@@ -8,7 +8,7 @@ import type {
 } from './types';
 
 /**
- * Bộ dữ liệu mẫu CHUẨN (deterministic) phủ đều toàn bộ Thành phố Đồng Nai (cả 5 vùng — 95 Phường/Xã):
+ * Bộ bản ghi tham chiếu chuẩn (deterministic) phủ đều toàn bộ Thành phố Đồng Nai (cả 5 vùng — 95 Phường/Xã):
  *  - Đô thị Trung tâm (Trấn Biên, Biên Hòa, Tam Hiệp, Trảng Dài, Long Bình, Hố Nai, Long Hưng, Phước Tân, Tam Phước, Tân Triều)
  *  - Nam — Sân bay & Cảng (Long Thành, Nhơn Trạch, Đại Phước, Phước An, Phước Thái, Long Phước, Bình An, An Phước)
  *  - Đông — Long Khánh, Trảng Bom, Xuân Lộc (Trảng Bom, Dầu Giây, Long Khánh, Xuân Lộc, Cẩm Mỹ, Bình Lộc, Gia Kiệm)

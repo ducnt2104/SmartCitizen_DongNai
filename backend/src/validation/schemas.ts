@@ -16,7 +16,7 @@ const roleInput = z
   .string()
   .refine(
     (v) => normalizeRoleInput(v) !== null,
-    'Vai trò không hợp lệ (SUPER_ADMIN, ADMIN, OFFICER, RESCUE_TEAM, YOUTH_UNION, CITIZEN)',
+    'Vai trò không hợp lệ (ADMIN, OFFICER, RESCUE, CITIZEN)',
   );
 
 export const edgeStatsSchema = z.object({
@@ -53,11 +53,14 @@ export const schemas = {
     code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
     newPassword: z.string().min(8).max(128),
   }),
-  staffLogin: z.object({
-    staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/),
-    password: z.string().min(1).max(128),
-    unit: z.union([z.literal('city'), wardCode]).default('city'),
-  }),
+  staffLogin: z
+    .object({
+      staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/).optional(),
+      identifier: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/).optional(),
+      password: z.string().min(1).max(128),
+      unit: z.union([z.literal('city'), z.literal('auto'), wardCode]).optional(),
+    })
+    .refine((d) => Boolean(d.staffCode || d.identifier), 'Vui lòng nhập Mã tài khoản, Email hoặc Số điện thoại.'),
   rescueLogin: z.object({
     identifier: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/),
     password: z.string().min(1).max(128),
@@ -74,7 +77,7 @@ export const schemas = {
     staffCode: z.string().min(3).max(32).regex(/^[A-Za-z0-9-]+$/),
     name: z.string().min(2).max(80),
     password: z.string().min(8).max(128),
-    wardCode,
+    wardCode: wardCode.nullable().optional(),
     email: z.string().email().max(120).optional(),
   }),
   revokeStaff: z.object({ revoked: z.boolean() }),
@@ -185,16 +188,24 @@ export const schemas = {
     photo: photo.optional(),
   }),
 
+  rescueAccept: z.object({
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
+  }),
   rescueStatus: z
     .object({
       status: z
         .enum([
           'ACCEPTED',
           'EN_ROUTE',
+          'ARRIVED',
+          'IN_PROGRESS',
           'ON_SITE',
           'RESOLVED',
           'accepted',
           'en_route',
+          'arrived',
+          'in_progress',
           'on_site',
           'resolved',
           'completed',
@@ -204,10 +215,14 @@ export const schemas = {
         .enum([
           'ACCEPTED',
           'EN_ROUTE',
+          'ARRIVED',
+          'IN_PROGRESS',
           'ON_SITE',
           'RESOLVED',
           'accepted',
           'en_route',
+          'arrived',
+          'in_progress',
           'on_site',
           'resolved',
           'completed',
@@ -220,7 +235,18 @@ export const schemas = {
       override: z.boolean().default(false),
       edge: edgeStatsSchema.optional(),
     })
-    .refine((d) => Boolean(d.status || d.step), 'Cần truyền trạng thái nhiệm vụ (ACCEPTED, EN_ROUTE, ON_SITE, RESOLVED).'),
+    .refine((d) => Boolean(d.status || d.step), 'Cần truyền trạng thái nhiệm vụ (EN_ROUTE, ARRIVED, IN_PROGRESS, RESOLVED).'),
+  rescueRelease: z.object({
+    reason: z.string().trim().min(5, 'Vui lòng nhập lý do trả đơn (tối thiểu 5 ký tự)').max(400),
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
+  }),
+  rescueLocation: z.object({
+    lat: z.number().finite(),
+    lng: z.number().finite(),
+    heading: z.number().finite().nullable().optional(),
+    speed: z.number().finite().nullable().optional(),
+  }),
   rescueComplete: z.object({
     afterPhoto: photo,
     note: z.string().max(400).default(''),

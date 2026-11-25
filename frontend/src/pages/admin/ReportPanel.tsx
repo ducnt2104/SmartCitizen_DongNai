@@ -1,6 +1,7 @@
-import { ArrowRightLeft, Ban, CheckCircle2, ExternalLink, Navigation, Radio, RotateCcw, ShieldAlert, Upload, X } from 'lucide-react';
+import { ArrowRightLeft, Ban, CheckCircle2, ExternalLink, Navigation, Radio, RotateCcw, ShieldAlert, Truck, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { DEPARTMENTS } from '@shared/constants';
+import { haversineMeters } from '@shared/geo';
 import type { ClientReport, Department } from '@shared/types';
 import { TacticalNavigationWorkspace } from '../../components/navigation/TacticalNavigationWorkspace';
 import { TacticalBriefingCard } from '../../components/TacticalBriefingCard';
@@ -31,7 +32,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const { t, fmtDate } = useI18n();
   const toast = useToast();
   const session = useSession();
-  const { pos: livePos, refreshNow, startSimulation, stopSimulation } = useLiveNavigationGps(
+  const { pos: livePos, refreshNow } = useLiveNavigationGps(
     session?.user.wardCode ?? r.wardCode,
   );
   const [navModalOpen, setNavModalOpen] = useState(false);
@@ -162,14 +163,33 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
               mission={r}
               livePos={livePos}
               onRefreshGps={() => void refreshNow()}
-              onStartSimulation={startSimulation}
-              onStopSimulation={stopSimulation}
               onMissionUpdated={(upd) => onChanged(upd)}
-              onCloseModal={() => {
-                stopSimulation();
-                setNavModalOpen(false);
-              }}
+              onCloseModal={() => setNavModalOpen(false)}
             />
+          </div>
+        )}
+
+        {r.status !== 'resolved' && (r.assignedRescueName || r.rescueMission?.assignedTeamName) && (
+          <div className="rounded border border-cyan-500/40 bg-cyan-500/10 p-2.5 text-xs">
+            <p className="flex items-center gap-1.5 font-bold text-ioc-cyan">
+              <Truck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              {r.assignedRescueName ?? r.rescueMission?.assignedTeamName}
+            </p>
+            <p className="mt-1 text-ioc-text">
+              Trạng thái:{' '}
+              <strong>
+                {r.rescueStatus === 'IN_PROGRESS'
+                  ? 'Đang xử lý sự cố'
+                  : r.rescueStatus === 'ARRIVED'
+                    ? 'Đã tới hiện trường'
+                    : 'Đang di chuyển tới hiện trường'}
+              </strong>
+              {r.rescueLiveLocation && (() => {
+                const dKm = Math.round((haversineMeters(r.rescueLiveLocation.lat, r.rescueLiveLocation.lng, r.lat, r.lng) / 1000) * 100) / 100;
+                const eta = Math.max(1, Math.round(((dKm * 1.24) / 36) * 60));
+                return ` · Cách hiện trường ${dKm} km (~${eta} phút)`;
+              })()}
+            </p>
           </div>
         )}
 
@@ -206,7 +226,6 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
                   <p className="mono mt-1 text-[11px] text-ioc-text">
                     {r.resolution.sceneMatchScore !== undefined ? `${t('detail.sceneScore')}: ${r.resolution.sceneMatchScore}%` : ''}
                     {r.resolution.resolutionScore !== undefined ? ` · ${t('detail.resScore')}: ${r.resolution.resolutionScore}%` : ''}
-                    {r.resolution.inlierKeypoints ? ` · RANSAC ${r.resolution.inlierKeypoints} pts` : ''}
                   </p>
                 )}
               </div>

@@ -55,7 +55,6 @@ interface OtpStatusResponse {
   firebaseClientConfig?: FirebaseClientEnv | null;
   telegramFallbackReady?: boolean;
   emailFallbackAvailable?: boolean;
-  allowDemoOtp?: boolean;
 }
 
 type AuthMode = 'otp' | 'password' | 'reset';
@@ -70,9 +69,9 @@ function isEmailValid(raw: string): boolean {
 
 /**
  * Form Xác thực Công dân Đa kênh (Số điện thoại +84 | Email + Mật khẩu):
- * - Chuyển nhanh giữa tab Số điện thoại (+84, validate tức thì) và Email (giữ nguyên 100% luồng cũ).
+ * - Chuyển nhanh giữa tab Số điện thoại (+84, validate tức thì) và Email.
  * - Hỗ trợ song song Firebase Phone Auth (`RecaptchaVerifier` ẩn + `signInWithPhoneNumber`)
- *   và cổng SMS trực tiếp từ Server (`android_gateway`, `esms`, `speedsms`, `twilio`, `demo`).
+ *   và cổng SMS trực tiếp từ máy chủ (`android_gateway`, `esms`, `speedsms`, `twilio`).
  * - Ô nhập 6 số OTP chuẩn Mobile (`inputMode="numeric"`, `autoComplete="one-time-code"`, paste 6 số)
  *   cùng đồng hồ đếm ngược 60 giây trước khi hiện nút "Gửi lại mã".
  */
@@ -101,7 +100,6 @@ export function CitizenAuthForm({
   const [targetMasked, setTargetMasked] = useState('');
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
-  const [devOtpPreview, setDevOtpPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
@@ -118,7 +116,6 @@ export function CitizenAuthForm({
         setOtpStatus(res);
         const smsReady =
           res.smsConfigured ||
-          Boolean(res.allowDemoOtp) ||
           Boolean(res.telegramFallbackReady) ||
           isFirebasePhoneClientConfigured();
         if (!smsReady && res.emailConfigured) {
@@ -152,7 +149,6 @@ export function CitizenAuthForm({
     setStage('input');
     setCode('');
     setFallbackNotice(null);
-    setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
   };
@@ -162,7 +158,6 @@ export function CitizenAuthForm({
     setStage('input');
     setCode('');
     setFallbackNotice(null);
-    setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
   };
@@ -181,7 +176,6 @@ export function CitizenAuthForm({
     setBusy(true);
     setErr(null);
     setFallbackNotice(null);
-    setDevOtpPreview(null);
     firebaseConfirmationRef.current = null;
 
     try {
@@ -231,7 +225,6 @@ export function CitizenAuthForm({
         } else if (r.fallbackChannel === 'telegram') {
           setFallbackNotice('Mã xác thực OTP đã được chuyển qua kênh thông báo dự phòng.');
         }
-        if (r.devOtpPreview) setDevOtpPreview(r.devOtpPreview);
         setStage('code');
         toast('info', t('auth.otpSentToast', { target: r.fallbackTargetMasked ?? r.targetMasked }));
         return;
@@ -348,7 +341,6 @@ export function CitizenAuthForm({
     channelTab === 'phone' &&
     otpStatus !== null &&
     !otpStatus.smsConfigured &&
-    !otpStatus.allowDemoOtp &&
     !otpStatus.telegramFallbackReady &&
     !shouldUseFirebaseClientFlow;
 
@@ -604,25 +596,6 @@ export function CitizenAuthForm({
             )}
           </div>
 
-          {devOtpPreview && (
-            <div
-              role="status"
-              className="flex items-center justify-between gap-2 rounded-xl border border-brand/40 bg-brand-soft px-3 py-2 text-xs text-brand"
-            >
-              <span>
-                Mã xác thực thử nghiệm:{' '}
-                <strong className="font-mono text-sm tracking-widest">{devOtpPreview}</strong>
-              </span>
-              <button
-                type="button"
-                onClick={() => setCode(devOtpPreview)}
-                className="shrink-0 rounded-lg bg-brand px-2.5 py-1 font-bold text-white"
-              >
-                Điền nhanh
-              </button>
-            </div>
-          )}
-
           <div className="space-y-2">
             <label className="label">
               <ShieldCheck className="mr-1 inline h-4 w-4" aria-hidden />
@@ -704,7 +677,6 @@ export function CitizenAuthForm({
               onClick={() => {
                 setStage('input');
                 setCode('');
-                setDevOtpPreview(null);
                 setErr(null);
               }}
             >

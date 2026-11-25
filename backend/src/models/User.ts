@@ -9,12 +9,9 @@ import {
 
 export const USER_ROLES = [
   'citizen',
-  'volunteer',
-  'rescue_team',
-  'ward_officer',
-  'city_admin',
+  'officer',
+  'rescue',
   'admin',
-  'super_admin',
 ] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -129,14 +126,12 @@ const userSchema = new Schema<IUser>(
       type: String,
       set: (v: unknown) => {
         if (typeof v !== 'string') return v;
-        const trimmed = v.trim();
-        const upper = trimmed.toUpperCase();
-        if (upper === 'RESCUE_TEAM' || upper === 'RESCUE') return 'rescue_team';
-        if (upper === 'SUPER_ADMIN' || upper === 'SUPERADMIN') return 'super_admin';
-        if (upper === 'OFFICER') return 'ward_officer';
-        if (upper === 'YOUTH_UNION') return 'volunteer';
-        if (upper === 'CITIZEN') return 'citizen';
-        return trimmed.toLowerCase();
+        const low = v.trim().toLowerCase();
+        if (low === 'super_admin' || low === 'superadmin' || low === 'city_admin' || low === 'admin') return 'admin';
+        if (low === 'ward_officer' || low === 'officer' || low === 'volunteer' || low === 'youth_union') return 'officer';
+        if (low === 'rescue_team' || low === 'rescue' || low === 'cuu_ho') return 'rescue';
+        if (low === 'citizen') return 'citizen';
+        return low;
       },
       enum: {
         values: USER_ROLES,
@@ -150,16 +145,16 @@ const userSchema = new Schema<IUser>(
       default: undefined,
       required: [
         function requiresAssignedArea(this: IUser) {
-          return this.role === 'ward_officer';
+          return this.role === 'officer';
         },
-        'Cán bộ xã/phường (ward_officer) bắt buộc phải có đầy đủ district và ward trong assignedArea.',
+        'Cán bộ xử lý (officer) bắt buộc phải có đầy đủ district và ward trong assignedArea.',
       ],
       validate: {
         validator(this: IUser, area: AssignedArea | undefined) {
-          if (this.role !== 'ward_officer') return true;
+          if (this.role !== 'officer') return true;
           return Boolean(area && area.district.trim().length > 0 && area.ward.trim().length > 0);
         },
-        message: 'Cán bộ xã/phường (ward_officer) bắt buộc phải có đầy đủ district và ward trong assignedArea.',
+        message: 'Cán bộ xử lý (officer) bắt buộc phải có đầy đủ district và ward trong assignedArea.',
       },
     },
     trustScore: {

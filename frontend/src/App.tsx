@@ -1,5 +1,5 @@
 import { Suspense, useEffect } from 'react';
-import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import type { UserProfile } from '@shared/types';
 import { CommunityLayout } from './components/CommunityLayout';
 import { RoleGuard } from './components/RoleGuard';
@@ -18,10 +18,8 @@ const ReportPage = lazyWithRetry(() => import('./pages/Report'), 'ReportPage');
 const MapPage = lazyWithRetry(() => import('./pages/MapPage'), 'MapPage');
 const MinePage = lazyWithRetry(() => import('./pages/MinePage'), 'MinePage');
 const ProfilePage = lazyWithRetry(() => import('./pages/ProfilePage'), 'ProfilePage');
-const VolunteerPage = lazyWithRetry(() => import('./pages/VolunteerPage'), 'VolunteerPage');
 const AuthPage = lazyWithRetry(() => import('./pages/AuthPage'), 'AuthPage');
 const AdminPage = lazyWithRetry(() => import('./pages/admin/AdminPage'), 'AdminPage');
-const RescueLoginPage = lazyWithRetry(() => import('./pages/rescue/RescueLoginPage'), 'RescueLoginPage');
 const RescuePortalPage = lazyWithRetry(() => import('./pages/rescue/RescuePortalPage'), 'RescuePortalPage');
 
 /** Đồng bộ hồ sơ & xoay vòng cookie phiên khi khởi động nếu trình duyệt đang lưu phiên. */
@@ -64,8 +62,6 @@ function SyncToasts() {
 function ScrollTop() {
   const { pathname } = useLocation();
   useEffect(() => {
-    // Bắt buộc bọc ngoặc nhọn {}: trên Chromium mới, window.scrollTo() trả về Promise thay vì undefined;
-    // nếu trả về ngầm Promise từ useEffect, React sẽ gọi Promise như hàm cleanup khi đổi route và gây crash trắng trang!
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
   }, [pathname]);
   return null;
@@ -86,29 +82,31 @@ export default function App() {
               <Route path="map" element={<MapPage />} />
               <Route path="mine" element={<MinePage />} />
               <Route path="profile" element={<ProfilePage />} />
-              <Route path="volunteer" element={<VolunteerPage />} />
+              <Route path="volunteer" element={<Navigate to="/ioc" replace />} />
               <Route path="*" element={<HomePage />} />
             </Route>
             <Route path="auth" element={<AuthPage />} />
-            <Route path="rescue/login" element={<RescueLoginPage />} />
+            <Route path="rescue/login" element={<Navigate to="/auth" replace />} />
             <Route
               path="rescue"
               element={
-                <RoleGuard
-                  allowedRoles={['rescue_team', 'ward_officer', 'city_admin', 'super_admin']}
-                  redirectTo="/rescue/login"
-                >
+                <RoleGuard allowedRoles={['rescue', 'officer', 'admin']} redirectTo="/auth">
                   <RescuePortalPage />
+                </RoleGuard>
+              }
+            />
+            <Route
+              path="ioc"
+              element={
+                <RoleGuard allowedRoles={['officer', 'admin']} redirectTo="/auth">
+                  <AdminPage />
                 </RoleGuard>
               }
             />
             <Route
               path="admin"
               element={
-                <RoleGuard
-                  allowedRoles={['ward_officer', 'city_admin', 'super_admin']}
-                  redirectTo="/auth"
-                >
+                <RoleGuard allowedRoles={['admin', 'officer']} redirectTo="/auth">
                   <AdminPage />
                 </RoleGuard>
               }
@@ -116,10 +114,7 @@ export default function App() {
             <Route
               path="dashboard"
               element={
-                <RoleGuard
-                  allowedRoles={['ward_officer', 'city_admin', 'super_admin']}
-                  redirectTo="/auth"
-                >
+                <RoleGuard allowedRoles={['admin', 'officer']} redirectTo="/auth">
                   <AdminPage />
                 </RoleGuard>
               }

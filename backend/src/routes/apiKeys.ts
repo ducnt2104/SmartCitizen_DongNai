@@ -63,7 +63,7 @@ export const patchApiKeySchema = z
 export function buildApiKeysRouter(s: Services): Router {
   const router = Router();
   const auth = authMiddleware(s);
-  const adminRoles = ['city_admin', 'super_admin'] as unknown as Role[];
+  const adminRoles: Role[] = ['admin'];
   const cityAdmin = auth.requireRole(...adminRoles);
   const h = asyncHandler;
 

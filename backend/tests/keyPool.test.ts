@@ -94,7 +94,7 @@ describe('Admin API `/api/admin/api-keys` — Bảo mật RBAC, Bulk Import AES-
     });
 
     await s.keyPool.init();
-    await seedIfEmpty(boot.repos, s.audit);
+    await seedIfEmpty(boot.repos, s.audit, { includeFixtures: true });
     const server = createApp(s, boot).listen(0);
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 

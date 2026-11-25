@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeRole, toRoleCode } from '@shared/constants';
 import { hammingDistance } from '@shared/dhash';
 import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint, TRAN_BIEN_FALLBACK_COORDS } from '@shared/coordinates';
 import { computeStats, toClientReport } from '@shared/report';
@@ -26,6 +27,8 @@ import {
   computeActiveStepProgress,
   computeBearingDeg,
   formatDistanceVi,
+  projectPointOntoPolyline,
+  shortestAngleDeltaDeg,
 } from '../lib/navigationEngine';
 
 const extractPlaceholders = (s: string): string[] =>
@@ -105,7 +108,29 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     expect(emergency.suggestedDepartment).toBe('dien_luc');
   });
 
-  it('chuẩn hóa tọa độ GPS (chặn [0,0], NaN, tự động sửa đảo ngược [lng, lat] và chuẩn hóa GeoJSON 2dsphere)', () => {
+  it('chuẩn hóa tương thích ngược hệ thống 4 vai trò chuẩn (ADMIN, OFFICER, RESCUE, CITIZEN)', () => {
+    expect(normalizeRole('SUPER_ADMIN')).toBe('admin');
+    expect(normalizeRole('super_admin')).toBe('admin');
+    expect(normalizeRole('city_admin')).toBe('admin');
+    expect(normalizeRole('ADMIN')).toBe('admin');
+    expect(toRoleCode('super_admin')).toBe('ADMIN');
+
+    expect(normalizeRole('ward_officer')).toBe('officer');
+    expect(normalizeRole('OFFICER')).toBe('officer');
+    expect(normalizeRole('volunteer')).toBe('officer');
+    expect(normalizeRole('YOUTH_UNION')).toBe('officer');
+    expect(toRoleCode('officer')).toBe('OFFICER');
+
+    expect(normalizeRole('rescue_team')).toBe('rescue');
+    expect(normalizeRole('RESCUE_TEAM')).toBe('rescue');
+    expect(normalizeRole('RESCUE')).toBe('rescue');
+    expect(toRoleCode('rescue')).toBe('RESCUE');
+
+    expect(normalizeRole('citizen')).toBe('citizen');
+    expect(toRoleCode('citizen')).toBe('CITIZEN');
+  });
+
+  it('chuẩn hóa tọa độ GPS (chặn [0,0], NaN, tự động sửa đảo ngược [lng, lat] và chuẩn hóa GeoJSON)', () => {
     expect(normalizeCoordinates({ lat: 0, lng: 0 }).ok).toBe(false);
     expect(normalizeCoordinates({ lat: Number.NaN, lng: 106.82 }).ok).toBe(false);
     expect(normalizeCoordinates({ lat: 48.8566, lng: 2.3522 }).ok).toBe(false); // Ngoài lãnh thổ VN
@@ -204,5 +229,21 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     expect(prog.currentStep.instructionVi.length).toBeGreaterThan(5);
     expect(prog.remainingDistanceKm).toBeGreaterThan(0);
     expect(prog.remainingDurationMin).toBeGreaterThanOrEqual(1);
+    expect(prog.offRouteMeters).toBeLessThan(15);
+    expect(prog.aheadPath.length).toBeGreaterThanOrEqual(2);
+
+    // Góc xoay ngắn nhất qua mốc 0°/360° không bị lật vòng ngược
+    expect(shortestAngleDeltaDeg(355, 5)).toBe(10);
+    expect(shortestAngleDeltaDeg(5, 355)).toBe(-10);
+
+    // Phát hiện xe đi lệch khỏi tuyến > 50m để kích hoạt Auto Re-route
+    const offProj = projectPointOntoPolyline(
+      { lat: 10.952, lng: 106.8243 },
+      [
+        { lat: 10.9465, lng: 106.82 },
+        { lat: 10.9465, lng: 106.83 },
+      ],
+    );
+    expect(offProj.minDistanceM).toBeGreaterThan(500);
   });
 });

@@ -12,15 +12,13 @@ export const CATEGORIES: readonly Category[] = [
   'khac',
 ] as const;
 
-export type Role = 'super_admin' | 'city_admin' | 'ward_officer' | 'rescue_team' | 'volunteer' | 'citizen';
-export type RoleCode = 'SUPER_ADMIN' | 'ADMIN' | 'OFFICER' | 'RESCUE_TEAM' | 'YOUTH_UNION' | 'CITIZEN';
+export type Role = 'admin' | 'officer' | 'rescue' | 'citizen';
+export type RoleCode = 'ADMIN' | 'OFFICER' | 'RESCUE' | 'CITIZEN';
 
 export const ROLES: readonly Role[] = [
-  'super_admin',
-  'city_admin',
-  'ward_officer',
-  'rescue_team',
-  'volunteer',
+  'admin',
+  'officer',
+  'rescue',
   'citizen',
 ] as const;
 

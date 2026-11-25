@@ -15,7 +15,6 @@ import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
 import { buildApiKeysRouter } from './apiKeys';
 import { buildAuthRouter } from './auth';
-import { buildSystemDiagnosticsRouter } from './system';
 
 export function buildRouter(
   s: Services,
@@ -69,8 +68,8 @@ export function buildRouter(
   api.post('/reports/:id/attach-photo', auth.required, limits.reportBurst, validateBody(schemas.attachPhoto), h(r.attachPhoto));
   api.post('/reports/:id/rate', auth.required, validateBody(schemas.rate), h(r.rate));
 
-  // Tình nguyện viên (YOUTH_UNION)
-  const vol = auth.requireRole('volunteer');
+  // Tác vụ xác minh hiện trường (gộp về Cán bộ xử lý OFFICER & ADMIN)
+  const vol = auth.requireRole('officer', 'admin');
   api.get('/volunteer/tasks', vol, h(v.tasks));
   api.post('/volunteer/tasks/:id/accept', vol, h(v.accept));
   api.post('/volunteer/tasks/:id/verify', vol, validateBody(schemas.volunteerVerify), h(v.verify));
@@ -78,17 +77,20 @@ export function buildRouter(
   api.get('/volunteer/leaderboard', auth.optional, h(v.leaderboard));
   api.get('/volunteer/logbook', vol, h(v.logbook));
 
-  // Cổng Tác chiến Đội Cứu Hộ Hiện trường (RESCUE_TEAM + Cán bộ hiện trường & Giám sát cấp TP/SuperAdmin)
-  const rescue = auth.requireRole('rescue_team', 'ward_officer', 'city_admin', 'super_admin');
+  // Cổng Tác chiến Đội Cứu Hộ Hiện trường (RESCUE, OFFICER, ADMIN)
+  const rescue = auth.requireRole('rescue', 'officer', 'admin');
   api.get('/rescue/missions', rescue, h(rc.missions));
+  api.post('/rescue/missions/:id/accept', rescue, validateBody(schemas.rescueAccept), h(rc.accept));
   api.patch('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
   api.post('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
+  api.post('/rescue/missions/:id/release', rescue, validateBody(schemas.rescueRelease), h(rc.release));
+  api.patch('/rescue/missions/:id/location', rescue, validateBody(schemas.rescueLocation), h(rc.updateLocation));
   api.post('/rescue/missions/:id/complete', rescue, validateBody(schemas.rescueComplete), h(rc.complete));
 
-  // IOC Cán bộ & Quản trị Hệ thống (SUPER_ADMIN, ADMIN, OFFICER)
-  const staff = auth.requireRole('ward_officer', 'city_admin', 'super_admin');
-  const staffOrRescue = auth.requireRole('rescue_team', 'ward_officer', 'city_admin', 'super_admin');
-  const admins = auth.requireRole('city_admin', 'super_admin');
+  // IOC Cán bộ xử lý & Quản trị Hệ thống (ADMIN, OFFICER)
+  const staff = auth.requireRole('officer', 'admin');
+  const staffOrRescue = auth.requireRole('rescue', 'officer', 'admin');
+  const admins = auth.requireRole('admin');
 
   api.get('/admin/overview', staff, h(ad.overview));
   api.get('/admin/queue', staff, h(ad.queue));
@@ -106,7 +108,7 @@ export function buildRouter(
   api.post('/admin/staff', admins, validateBody(schemas.createStaff), h(ad.createStaff));
   api.patch('/admin/staff/:id/revoke', admins, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
 
-  // Full RBAC User Management & Dynamic Local AI Config
+  // Full RBAC User Management (4 Roles) & Dynamic Local AI Config
   api.get('/admin/users', admins, h(ad.listUsers));
   api.post('/admin/users', admins, validateBody(schemas.adminCreateUser), h(ad.createUser));
   api.patch('/admin/users/:id', admins, validateBody(schemas.adminUpdateUser), h(ad.updateUser));
@@ -114,11 +116,10 @@ export function buildRouter(
   api.delete('/admin/users/:id', admins, h(ad.deleteUser));
   api.get('/admin/ai-config', admins, h(ad.getAiConfig));
   api.patch('/admin/ai-config', admins, validateBody(schemas.adminUpdateAiConfig), h(ad.updateAiConfig));
+  api.post('/admin/purge-demo', admins, h(ad.purgeDemo));
+  api.post('/admin/maintenance/purge-seed', admins, h(ad.purgeDemo));
   api.use('/admin/api-keys', buildApiKeysRouter(s));
   api.get('/admin/export', staff, h(ad.export));
-
-  // System Diagnostics & Control Plugin
-  api.use('/system', buildSystemDiagnosticsRouter(s, bootInfo));
 
   // SmartCitizen AI Brain & Computer Vision
   api.post('/ai/analyze-image', limits.vision, validateBody(schemas.analyzeImage), h(ai.analyzeImage));

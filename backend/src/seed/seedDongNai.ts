@@ -65,7 +65,7 @@ export function buildDongNaiSeedDataset(): DongNaiSeedDataset {
       _id: officerTranBienId,
       phoneNumber: '0901000002',
       fullName: 'Trần Thị Hồng Nhung (Cán bộ P. Trấn Biên)',
-      role: 'ward_officer',
+      role: 'officer',
       assignedArea: { district: 'TP. Biên Hòa', ward: 'Phường Trấn Biên' },
       trustScore: 100,
       otpVerification: {
@@ -83,7 +83,7 @@ export function buildDongNaiSeedDataset(): DongNaiSeedDataset {
       _id: officerTaLaiId,
       phoneNumber: '0901000003',
       fullName: 'Điểu Văn Sơn (Cán bộ Xã Tà Lài)',
-      role: 'ward_officer',
+      role: 'officer',
       assignedArea: { district: 'Huyện Tân Phú', ward: 'Xã Tà Lài' },
       trustScore: 100,
       otpVerification: {

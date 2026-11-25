@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeRole } from '../shared/constants';
 import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
 import { haversineMeters } from '../shared/geo';
 import type {
   AiConfigRepository,
   AiEvaluationRecord,
   AiEvaluationRepository,
+  AtomicRescueClaimInput,
   AuditRepository,
   DbHealthStats,
   FingerprintRepository,
@@ -47,6 +49,7 @@ class JsonStore {
   };
   private timer: NodeJS.Timeout | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(private readonly file: string) {}
 
@@ -75,22 +78,30 @@ class JsonStore {
   }
 
   touch(): void {
-    if (this.timer) return;
+    if (this.closed || this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.flush();
+      if (!this.closed) void this.flush();
     }, 150);
   }
 
-  flush(): Promise<void> {
+  flush(markClosed = false): Promise<void> {
+    if (markClosed) this.closed = true;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
     this.writing = this.writing
       .then(async () => {
+        if (!fs.existsSync(path.dirname(this.file))) return;
         const tmp = `${this.file}.tmp`;
         await fs.promises.writeFile(tmp, JSON.stringify(this.data), 'utf8');
         await fs.promises.rename(tmp, this.file);
       })
       .catch((err) => {
-        console.error('[json-store] Ghi store.json thất bại:', err);
+        if (!this.closed) {
+          console.error('[json-store] Ghi store.json thất bại:', err);
+        }
       });
     return this.writing;
   }
@@ -135,6 +146,73 @@ class JsonReportRepo implements ReportRepository {
     this.s.data.reports[i] = structuredClone(report);
     this.s.touch();
   }
+  async delete(id: string): Promise<boolean> {
+    const before = this.s.data.reports.length;
+    this.s.data.reports = this.s.data.reports.filter((x) => x.id !== id);
+    if (this.s.data.reports.length !== before) {
+      this.s.touch();
+      return true;
+    }
+    return false;
+  }
+  async claimRescueMission(id: string, claim: AtomicRescueClaimInput): Promise<Report | null> {
+    // Thực thi đồng bộ 100% trong cùng tick Event Loop để triệt tiêu mọi race condition khi 2 request đến cùng lúc
+    const i = this.s.data.reports.findIndex((x) => x.id === id);
+    if (i < 0) return null;
+    const cur = this.s.data.reports[i];
+    if (!['received', 'verifying', 'processing'].includes(cur.status)) return null;
+    if (
+      cur.assignedRescueId ||
+      (cur.rescueMission?.assignedTeamId && cur.rescueMission.status !== 'unassigned')
+    ) {
+      return null;
+    }
+    const hasCoords = typeof claim.lat === 'number' && typeof claim.lng === 'number';
+    const next = structuredClone(cur);
+    next.status = 'processing';
+    next.rescueStatus = 'EN_ROUTE';
+    next.assignedRescueId = claim.teamId;
+    next.assignedRescueName = claim.teamName;
+    next.acceptedAt = claim.nowIso;
+    next.rescueMission = {
+      status: 'en_route',
+      stageCode: 'EN_ROUTE',
+      assignedTeamId: claim.teamId,
+      assignedTeamName: claim.teamName,
+      assignedTeamCode: claim.teamCode,
+      acceptedAt: claim.nowIso,
+      enRouteAt: claim.nowIso,
+      arrivedAt: null,
+      inProgressAt: null,
+      onSiteAt: null,
+      completedAt: null,
+      lastLat: hasCoords ? claim.lat! : null,
+      lastLng: hasCoords ? claim.lng! : null,
+      lastHeading: null,
+      lastSpeedKmh: null,
+      lastLocationUpdatedAt: hasCoords ? claim.nowIso : null,
+      note: '',
+      releaseHistory: cur.rescueReleaseHistory ?? cur.rescueMission?.releaseHistory ?? [],
+    };
+    if (hasCoords) {
+      next.rescueLiveLocation = {
+        lat: claim.lat!,
+        lng: claim.lng!,
+        heading: null,
+        speedKmh: null,
+        updatedAt: claim.nowIso,
+      };
+    }
+    next.timeline.push({
+      stage: 'processing',
+      at: claim.nowIso,
+      note: `[Đội Cứu Hộ ${claim.teamCode ?? claim.teamName}] Đã tiếp nhận đơn & xuất phát tới hiện trường.`,
+    });
+    next.updatedAt = claim.nowIso;
+    this.s.data.reports[i] = next;
+    this.s.touch();
+    return structuredClone(next);
+  }
   async findNearby(q: NearbyQuery): Promise<Report[]> {
     return structuredClone(
       this.s.data.reports.filter(
@@ -153,29 +231,36 @@ class JsonReportRepo implements ReportRepository {
   }
 }
 
+function cloneNormalizedUser(u: UserRecord): UserRecord {
+  const copy = structuredClone(u);
+  copy.role = normalizeRole(copy.role);
+  return copy;
+}
+
 class JsonUserRepo implements UserRepository {
   constructor(private readonly s: JsonStore) {}
   async get(id: string): Promise<UserRecord | null> {
     const u = this.s.data.users.find((x) => x.id === id);
-    return u ? structuredClone(u) : null;
+    return u ? cloneNormalizedUser(u) : null;
   }
   async getByPhone(phone: string): Promise<UserRecord | null> {
     const u = this.s.data.users.find((x) => x.phone === phone);
-    return u ? structuredClone(u) : null;
+    return u ? cloneNormalizedUser(u) : null;
   }
   async getByEmail(email: string): Promise<UserRecord | null> {
     const low = email.toLowerCase();
     const u = this.s.data.users.find((x) => x.email?.toLowerCase() === low);
-    return u ? structuredClone(u) : null;
+    return u ? cloneNormalizedUser(u) : null;
   }
   async getByStaffCode(code: string): Promise<UserRecord | null> {
     const u = this.s.data.users.find((x) => x.staffCode?.toLowerCase() === code.toLowerCase());
-    return u ? structuredClone(u) : null;
+    return u ? cloneNormalizedUser(u) : null;
   }
   async save(user: UserRecord): Promise<void> {
-    const i = this.s.data.users.findIndex((x) => x.id === user.id);
-    if (i >= 0) this.s.data.users[i] = structuredClone(user);
-    else this.s.data.users.push(structuredClone(user));
+    const normalized = cloneNormalizedUser(user);
+    const i = this.s.data.users.findIndex((x) => x.id === normalized.id);
+    if (i >= 0) this.s.data.users[i] = normalized;
+    else this.s.data.users.push(normalized);
     this.s.touch();
   }
   async delete(id: string): Promise<boolean> {
@@ -188,11 +273,16 @@ class JsonUserRepo implements UserRepository {
     return false;
   }
   async list(role?: Role): Promise<UserRecord[]> {
-    return structuredClone(role ? this.s.data.users.filter((u) => u.role === role) : this.s.data.users);
+    const target = role ? normalizeRole(role) : undefined;
+    const rows = target ? this.s.data.users.filter((u) => normalizeRole(u.role) === target) : this.s.data.users;
+    return rows.map(cloneNormalizedUser);
   }
   async query(filter: UserFilterQuery = {}): Promise<UserRecord[]> {
     let rows = this.s.data.users;
-    if (filter.role) rows = rows.filter((u) => u.role === filter.role);
+    if (filter.role) {
+      const target = normalizeRole(filter.role);
+      rows = rows.filter((u) => normalizeRole(u.role) === target);
+    }
     if (filter.wardCode) rows = rows.filter((u) => u.wardCode === filter.wardCode);
     if (filter.isActive !== undefined) rows = rows.filter((u) => Boolean(!u.revoked) === filter.isActive);
     if (filter.q && filter.q.trim()) {
@@ -206,7 +296,7 @@ class JsonUserRepo implements UserRepository {
           u.id.toLowerCase().includes(low),
       );
     }
-    return structuredClone([...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    return [...rows].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(cloneNormalizedUser);
   }
   async count(): Promise<number> {
     return this.s.data.users.length;
@@ -363,6 +453,6 @@ export function createJsonRepositories(dataDir: string): Repositories {
         auditLogs: store.data.audit.length,
       },
     }),
-    close: () => store.flush(),
+    close: () => store.flush(true),
   };
 }

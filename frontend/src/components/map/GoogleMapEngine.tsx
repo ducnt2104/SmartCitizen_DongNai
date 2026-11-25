@@ -12,7 +12,7 @@ import {
   useMapsLibrary,
 } from '@vis.gl/react-google-maps';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ARTERIAL_ROADS } from '@shared/geo';
+import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
 import { useI18n } from '../../i18n';
 import {
   createClusterElement,
@@ -31,6 +31,7 @@ import {
   type MapSurfaceStyle,
   type PinPriorityState,
 } from '../../lib/mapConfig';
+import { shortestAngleDeltaDeg } from '../../lib/navigationEngine';
 
 export interface CameraCommand {
   seq: number;
@@ -57,6 +58,13 @@ export interface DraggablePinSpec {
   onDragEnd: (lat: number, lng: number) => void;
 }
 
+export interface FollowPaddingSpec {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+}
+
 export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   id: string;
   reports: T[];
@@ -73,6 +81,10 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   accuracyM?: number | null;
   radiusM?: number | null;
   showArterials?: boolean;
+  activeDestinationId?: string | null;
+  autoFollow?: boolean;
+  followPadding?: FollowPaddingSpec;
+  fitRouteSeq?: number;
   onSelect?: (r: T) => void;
   onViewportChange?: (bbox: MapBbox) => void;
   crosshairActive?: boolean;
@@ -85,7 +97,7 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
 
 const GOOGLE_LIBRARIES = ['places', 'geocoding', 'marker', 'routes'];
 
-/** Bảng màu chuẩn 256 mức cho Canvas Heatmap (tương thích vĩnh viễn với Google Maps v3.67+ không phụ thuộc visualization cũ). */
+/** Bảng màu chuẩn 256 mức cho Canvas Heatmap. */
 const HEAT_PALETTE: Uint8ClampedArray = (() => {
   const lut = new Uint8ClampedArray(256 * 4);
   const stops: Array<[number, [number, number, number]]> = [
@@ -115,7 +127,25 @@ const HEAT_PALETTE: Uint8ClampedArray = (() => {
   return lut;
 })();
 
-/** Giám sát trạng thái tải Google Maps API — nếu lỗi xác thực/mạng hoặc quá 8s thì chuyển ngay sang MapLibre. */
+/** Dịch chuyển tọa độ tâm camera để trừ phần chiều cao Bottom Sheet (`paddingBottom`) & Top Banner (`paddingTop`). */
+function offsetLatLngByPadding(
+  lat: number,
+  lng: number,
+  zoom: number,
+  padding?: FollowPaddingSpec,
+): { lat: number; lng: number } {
+  if (!padding) return { lat, lng };
+  const dyPx = ((padding.bottom ?? 0) - (padding.top ?? 0)) * 0.5;
+  const dxPx = ((padding.right ?? 0) - (padding.left ?? 0)) * 0.5;
+  if (Math.abs(dyPx) < 2 && Math.abs(dxPx) < 2) return { lat, lng };
+
+  const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const metersPerPx = (156543.03392 * cosLat) / Math.pow(2, zoom);
+  const dLat = -(dyPx * metersPerPx) / 110574;
+  const dLng = (dxPx * metersPerPx) / (111320 * cosLat);
+  return { lat: lat + dLat, lng: lng + dLng };
+}
+
 function ApiHealthMonitor() {
   const status = useApiLoadingStatus();
   useEffect(() => {
@@ -133,23 +163,50 @@ function ApiHealthMonitor() {
   return null;
 }
 
-/** Bộ điều khiển Camera mệnh lệnh (Imperative) — tránh hoàn toàn hiện tượng giật tâm ngắm khi kéo tay 60FPS. */
+/** Bộ điều khiển Camera mệnh lệnh + Auto-Follow trừ chiều cao Bottom Sheet + ResizeObserver chống đen/méo khung. */
 function GoogleCameraController<T extends MapPoint>({
   mapId,
   reports,
   fitCityOnMount,
   fitPointsOnMount,
   cameraCommand,
+  autoFollow,
+  userPos,
+  followPadding,
+  routeOverlay,
+  fitRouteSeq,
 }: {
   mapId: string;
   reports: T[];
   fitCityOnMount?: boolean;
   fitPointsOnMount?: boolean;
   cameraCommand?: CameraCommand | null;
+  autoFollow?: boolean;
+  userPos?: { lat: number; lng: number } | null;
+  followPadding?: FollowPaddingSpec;
+  routeOverlay?: RouteOverlaySpec | null;
+  fitRouteSeq?: number;
 }) {
   const map = useMap(mapId);
   const mountedFitRef = useRef(false);
   const lastSeqRef = useRef(0);
+  const lastFitRouteRef = useRef(0);
+
+  // Tự động trigger resize khi khung bản đồ hoặc bottom sheet thay đổi kích thước
+  useEffect(() => {
+    if (!map || typeof google === 'undefined') return;
+    const div = map.getDiv();
+    const triggerResize = () => {
+      google.maps.event.trigger(map, 'resize');
+    };
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(triggerResize) : null;
+    if (div) ro?.observe(div);
+    window.addEventListener('resize', triggerResize);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', triggerResize);
+    };
+  }, [map]);
 
   useEffect(() => {
     if (!map || mountedFitRef.current) return;
@@ -184,26 +241,206 @@ function GoogleCameraController<T extends MapPoint>({
       typeof cameraCommand.lat === 'number' &&
       typeof cameraCommand.lng === 'number'
     ) {
-      map.panTo({ lat: cameraCommand.lat, lng: cameraCommand.lng });
+      const targetZoom = typeof cameraCommand.zoom === 'number' ? cameraCommand.zoom : (map.getZoom() ?? 15);
       if (typeof cameraCommand.zoom === 'number') {
         map.setZoom(cameraCommand.zoom);
       }
+      const shifted = offsetLatLngByPadding(cameraCommand.lat, cameraCommand.lng, targetZoom, followPadding);
+      map.panTo(shifted);
     } else if (cameraCommand.kind === 'zoomDelta' && typeof cameraCommand.delta === 'number') {
       map.setZoom(Math.min(20, Math.max(7, (map.getZoom() ?? 12) + cameraCommand.delta)));
     }
-  }, [map, cameraCommand, reports]);
+  }, [map, cameraCommand, reports, followPadding]);
+
+  // Auto-Follow mượt theo vị trí xe cứu hộ (có bù paddingBottom của Bottom Sheet)
+  useEffect(() => {
+    if (!map || !autoFollow || !userPos) return;
+    const curZoom = map.getZoom() ?? 16;
+    if (curZoom < 15) map.setZoom(16);
+    const effectiveZoom = Math.max(curZoom, 15);
+    const shifted = offsetLatLngByPadding(userPos.lat, userPos.lng, effectiveZoom, followPadding);
+    map.panTo(shifted);
+  }, [map, autoFollow, userPos?.lat, userPos?.lng, followPadding?.bottom, followPadding?.top, followPadding?.left]);
+
+  // Fit toàn cảnh tuyến đường CHỈ khi đổi đơn preview (`fitRouteSeq` tăng), tuyệt đối không giật ngược khi user kéo map
+  useEffect(() => {
+    if (!map || !routeOverlay || !fitRouteSeq || fitRouteSeq === lastFitRouteRef.current) return;
+    lastFitRouteRef.current = fitRouteSeq;
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(routeOverlay.origin);
+    bounds.extend(routeOverlay.destination);
+    if (routeOverlay.fallbackPath) {
+      for (const pt of routeOverlay.fallbackPath) bounds.extend(pt);
+    }
+    map.fitBounds(bounds, {
+      top: Math.max(40, (followPadding?.top ?? 64) + 16),
+      bottom: Math.max(60, (followPadding?.bottom ?? 220) + 20),
+      left: Math.max(32, (followPadding?.left ?? 24) + 16),
+      right: Math.max(32, (followPadding?.right ?? 24) + 16),
+    });
+  }, [map, fitRouteSeq, routeOverlay, followPadding]);
 
   return null;
 }
 
-/** Lớp Marker Clustering hiệu năng cao dùng `@googlemaps/markerclusterer` + `AdvancedMarkerElement`. */
+/** Marker Xe / Mũi tên điều hướng 60FPS (`requestAnimationFrame` ~800ms) + Vòng tròn xanh báo sai số GPS. */
+function GoogleSmoothUserPuck({
+  mapId,
+  userPos,
+  userHeadingDeg,
+  navigationMode,
+  accuracyM,
+}: {
+  mapId: string;
+  userPos?: { lat: number; lng: number } | null;
+  userHeadingDeg?: number | null;
+  navigationMode?: boolean;
+  accuracyM?: number | null;
+}) {
+  const map = useMap(mapId);
+  const markerLib = useMapsLibrary('marker');
+  const markerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const rotatorRef = useRef<HTMLDivElement | null>(null);
+  const circleRef = useRef<google.maps.Circle | null>(null);
+  const animStateRef = useRef<{ lat: number; lng: number; heading: number } | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!map || !markerLib) return;
+    const root = document.createElement('div');
+    const isNav = Boolean(navigationMode || (typeof userHeadingDeg === 'number' && Number.isFinite(userHeadingDeg)));
+    if (isNav) {
+      root.className = 'sc-nav-puck';
+      root.innerHTML =
+        '<span class="sc-nav-puck-radar"></span><div data-puck-rotator="1" style="position:relative;display:grid;place-items:center;"><span class="sc-nav-puck-cone"></span><span class="sc-nav-puck-arrow"><svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg></span></div>';
+      rotatorRef.current = root.querySelector('[data-puck-rotator="1"]') as HTMLDivElement | null;
+    } else {
+      root.className = 'sc-user-dot';
+      rotatorRef.current = null;
+    }
+
+    const mk = new markerLib.AdvancedMarkerElement({
+      map: userPos ? map : null,
+      position: userPos ?? undefined,
+      content: root,
+      zIndex: 965,
+    });
+    markerRef.current = mk;
+
+    const circle = new google.maps.Circle({
+      map: userPos && accuracyM && accuracyM > 0 ? map : null,
+      center: userPos ?? undefined,
+      radius: Math.max(5, accuracyM ?? 15),
+      strokeColor: '#1A73E8',
+      strokeOpacity: 0.55,
+      strokeWeight: 1.5,
+      fillColor: '#3B82F6',
+      fillOpacity: 0.15,
+      clickable: false,
+    });
+    circleRef.current = circle;
+
+    return () => {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      mk.map = null;
+      circle.setMap(null);
+      markerRef.current = null;
+      circleRef.current = null;
+      rotatorRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, markerLib, Boolean(navigationMode || typeof userHeadingDeg === 'number')]);
+
+  useEffect(() => {
+    const mk = markerRef.current;
+    const circle = circleRef.current;
+    if (!map || !mk) return;
+    if (!userPos) {
+      mk.map = null;
+      circle?.setMap(null);
+      return;
+    }
+    if (!mk.map) mk.map = map;
+    if (circle) {
+      if (accuracyM && accuracyM > 0) {
+        if (!circle.getMap()) circle.setMap(map);
+        circle.setRadius(Math.max(5, accuracyM));
+      } else {
+        circle.setMap(null);
+      }
+    }
+
+    const targetHeading = typeof userHeadingDeg === 'number' && Number.isFinite(userHeadingDeg) ? userHeadingDeg : 0;
+    const cur = animStateRef.current;
+
+    if (!cur || haversineMeters(cur.lat, cur.lng, userPos.lat, userPos.lng) > 1500) {
+      animStateRef.current = { lat: userPos.lat, lng: userPos.lng, heading: targetHeading };
+      mk.position = { lat: userPos.lat, lng: userPos.lng };
+      circle?.setCenter({ lat: userPos.lat, lng: userPos.lng });
+      if (rotatorRef.current) {
+        rotatorRef.current.style.transform = `rotate(${targetHeading.toFixed(1)}deg)`;
+      }
+      return;
+    }
+
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+
+    const startLat = cur.lat;
+    const startLng = cur.lng;
+    const startHeading = cur.heading;
+    const dHeading = shortestAngleDeltaDeg(startHeading, targetHeading);
+    const startTime = performance.now();
+    const durationMs = 780;
+
+    const stepFrame = (now: number) => {
+      const rawT = Math.min(1, (now - startTime) / durationMs);
+      const easeT = 1 - Math.pow(1 - rawT, 2);
+      const lat = startLat + (userPos.lat - startLat) * easeT;
+      const lng = startLng + (userPos.lng - startLng) * easeT;
+      const heading = (startHeading + dHeading * easeT + 360) % 360;
+
+      animStateRef.current = { lat, lng, heading };
+      mk.position = { lat, lng };
+      circle?.setCenter({ lat, lng });
+      if (rotatorRef.current) {
+        rotatorRef.current.style.transform = `rotate(${heading.toFixed(1)}deg)`;
+      }
+
+      if (rawT < 1) {
+        rafRef.current = window.requestAnimationFrame(stepFrame);
+      } else {
+        rafRef.current = null;
+      }
+    };
+
+    rafRef.current = window.requestAnimationFrame(stepFrame);
+    return () => {
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [map, userPos?.lat, userPos?.lng, userHeadingDeg, accuracyM]);
+
+  return null;
+}
+
+/** Lớp Marker Clustering hiệu năng cao + Ghim Đích đến (Sự cố) nhấp nháy nổi bật không bao giờ bị gộp cụm. */
 function GoogleClusteredPins<T extends MapPoint>({
   mapId,
   reports,
+  activeDestinationId,
   onSelect,
 }: {
   mapId: string;
   reports: T[];
+  activeDestinationId?: string | null;
   onSelect?: (r: T) => void;
 }) {
   const map = useMap(mapId);
@@ -215,6 +452,7 @@ function GoogleClusteredPins<T extends MapPoint>({
     if (!map || !markerLib) return;
     const stateMap = new WeakMap<object, PinPriorityState>();
     const createdMarkers: google.maps.marker.AdvancedMarkerElement[] = [];
+    const directMarkers: google.maps.marker.AdvancedMarkerElement[] = [];
     const clickListeners: google.maps.MapsEventListener[] = [];
 
     const clusterer = new MarkerClusterer({
@@ -243,17 +481,23 @@ function GoogleClusteredPins<T extends MapPoint>({
     });
 
     for (const r of reports) {
-      const el = createIncidentPinElement(r, () => selectRef.current?.(r));
+      const isDest = Boolean(activeDestinationId && r.id === activeDestinationId);
+      const el = createIncidentPinElement(r, () => selectRef.current?.(r), isDest);
       const adv = new markerLib.AdvancedMarkerElement({
+        map: isDest ? map : null,
         position: { lat: r.lat, lng: r.lng },
         content: el,
         title: r.title,
-        zIndex: r.emergencyLevel === 1 ? 900 : r.priority === 'high' ? 600 : 300,
+        zIndex: isDest ? 950 : r.emergencyLevel === 1 ? 900 : r.priority === 'high' ? 600 : 300,
       });
-      stateMap.set(adv, getPinState(r));
       const l = adv.addListener('gmp-click', () => selectRef.current?.(r));
       clickListeners.push(l);
-      createdMarkers.push(adv);
+      if (isDest) {
+        directMarkers.push(adv);
+      } else {
+        stateMap.set(adv, getPinState(r));
+        createdMarkers.push(adv);
+      }
     }
 
     clusterer.addMarkers(createdMarkers);
@@ -263,13 +507,13 @@ function GoogleClusteredPins<T extends MapPoint>({
       clusterer.clearMarkers();
       clusterer.setMap(null);
       for (const m of createdMarkers) m.map = null;
+      for (const m of directMarkers) m.map = null;
     };
-  }, [map, markerLib, reports]);
+  }, [map, markerLib, reports, activeDestinationId]);
 
   return null;
 }
 
-/** Lớp Bản đồ nhiệt HTML5 Canvas OverlayView tốc độ cao (tương thích Google Maps API v3.67+). */
 function GoogleHeatmapLayer<T extends MapPoint>({ mapId, reports }: { mapId: string; reports: T[] }) {
   const map = useMap(mapId);
 
@@ -370,7 +614,7 @@ function GoogleHeatmapLayer<T extends MapPoint>({ mapId, reports }: { mapId: str
   return null;
 }
 
-/** Lớp dẫn đường trực tiếp Google DirectionsService + DirectionsRenderer chuẩn màu Google Maps (#1A73E8). */
+/** Chỉ dùng DirectionsRenderer khi người gọi không truyền sẵn `fallbackPath` đã tính từ `computeNavigationRoute`. */
 function GoogleDirectionsLayer({
   mapId,
   route,
@@ -388,13 +632,16 @@ function GoogleDirectionsLayer({
   activeRef.current = onDirectionsActive;
 
   useEffect(() => {
-    if (!map || !routesLib) return;
+    if (!map || !routesLib || (route.fallbackPath && route.fallbackPath.length >= 2)) {
+      activeRef.current?.(false);
+      return;
+    }
     let cancelled = false;
     const primaryColor = route.strokeColor ?? '#1A73E8';
     const renderer = new routesLib.DirectionsRenderer({
       map,
       suppressMarkers: true,
-      preserveViewport: Boolean(route.preserveViewport),
+      preserveViewport: true,
       polylineOptions: {
         strokeColor: primaryColor,
         strokeOpacity: 0.96,
@@ -444,13 +691,11 @@ function GoogleDirectionsLayer({
   }, [
     map,
     routesLib,
-    route.origin.lat,
-    route.origin.lng,
     route.destination.lat,
     route.destination.lng,
     route.travelMode,
     route.strokeColor,
-    route.preserveViewport,
+    Boolean(route.fallbackPath && route.fallbackPath.length >= 2),
   ]);
 
   return null;
@@ -483,192 +728,182 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
   );
 
   return (
-    <APIProvider
-      apiKey={GOOGLE_MAPS_API_KEY}
-      language={lang === 'en' ? 'en' : 'vi'}
-      region="VN"
-      libraries={GOOGLE_LIBRARIES}
-      onError={(err) => {
-        console.warn('[GoogleMaps] Lỗi nạp script, chuyển sang MapLibre dự phòng:', err);
-        markGoogleMapsFailed('api_provider_error');
+    <div
+      className="h-full w-full"
+      onWheel={() => userPanRef.current?.()}
+      onTouchStart={(ev) => {
+        if (ev.touches.length >= 2) userPanRef.current?.();
       }}
     >
-      <ApiHealthMonitor />
-      <GoogleMap
-        id={p.id}
-        reuseMaps
-        mapId={GOOGLE_MAPS_MAP_ID}
-        defaultCenter={p.initialCenter ?? DONG_NAI_DEFAULT_CENTER}
-        defaultZoom={p.initialZoom}
-        mapTypeId={mapTypeId}
-        colorScheme={colorScheme}
-        gestureHandling="greedy"
-        disableDefaultUI
-        scaleControl
-        clickableIcons={!p.crosshairActive}
-        minZoom={7}
-        maxZoom={20}
-        restriction={{
-          latLngBounds: DONG_NAI_CAMERA_RESTRICTION,
-          strictBounds: false,
-        }}
-        className="h-full w-full"
-        onDragstart={() => {
-          dragRef.current?.(true);
-          userPanRef.current?.();
-        }}
-        onIdle={(ev) => {
-          dragRef.current?.(false);
-          const m = ev.map;
-          const c = m.getCenter();
-          if (p.crosshairActive && c) {
-            crosshairRef.current?.(c.lat(), c.lng());
-          }
-          const b = m.getBounds();
-          if (b && viewportRef.current) {
-            const ne = b.getNorthEast();
-            const sw = b.getSouthWest();
-            viewportRef.current({
-              minLng: sw.lng(),
-              minLat: sw.lat(),
-              maxLng: ne.lng(),
-              maxLat: ne.lat(),
-            });
-          }
-        }}
-        onClick={(ev) => {
-          if (p.crosshairActive && ev.detail.latLng) {
-            ev.map.panTo(ev.detail.latLng);
-            if ((ev.map.getZoom() ?? 12) < 14) {
-              ev.map.setZoom(15);
-            }
-          }
+      <APIProvider
+        apiKey={GOOGLE_MAPS_API_KEY}
+        language={lang === 'en' ? 'en' : 'vi'}
+        region="VN"
+        libraries={GOOGLE_LIBRARIES}
+        onError={(err) => {
+          console.warn('[GoogleMaps] Lỗi nạp script, chuyển sang MapLibre dự phòng:', err);
+          markGoogleMapsFailed('api_provider_error');
         }}
       >
-        <GoogleCameraController
-          mapId={p.id}
-          reports={p.reports}
-          fitCityOnMount={p.fitCityOnMount}
-          fitPointsOnMount={p.fitPointsOnMount}
-          cameraCommand={p.cameraCommand}
-        />
-
-        {p.mode === 'pins' ? (
-          <GoogleClusteredPins mapId={p.id} reports={p.reports} onSelect={p.onSelect} />
-        ) : (
-          <GoogleHeatmapLayer mapId={p.id} reports={p.reports} />
-        )}
-
-        {arterialPaths.map((r) => (
-          <Polyline
-            key={r.name}
-            path={r.path}
-            strokeColor="#F59E0B"
-            strokeOpacity={0.68}
-            strokeWeight={2.6}
-            clickable={false}
+        <ApiHealthMonitor />
+        <GoogleMap
+          id={p.id}
+          reuseMaps
+          mapId={GOOGLE_MAPS_MAP_ID}
+          defaultCenter={p.initialCenter ?? DONG_NAI_DEFAULT_CENTER}
+          defaultZoom={p.initialZoom}
+          mapTypeId={mapTypeId}
+          colorScheme={colorScheme}
+          gestureHandling="greedy"
+          disableDefaultUI
+          scaleControl
+          clickableIcons={!p.crosshairActive}
+          minZoom={7}
+          maxZoom={20}
+          restriction={{
+            latLngBounds: DONG_NAI_CAMERA_RESTRICTION,
+            strictBounds: false,
+          }}
+          className="h-full w-full"
+          onDragstart={() => {
+            dragRef.current?.(true);
+            userPanRef.current?.();
+          }}
+          onIdle={(ev) => {
+            dragRef.current?.(false);
+            const m = ev.map;
+            const c = m.getCenter();
+            if (p.crosshairActive && c) {
+              crosshairRef.current?.(c.lat(), c.lng());
+            }
+            const b = m.getBounds();
+            if (b && viewportRef.current) {
+              const ne = b.getNorthEast();
+              const sw = b.getSouthWest();
+              viewportRef.current({
+                minLng: sw.lng(),
+                minLat: sw.lat(),
+                maxLng: ne.lng(),
+                maxLat: ne.lat(),
+              });
+            }
+          }}
+          onClick={(ev) => {
+            if (p.crosshairActive && ev.detail.latLng) {
+              ev.map.panTo(ev.detail.latLng);
+              if ((ev.map.getZoom() ?? 12) < 14) {
+                ev.map.setZoom(15);
+              }
+            }
+          }}
+        >
+          <GoogleCameraController
+            mapId={p.id}
+            reports={p.reports}
+            fitCityOnMount={p.fitCityOnMount}
+            fitPointsOnMount={p.fitPointsOnMount}
+            cameraCommand={p.cameraCommand}
+            autoFollow={p.autoFollow}
+            userPos={p.userPos}
+            followPadding={p.followPadding}
+            routeOverlay={p.routeOverlay}
+            fitRouteSeq={p.fitRouteSeq}
           />
-        ))}
 
-        {p.userPos && p.accuracyM && p.accuracyM > 0 && (
-          <Circle
-            center={p.userPos}
-            radius={p.accuracyM}
-            strokeColor="#0B57D0"
-            strokeOpacity={0.65}
-            strokeWeight={1.5}
-            fillColor="#3B82F6"
-            fillOpacity={0.14}
-            clickable={false}
-          />
-        )}
-
-        {p.userPos && p.radiusM && p.radiusM > 0 && (
-          <Circle
-            center={p.userPos}
-            radius={p.radiusM}
-            strokeColor="#0B57D0"
-            strokeOpacity={0.75}
-            strokeWeight={1.5}
-            fillColor="#0B57D0"
-            fillOpacity={0.06}
-            clickable={false}
-          />
-        )}
-
-        {p.userPos && (
-          <AdvancedMarker position={p.userPos} zIndex={960} clickable={false}>
-            {p.navigationMode || (typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg)) ? (
-              <div className="sc-nav-puck" aria-hidden>
-                <span className="sc-nav-puck-radar" />
-                <div
-                  style={{
-                    transform: `rotate(${typeof p.userHeadingDeg === 'number' ? p.userHeadingDeg : 0}deg)`,
-                  }}
-                  className="relative grid place-items-center"
-                >
-                  <span className="sc-nav-puck-cone" />
-                  <span className="sc-nav-puck-arrow">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true">
-                      <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
-                    </svg>
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="sc-user-dot" aria-hidden />
-            )}
-          </AdvancedMarker>
-        )}
-
-        {p.draggablePin && (
-          <AdvancedMarker
-            position={{ lat: p.draggablePin.lat, lng: p.draggablePin.lng }}
-            draggable
-            zIndex={980}
-            title="Kéo thả ghim để chỉnh vị trí chính xác"
-            onDragEnd={(ev) => {
-              const ll = ev.latLng;
-              if (ll) p.draggablePin?.onDragEnd(ll.lat(), ll.lng());
-            }}
-          >
-            <div className="flex flex-col items-center">
-              <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-white bg-rose-600 text-xs font-extrabold text-white shadow-lift">
-                SOS
-              </div>
-              <div className="h-3 w-1 rounded-b-full bg-rose-600 shadow" />
-            </div>
-          </AdvancedMarker>
-        )}
-
-        {p.routeOverlay && (
-          <>
-            <GoogleDirectionsLayer
+          {p.mode === 'pins' ? (
+            <GoogleClusteredPins
               mapId={p.id}
-              route={p.routeOverlay}
-              onDirectionsActive={setGoogleDirActive}
+              reports={p.reports}
+              activeDestinationId={p.activeDestinationId}
+              onSelect={p.onSelect}
             />
-            {!googleDirActive && p.routeOverlay.fallbackPath && p.routeOverlay.fallbackPath.length >= 2 && (
-              <>
-                <Polyline
-                  path={p.routeOverlay.fallbackPath}
-                  strokeColor="#0D47A1"
-                  strokeOpacity={0.88}
-                  strokeWeight={9}
-                  clickable={false}
-                />
-                <Polyline
-                  path={p.routeOverlay.fallbackPath}
-                  strokeColor={p.routeOverlay.strokeColor ?? '#1A73E8'}
-                  strokeOpacity={0.98}
-                  strokeWeight={6}
-                  clickable={false}
-                />
-              </>
-            )}
-          </>
-        )}
-      </GoogleMap>
-    </APIProvider>
+          ) : (
+            <GoogleHeatmapLayer mapId={p.id} reports={p.reports} />
+          )}
+
+          {arterialPaths.map((r) => (
+            <Polyline
+              key={r.name}
+              path={r.path}
+              strokeColor="#F59E0B"
+              strokeOpacity={0.68}
+              strokeWeight={2.6}
+              clickable={false}
+            />
+          ))}
+
+          {p.userPos && p.radiusM && p.radiusM > 0 && (
+            <Circle
+              center={p.userPos}
+              radius={p.radiusM}
+              strokeColor="#0B57D0"
+              strokeOpacity={0.75}
+              strokeWeight={1.5}
+              fillColor="#0B57D0"
+              fillOpacity={0.06}
+              clickable={false}
+            />
+          )}
+
+          <GoogleSmoothUserPuck
+            mapId={p.id}
+            userPos={p.userPos}
+            userHeadingDeg={p.userHeadingDeg}
+            navigationMode={p.navigationMode}
+            accuracyM={p.accuracyM}
+          />
+
+          {p.draggablePin && (
+            <AdvancedMarker
+              position={{ lat: p.draggablePin.lat, lng: p.draggablePin.lng }}
+              draggable
+              zIndex={980}
+              title="Kéo thả ghim để chỉnh vị trí chính xác"
+              onDragEnd={(ev) => {
+                const ll = ev.latLng;
+                if (ll) p.draggablePin?.onDragEnd(ll.lat(), ll.lng());
+              }}
+            >
+              <div className="flex flex-col items-center">
+                <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-white bg-rose-600 text-xs font-extrabold text-white shadow-lift">
+                  SOS
+                </div>
+                <div className="h-3 w-1 rounded-b-full bg-rose-600 shadow" />
+              </div>
+            </AdvancedMarker>
+          )}
+
+          {p.routeOverlay && (
+            <>
+              <GoogleDirectionsLayer
+                mapId={p.id}
+                route={p.routeOverlay}
+                onDirectionsActive={setGoogleDirActive}
+              />
+              {!googleDirActive && p.routeOverlay.fallbackPath && p.routeOverlay.fallbackPath.length >= 2 && (
+                <>
+                  <Polyline
+                    path={p.routeOverlay.fallbackPath}
+                    strokeColor="#ffffff"
+                    strokeOpacity={0.95}
+                    strokeWeight={10}
+                    zIndex={418}
+                    clickable={false}
+                  />
+                  <Polyline
+                    path={p.routeOverlay.fallbackPath}
+                    strokeColor={p.routeOverlay.strokeColor ?? '#1A73E8'}
+                    strokeOpacity={0.98}
+                    strokeWeight={6.5}
+                    zIndex={420}
+                    clickable={false}
+                  />
+                </>
+              )}
+            </>
+          )}
+        </GoogleMap>
+      </APIProvider>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
+import { normalizeRole } from '../shared/constants';
 import type { Role } from '../shared/types';
 import { env } from '../config/env';
 import type { UserRecord } from '../repositories/types';
@@ -99,7 +100,7 @@ export function authMiddleware(s: Services) {
   const requireRole = (...roles: Role[]): RequestHandler[] => [
     required,
     (req: Request, _res: Response, next: NextFunction) => {
-      if (!req.user || !roles.includes(req.user.role)) return next(forbidden());
+      if (!req.user || !roles.includes(normalizeRole(req.user.role))) return next(forbidden());
       next();
     },
   ];
