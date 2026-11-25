@@ -34,6 +34,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeRole } from '@shared/constants';
 import { inDongNaiBBox } from '@shared/geo';
+import heroPhoto from '../assets/dongnai-hero.jpg';
 import type {
   AlertCategory,
   AlertSeverity,
@@ -109,11 +110,14 @@ function WeatherGlyphInk({ kind, isDay = true, className = 'h-5 w-5' }: { kind: 
   }
 }
 
-function heroSkyGradient(w: DongNaiWeather): string {
-  if (!w.isDay) return 'from-slate-900 via-indigo-950 to-sky-950';
-  if (w.kind === 'storm' || w.kind === 'heavyRain') return 'from-slate-800 via-sky-900 to-cyan-900';
-  if (w.kind === 'rain' || w.kind === 'cloud') return 'from-sky-800 via-blue-800 to-slate-800';
-  return 'from-blue-600 via-sky-600 to-cyan-600';
+function heroOverlayStyle(w: DongNaiWeather): string {
+  if (!w.isDay) {
+    return 'linear-gradient(180deg, rgba(2, 6, 23, 0.82) 0%, rgba(15, 23, 42, 0.94) 100%)';
+  }
+  if (w.kind === 'storm' || w.kind === 'heavyRain' || w.kind === 'rain' || w.kind === 'cloud') {
+    return 'linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.92) 100%)';
+  }
+  return 'linear-gradient(180deg, rgba(15, 23, 42, 0.72) 0%, rgba(15, 23, 42, 0.88) 100%)';
 }
 
 const WardInspectorDrawer = lazy(() =>
@@ -872,50 +876,73 @@ export default function AlertsPage() {
             {!forecast ? (
               <section
                 aria-label="Đang tải dự báo thời tiết"
-                className="rounded-[1.75rem] bg-gradient-to-br from-blue-600 via-sky-600 to-cyan-600 p-6 text-white shadow-lift"
+                className="hero-photo-card relative overflow-hidden rounded-[1.75rem] bg-slate-900 p-6 text-white"
               >
-                {forecastError ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-bold">Chưa lấy được dữ liệu dự báo thời tiết thực tế cho {forecastAreaName}</p>
-                      <p className="mt-1 text-xs text-white/80">{forecastError}</p>
+                <img
+                  src={heroPhoto}
+                  alt=""
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
+                />
+                <div
+                  className="pointer-events-none absolute inset-0 backdrop-blur-[4px]"
+                  style={{ background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.90) 100%)' }}
+                  aria-hidden
+                />
+                <div className="relative z-10">
+                  {forecastError ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold">Chưa lấy được dữ liệu dự báo thời tiết thực tế cho {forecastAreaName}</p>
+                        <p className="mt-1 text-xs text-white/85">{forecastError}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadForecast()}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-white/25 bg-white/15 px-3.5 py-2 text-xs font-bold hover:bg-white/25"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Thử lại
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void loadForecast()}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/25 bg-white/15 px-3.5 py-2 text-xs font-bold hover:bg-white/25"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Thử lại
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3 text-sm font-semibold">
-                    <Spinner className="text-white" />
-                    <span>
-                      Đang tải nhiệt độ & dự báo thời tiết trực tiếp cho <strong>{weatherLoc.detailAddress ?? forecastAreaName}</strong>…
-                    </span>
-                  </div>
-                )}
+                  ) : (
+                    <div className="flex items-center gap-3 text-sm font-semibold">
+                      <Spinner className="text-white" />
+                      <span>
+                        Đang tải nhiệt độ & dự báo thời tiết trực tiếp cho <strong>{weatherLoc.detailAddress ?? forecastAreaName}</strong>…
+                      </span>
+                    </div>
+                  )}
+                </div>
               </section>
             ) : (
               <>
                 <section
                   aria-label="Dự báo thời tiết hiện tại theo vị trí"
-                  className={`relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br ${heroSkyGradient(forecast)} p-5 text-white shadow-lift sm:p-6`}
+                  className="hero-photo-card relative overflow-hidden rounded-[1.75rem] bg-slate-900 p-5 text-white sm:p-6"
                 >
-                  <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden />
+                  <img
+                    src={heroPhoto}
+                    alt=""
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
+                  />
+                  <div
+                    className="pointer-events-none absolute inset-0 backdrop-blur-[4px]"
+                    style={{ background: heroOverlayStyle(forecast) }}
+                    aria-hidden
+                  />
                   <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold text-white backdrop-blur-md">
                           <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
                           <span>{weatherLoc.detailAddress ?? forecastAreaName}</span>
                         </span>
-                        <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/20 px-2.5 py-1 text-[10.5px] font-medium text-white/85">
+                        <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/35 px-2.5 py-1 text-[10.5px] font-medium text-white/90">
                           {forecastCoords.lat.toFixed(4)}°N, {forecastCoords.lng.toFixed(4)}°E
                           {weatherLoc.accuracyM ? ` · ±${weatherLoc.accuracyM}m` : ''}
                         </span>
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/40 px-2.5 py-1 text-[11px] font-semibold text-white">
                           <span className="h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
                           <span>{forecast.providerLabel}</span>
                         </span>
@@ -923,7 +950,7 @@ export default function AlertsPage() {
                           type="button"
                           onClick={() => void loadForecast()}
                           disabled={forecastLoading}
-                          className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/20"
+                          className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
                         >
                           <RefreshCw className={`h-3 w-3 ${forecastLoading ? 'animate-spin' : ''}`} aria-hidden />
                           Làm mới
@@ -931,22 +958,22 @@ export default function AlertsPage() {
                       </div>
 
                       <div className="mt-4 flex items-center gap-4">
-                        <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl border border-white/20 bg-white/15 backdrop-blur-md sm:h-20 sm:w-20">
+                        <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl border border-white/[0.16] bg-white/10 backdrop-blur-md sm:h-20 sm:w-20">
                           <WeatherGlyph kind={forecast.kind} isDay={forecast.isDay} className="h-10 w-10 sm:h-12 sm:w-12" />
                         </div>
                         <div>
                           <div className="flex items-baseline gap-2.5">
-                            <span className={`mono text-4xl font-extrabold tracking-tight sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
+                            <span className={`mono text-4xl font-extrabold tracking-tight text-white drop-shadow-sm sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
                               {forecast.temp.toFixed(1)}°C
                             </span>
-                            <span className="text-sm font-semibold text-white/85">
+                            <span className="text-sm font-bold text-white/95">
                               C: {forecast.tempHigh.toFixed(1)}° · T: {forecast.tempLow.toFixed(1)}°
                             </span>
                           </div>
                           <p className="mt-0.5 text-base font-bold text-white sm:text-lg">
                             {lang === 'vi' ? forecast.conditionVi : forecast.conditionEn}
                           </p>
-                          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-white/80">
+                          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs font-medium text-white/90">
                             <span>Cảm giác như {forecast.feelsLike.toFixed(1)}°C</span>
                             <span className="inline-flex items-center gap-1">
                               <Sunrise className="h-3.5 w-3.5 text-amber-200" aria-hidden /> {forecast.sunrise}
@@ -961,49 +988,49 @@ export default function AlertsPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[27rem]">
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
                         </p>
-                        <p className="mono mt-1 text-lg font-extrabold">{forecast.humidity}%</p>
+                        <p className="mono mt-1 text-lg font-extrabold text-white">{forecast.humidity}%</p>
                       </div>
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Umbrella className="h-3.5 w-3.5 text-cyan-200" aria-hidden /> Xác suất mưa
                         </p>
-                        <p className="mono mt-1 text-lg font-extrabold">
-                          {forecast.rainProbNow}% <span className="text-xs font-medium text-white/75">({forecast.rainNow}mm)</span>
+                        <p className="mono mt-1 text-lg font-extrabold text-white">
+                          {forecast.rainProbNow}% <span className="text-xs font-semibold text-white/85">({forecast.rainNow}mm)</span>
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Gió & Giật
                         </p>
-                        <p className="mono mt-1 text-base font-extrabold sm:text-lg">
-                          {forecast.windSpeed} <span className="text-xs font-medium text-white/75">/ {forecast.windGusts} km/h</span>
+                        <p className="mono mt-1 text-base font-extrabold text-white sm:text-lg">
+                          {forecast.windSpeed} <span className="text-xs font-semibold text-white/85">/ {forecast.windGusts} km/h</span>
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
                         </p>
-                        <p className="mono mt-1 text-lg font-extrabold">
-                          {forecast.uvIndex} <span className="text-xs font-semibold text-white/85">{uvLabel}</span>
+                        <p className="mono mt-1 text-lg font-extrabold text-white">
+                          {forecast.uvIndex} <span className="text-xs font-semibold text-white/90">{uvLabel}</span>
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Gauge className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Áp suất & Mây
                         </p>
-                        <p className="mono mt-1 text-sm font-extrabold sm:text-base">
+                        <p className="mono mt-1 text-sm font-extrabold text-white sm:text-base">
                           {forecast.pressureHpa} hPa · {forecast.cloudCover}%
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
                         </p>
-                        <p className="mt-1 text-xs font-extrabold sm:text-sm">{floodRisk}</p>
+                        <p className="mt-1 text-xs font-extrabold text-white sm:text-sm">{floodRisk}</p>
                       </div>
                     </div>
                   </div>
