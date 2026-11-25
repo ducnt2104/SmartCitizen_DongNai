@@ -213,7 +213,7 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(fetchCount).toBe(1);
   });
 
-  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép) cho cả AQ.* lẫn AIza*, mặc định AI Studio và chỉ dùng Vertex khi tag vertex:/VERTEX_API_KEYS', async () => {
+  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép): chỉ AIzaSy* -> AI Studio, AQ.* -> Vertex kèm cảnh báo', async () => {
     const calledEndpoints: string[] = [];
     const poolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-keypool-vertex-'));
     try {
@@ -223,26 +223,35 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
         '   vertex:AQ.Ab8RN6ExplicitVertexKey22222 ; AIzaSyHealthyStudioKey9876543210000 ',
       ].join(',\n');
 
+      const warnings: string[] = [];
       const pool = new KeyPoolManager({
         dataDir: poolDir,
         encryptionSecret: 'test-secret-32-bytes-minimum-key!!',
         envSource: {
           GEMINI_API_KEYS: multiFormatRaw,
           VERTEX_API_KEYS: 'AQ.Ab8RN6EnvVertexPoolKey33333',
-          GEMINI_MODEL: 'gemini-3.5-flash-lite',
+          GEMINI_MODEL: 'gemini-2.5-flash',
+        },
+        logger: {
+          info: () => undefined,
+          warn: (m) => warnings.push(m),
+          error: () => undefined,
         },
       });
       await pool.init();
       const snap = await pool.listMaskedKeys();
       // Đúng 5 key duy nhất sau khi tách đa định dạng và lọc trùng
       expect(snap.summary.totalKeys).toBe(5);
-      expect(snap.keys.find((k) => k.maskedKey.endsWith('2345'))?.geminiEndpoint).toBe('ai_studio');
+      // AQ.* phải được phân loại sang Vertex thay vì gán nhầm AI Studio; chỉ AIzaSy* mới là ai_studio
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('2345'))?.geminiEndpoint).toBe('vertex');
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('0000'))?.geminiEndpoint).toBe('ai_studio');
       expect(snap.keys.find((k) => k.maskedKey.endsWith('2222'))?.geminiEndpoint).toBe('vertex');
       expect(snap.keys.find((k) => k.maskedKey.endsWith('3333'))?.geminiEndpoint).toBe('vertex');
+      expect(warnings.some((w) => w.includes('2345'))).toBe(true);
 
       const out = await pool.executeWithRotation(async (apiKey, meta) => {
         if (meta.geminiEndpoint === 'vertex') {
-          calledEndpoints.push(`vertex:${apiKey}`);
+          calledEndpoints.push(`vertex:${apiKey.slice(0, 6)}`);
           throw Object.assign(
             new Error('[{"error":{"code":403,"message":"Vertex key revoked","status":"PERMISSION_DENIED"}}]'),
             { status: 403 },
@@ -257,7 +266,8 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
       });
 
       expect(out).toBe('OK_FROM_HEALTHY_AI_STUDIO_KEY');
-      expect(calledEndpoints.some((e) => e.startsWith('ai_studio:AQ.Ab8'))).toBe(true);
+      expect(calledEndpoints.some((e) => e.startsWith('ai_studio:AIzaSy'))).toBe(true);
+      expect(calledEndpoints.some((e) => e.startsWith('vertex:AQ.Ab8'))).toBe(true);
     } finally {
       fs.rmSync(poolDir, { recursive: true, force: true });
     }

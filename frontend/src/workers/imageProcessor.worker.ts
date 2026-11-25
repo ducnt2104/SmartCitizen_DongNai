@@ -62,6 +62,7 @@ export type ImageProcessorResponse =
       type: 'processed';
       aiBuffer: ArrayBuffer;
       aiMimeType: string;
+      aiSha256: string;
       displayBuffer: ArrayBuffer;
       displayMimeType: string;
       dHash: string;
@@ -84,10 +85,17 @@ export type ImageProcessorResponse =
       unsupported?: boolean;
     };
 
-const AI_MAX_EDGE = 640;
-const AI_QUALITY = 0.72;
+const AI_MAX_EDGE = 1024;
+const AI_QUALITY = 0.80;
+const AI_TARGET_MAX_BYTES = 220 * 1024;
 const DISPLAY_MAX_EDGE = 1280;
 const DISPLAY_QUALITY = 0.82;
+
+async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  if (typeof crypto === 'undefined' || !crypto.subtle) return '';
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 function readAsciiString(view: DataView, start: number, len: number): string {
   const end = Math.min(view.byteLength, start + len);
@@ -281,8 +289,8 @@ export function extractExifMetadata(buf: ArrayBuffer): ExtractedExifMetadata {
             if (latVals && lngVals) {
               let lat = latVals[0] + latVals[1] / 60 + latVals[2] / 3600;
               let lng = lngVals[0] + lngVals[1] / 60 + lngVals[2] / 3600;
-              if (latRef === 'S') lat = -lat;
-              if (lngRef === 'W') lng = -lng;
+              if (latRef.toUpperCase() === 'S') lat = -lat;
+              if (lngRef.toUpperCase() === 'W') lng = -lng;
               const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
               if (norm.ok) {
                 gps = { lat: norm.lat, lng: norm.lng, inBounds: inDongNaiBBox(norm.lat, norm.lng) };
@@ -348,6 +356,20 @@ async function encodeWebPWithFallback(
   return { buffer: await jpg.arrayBuffer(), mimeType: 'image/jpeg' };
 }
 
+async function encodeAiSnapshotWithTarget(
+  canvas: OffscreenCanvas,
+  initialQuality: number,
+  maxBytes: number,
+): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
+  let encoded = await encodeWebPWithFallback(canvas, initialQuality);
+  if (encoded.buffer.byteLength <= maxBytes) return encoded;
+  for (const q of [0.72, 0.62]) {
+    encoded = await encodeWebPWithFallback(canvas, q);
+    if (encoded.buffer.byteLength <= maxBytes) return encoded;
+  }
+  return encoded;
+}
+
 function renderScaledCanvas(bmp: ImageBitmap, maxEdge: number): { canvas: OffscreenCanvas; width: number; height: number } {
   const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
   const width = Math.max(1, Math.round(bmp.width * scale));
@@ -383,12 +405,15 @@ async function processImage(id: number, rawBuf: ArrayBuffer, mimeType: string, o
 
     const [displayEncoded, aiEncoded] = await Promise.all([
       encodeWebPWithFallback(display.canvas, DISPLAY_QUALITY),
-      encodeWebPWithFallback(ai.canvas, AI_QUALITY),
+      encodeAiSnapshotWithTarget(ai.canvas, AI_QUALITY, AI_TARGET_MAX_BYTES),
     ]);
 
     const t1 = performance.now();
     const hasCameraExif = Boolean(exif.cameraMake || exif.cameraModel);
-    const cv = extractWorkerCvFeatures(ai.canvas, bmp.width / Math.max(1, bmp.height), hasCameraExif);
+    const [cv, aiSha256] = await Promise.all([
+      Promise.resolve(extractWorkerCvFeatures(ai.canvas, bmp.width / Math.max(1, bmp.height), hasCameraExif)),
+      sha256Hex(aiEncoded.buffer),
+    ]);
     const hashMs = performance.now() - t1;
 
     const msg: ImageProcessorResponse = {
@@ -396,6 +421,7 @@ async function processImage(id: number, rawBuf: ArrayBuffer, mimeType: string, o
       type: 'processed',
       aiBuffer: aiEncoded.buffer,
       aiMimeType: aiEncoded.mimeType,
+      aiSha256,
       displayBuffer: displayEncoded.buffer,
       displayMimeType: displayEncoded.mimeType,
       dHash: cv.dHash,

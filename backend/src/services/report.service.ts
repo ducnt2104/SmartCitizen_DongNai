@@ -439,7 +439,7 @@ export class ReportService {
     const aiBuf = resolvedPhoto.aiBuffer ?? resolvedPhoto.buffer;
     const base64ForCv = aiBuf ? aiBuf.toString('base64') : '';
     const legacyParsed = resolvedPhoto.dataUrl ? parsePhotoDataUrl(resolvedPhoto.dataUrl) : null;
-    const mime = resolvedPhoto.aiBuffer ? 'image/webp' : legacyParsed?.mime ?? 'image/webp';
+    const mime = resolvedPhoto.aiMimeType ?? (resolvedPhoto.aiBuffer ? 'image/webp' : legacyParsed?.mime ?? 'image/webp');
 
     const category = normalizeCategoryInput(input.category) ?? 'khac';
     const ward = (input.wardCode && WARD_BY_CODE[input.wardCode]) || nearestWard(pinLat, pinLng);
@@ -625,9 +625,13 @@ export class ReportService {
 
     const firstPhoto = await persistPhoto(this.media, resolvedPhoto, 'before', user.id, id);
 
-    const emergency = analysis.isEmergency;
+    const emergency = Boolean(analysis.isEmergency || input.isEmergency);
     const level1 = emergency && arterial !== null;
-    const priority: Report['priority'] = level1 ? 'emergency' : emergency || analysis.severity >= 4 ? 'high' : 'normal';
+    const effectiveSeverityBase =
+      typeof input.severity === 'number'
+        ? Math.max(analysis.severity, Math.min(5, Math.max(1, input.severity)))
+        : analysis.severity;
+    const priority: Report['priority'] = level1 ? 'emergency' : emergency || effectiveSeverityBase >= 4 ? 'high' : 'normal';
     const quarantined = decision.action === 'quarantine';
     const status: Report['status'] = quarantined ? 'quarantined' : 'received';
     const dept = analysis.suggestedDepartment ?? DEPARTMENT_BY_CATEGORY[category];
@@ -642,7 +646,7 @@ export class ReportService {
     if (quarantined) timeline.push({ stage: 'quarantined', at: nowIso, note: decision.detail });
     if (level1) timeline.push({ stage: 'escalated', at: nowIso, note: `AI gắn KHẨN CẤP CẤP ĐỘ 1 — trục huyết mạch ${arterial!.name}` });
 
-    const finalSeverity = (level1 ? 5 : analysis.severity) as Report['severity'];
+    const finalSeverity = (level1 ? 5 : effectiveSeverityBase) as Report['severity'];
     const finalSeverityLabel = analysis.severityLabel ?? toSeverityLabel(finalSeverity, emergency || level1);
     const finalPriorityScore =
       analysis.priorityScore ??

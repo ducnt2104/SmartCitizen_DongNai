@@ -12,6 +12,7 @@ import {
   maskApiKey,
   parseBulkApiKeys,
   parseGeminiKeyRouting,
+  redactSecretsInText,
   shortMaskApiKey,
 } from './cryptoVault';
 import {
@@ -21,9 +22,9 @@ import {
   DEFAULT_COOLDOWN_STEPS_MS,
 } from './errorClassifier';
 import {
-  buildGeminiModelChain,
-  executeGeminiWithModelFallback,
+  FALLBACK_GEMINI_MODEL,
   normalizeGeminiModelName,
+  probeGeminiKeyEndpoint,
 } from './geminiRouting';
 import {
   API_KEY_PROVIDERS,
@@ -34,6 +35,7 @@ import {
   type BulkAddApiKeysResult,
   type ExecuteWithRotationOptions,
   type GeminiEndpointKind,
+  type GeminiKeyFormat,
   type KeyHealthProbeFn,
   type KeyPoolSummary,
   type MaskedApiKeyInfo,
@@ -41,6 +43,9 @@ import {
   type SelectedKeyMeta,
   type UpdateApiKeyPatch,
 } from './types';
+
+export const DEFAULT_503_BACKOFF_STEPS_MS: readonly number[] = [500, 1_000, 1_500] as const;
+export const DEFAULT_503_JITTER_MAX_MS = 250;
 
 export interface KeyPoolLogger {
   info: (msg: string) => void;
@@ -59,9 +64,19 @@ export interface KeyPoolManagerOptions {
   dataDir?: string;
   /** Lịch Exponential Backoff cho lỗi 429 tạm thời (mặc định `[60_000, 180_000, 600_000]`). */
   cooldownStepsMs?: readonly number[];
+  /** Lịch Exponential Backoff chờ giữa các key khi gặp 503 Overloaded (mặc định `[500, 1000, 1500]`). */
+  retry503BackoffStepsMs?: readonly number[];
+  /** Biên độ Jitter ngẫu nhiên cộng thêm khi backoff 503 (mặc định 250ms). */
+  retry503JitterMaxMs?: number;
+  /** Hàm sleep tùy chỉnh để kiểm thử backoff không cần chờ thời gian thật. */
+  sleepFn?: (ms: number) => Promise<void>;
+  /** Ngưỡng số key liên tiếp gặp 503 để tự động hạ cấp sang fallbackModel (mặc định 3). */
+  fallbackOn503Threshold?: number;
+  /** Model Gemini hạ cấp khi model chính quá tải 503 liên tiếp (mặc định `gemini-2.0-flash`). */
+  fallbackGeminiModel?: string;
   /** Múi giờ reset quota ngày RPD (mặc định `Asia/Ho_Chi_Minh`, hỗ trợ `America/Los_Angeles`). */
   quotaResetTimeZone?: string;
-  /** Số key thử tối đa mặc định trong một HTTP request (mặc định `5`). */
+  /** Số key thử tối đa mặc định trong một HTTP request (mặc định `10`). */
   defaultMaxAttempts?: number;
   /** Đồng hồ tùy chỉnh để kiểm thử định thời (mặc định `Date.now`). */
   nowFn?: () => number;
@@ -126,6 +141,11 @@ export class KeyPoolManager {
   private readonly persistenceMode: 'auto' | 'memory';
   private readonly fallbackFilePath: string;
   private readonly cooldownStepsMs: readonly number[];
+  private readonly retry503BackoffStepsMs: readonly number[];
+  private readonly retry503JitterMaxMs: number;
+  private readonly sleepFn: (ms: number) => Promise<void>;
+  private readonly fallbackOn503Threshold: number;
+  private readonly fallbackGeminiModel: string;
   private readonly quotaResetTimeZone: string;
   private readonly defaultMaxAttempts: number;
   private readonly nowFn: () => number;
@@ -150,6 +170,13 @@ export class KeyPoolManager {
     const dataDir = path.resolve(options.dataDir ?? this.envSource.DATA_DIR ?? './data');
     this.fallbackFilePath = path.join(dataDir, 'api_keys.encrypted.json');
     this.cooldownStepsMs = options.cooldownStepsMs ?? DEFAULT_COOLDOWN_STEPS_MS;
+    this.retry503BackoffStepsMs = options.retry503BackoffStepsMs ?? DEFAULT_503_BACKOFF_STEPS_MS;
+    this.retry503JitterMaxMs = Math.max(0, options.retry503JitterMaxMs ?? DEFAULT_503_JITTER_MAX_MS);
+    this.sleepFn = options.sleepFn ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.fallbackOn503Threshold = Math.max(1, options.fallbackOn503Threshold ?? 3);
+    this.fallbackGeminiModel = normalizeGeminiModelName(
+      options.fallbackGeminiModel ?? this.envSource.GEMINI_FALLBACK_MODEL ?? FALLBACK_GEMINI_MODEL,
+    );
     this.quotaResetTimeZone =
       (options.quotaResetTimeZone ?? this.envSource.KEY_QUOTA_RESET_TZ ?? 'Asia/Ho_Chi_Minh').trim() ||
       'Asia/Ho_Chi_Minh';
@@ -285,16 +312,27 @@ export class KeyPoolManager {
         const routing =
           provider === 'gemini'
             ? parseGeminiKeyRouting(entry.rawKey, spec.defaultEndpoint)
-            : { cleanKey: entry.rawKey.trim(), geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+            : {
+                cleanKey: entry.rawKey.trim(),
+                geminiEndpoint: 'ai_studio' as GeminiEndpointKind,
+                keyFormat: undefined,
+                formatMismatchWarning: undefined,
+              };
         if (!routing.cleanKey || routing.cleanKey.length < 8) continue;
-        this.registerInMemoryKey({
+        const registered = this.registerInMemoryKey({
           rawKey: routing.cleanKey,
           label: entry.label,
           provider,
           geminiEndpoint: routing.geminiEndpoint,
+          keyFormat: routing.keyFormat,
           source: 'env',
           weight: 1,
         });
+        if (registered && routing.formatMismatchWarning) {
+          this.logger.warn(
+            `[KeyPool] Cảnh báo phân loại Key #${registered.slotNumber} (${registered.shortMask}, ${entry.label}): ${routing.formatMismatchWarning}`,
+          );
+        }
       }
     }
 
@@ -303,8 +341,11 @@ export class KeyPoolManager {
     let otherCount = 0;
     for (const k of this.keys.values()) {
       if (k.provider === 'gemini') {
-        if (k.geminiEndpoint === 'vertex') vertexCount += 1;
-        else aiStudioCount += 1;
+        if (k.geminiEndpoint === 'ai_studio' && k.keyFormat === 'ai_studio_aiza') {
+          aiStudioCount += 1;
+        } else {
+          vertexCount += 1;
+        }
       } else {
         otherCount += 1;
       }
@@ -321,6 +362,7 @@ export class KeyPoolManager {
     label: string;
     provider: ApiKeyProvider;
     geminiEndpoint?: GeminiEndpointKind;
+    keyFormat?: GeminiKeyFormat;
     source: 'env' | 'db';
     weight?: number;
     isEnabled?: boolean;
@@ -357,6 +399,7 @@ export class KeyPoolManager {
       label: params.label || `Key #${slotNumber}`,
       provider: params.provider,
       geminiEndpoint: params.geminiEndpoint ?? 'ai_studio',
+      keyFormat: params.keyFormat,
       source: params.source,
       rawKey: cleanKey,
       maskedKey: maskApiKey(cleanKey),
@@ -444,7 +487,12 @@ export class KeyPoolManager {
         const routing =
           row.provider === 'gemini'
             ? parseGeminiKeyRouting(decrypted, row.geminiEndpoint === 'vertex' ? 'vertex' : 'ai_studio')
-            : { cleanKey: decrypted, geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+            : {
+                cleanKey: decrypted,
+                geminiEndpoint: 'ai_studio' as GeminiEndpointKind,
+                keyFormat: undefined,
+                formatMismatchWarning: undefined,
+              };
         // Tự động khôi phục các key bị đánh dấu INVALID oan do lỗi 404 model cũ trước đây
         const healedFromOld404 =
           row.status === 'INVALID' &&
@@ -455,6 +503,7 @@ export class KeyPoolManager {
           label: row.label,
           provider: row.provider,
           geminiEndpoint: routing.geminiEndpoint,
+          keyFormat: routing.keyFormat,
           source: 'db',
           weight: row.weight,
           isEnabled: row.isEnabled,
@@ -664,15 +713,30 @@ export class KeyPoolManager {
     return candidates[0];
   }
 
-  private toMeta(record: PoolKeyRecord): SelectedKeyMeta {
+  private toMeta(
+    record: PoolKeyRecord,
+    runtime?: {
+      preferFallbackModel?: boolean;
+      fallbackModel?: string;
+      consecutive503Count?: number;
+    },
+  ): SelectedKeyMeta {
     return {
       id: record.id,
       slotNumber: record.slotNumber,
       label: record.label,
       provider: record.provider,
       geminiEndpoint: record.geminiEndpoint,
+      keyFormat: record.keyFormat,
       maskedKey: record.maskedKey,
       shortMask: record.shortMask,
+      ...(runtime?.preferFallbackModel !== undefined
+        ? { preferFallbackModel: runtime.preferFallbackModel }
+        : {}),
+      ...(runtime?.fallbackModel ? { fallbackModel: runtime.fallbackModel } : {}),
+      ...(runtime?.consecutive503Count !== undefined
+        ? { consecutive503Count: runtime.consecutive503Count }
+        : {}),
     };
   }
 
@@ -687,6 +751,7 @@ export class KeyPoolManager {
       label: record.label,
       provider: record.provider,
       geminiEndpoint: record.provider === 'gemini' ? record.geminiEndpoint : undefined,
+      keyFormat: record.provider === 'gemini' ? record.keyFormat : undefined,
       source: record.source,
       maskedKey: record.maskedKey,
       weight: record.weight,
@@ -712,9 +777,27 @@ export class KeyPoolManager {
     };
   }
 
+  private compute503BackoffMs(retry503Step: number): number {
+    const steps =
+      this.retry503BackoffStepsMs.length > 0
+        ? this.retry503BackoffStepsMs
+        : DEFAULT_503_BACKOFF_STEPS_MS;
+    const idx = Math.max(0, Math.min(retry503Step - 1, steps.length - 1));
+    const baseMs = Math.max(0, steps[idx]);
+    if (baseMs === 0 && this.retry503JitterMaxMs === 0) return 0;
+    const jitter =
+      this.retry503JitterMaxMs > 0
+        ? Math.floor(Math.random() * (this.retry503JitterMaxMs + 1))
+        : 0;
+    return baseMs + jitter;
+  }
+
   /**
-   * Thực thi hàm gọi AI với cơ chế tự động xoay vòng Key tức thì (Zero-Sleep Seamless Failover).
-   * Ngay trong cùng 1 HTTP request: nếu Key A gặp 429 / hết quota / die -> lập tức chuyển sang Key B, C...
+   * Thực thi hàm gọi AI với cơ chế tự động xoay vòng Key:
+   * - Gặp 429: Cooldown theo bậc (1m -> 3m -> 10m) hoặc EXHAUSTED tới 00:00 và xoay sang key kế tiếp.
+   * - Gặp 503 Overloaded: Cooldown 60s + Exponential Backoff kèm Jitter trước khi thử key kế tiếp;
+   *   nếu >= 3 key liên tiếp gặp 503 trên model chính thì tự động hạ cấp sang `fallbackModel` cho request đó.
+   * - Gặp 401/403 (Invalid/Revoked/Chưa bật API/Giới hạn IP-Referer): đánh dấu INVALID vĩnh viễn cho phiên chạy và log chi tiết Google API.
    */
   async executeWithRotation<T>(
     fn: (apiKey: string, meta: SelectedKeyMeta) => Promise<T>,
@@ -735,8 +818,12 @@ export class KeyPoolManager {
       initialHealthyCount,
       Math.max(1, options.maxAttempts ?? this.defaultMaxAttempts),
     );
+    const fallbackThreshold = Math.max(1, options.fallbackOn503Threshold ?? this.fallbackOn503Threshold);
+    const fallbackModel = normalizeGeminiModelName(options.fallbackModel ?? this.fallbackGeminiModel);
 
     let attempt = 0;
+    let consecutive503Count = 0;
+    let preferFallbackModel = false;
     let lastError: unknown;
     let preselected: PoolKeyRecord | null = null;
 
@@ -759,8 +846,16 @@ export class KeyPoolManager {
       candidate.lastUsedSeq = ++this.globalUseSeq;
       candidate.updatedAt = new Date(startNow).toISOString();
 
+      let pendingBackoffMs = 0;
+      let shouldContinueToNext: PoolKeyRecord | null = null;
+
       try {
-        const result = await fn(candidate.rawKey, this.toMeta(candidate));
+        const meta = this.toMeta(candidate, {
+          preferFallbackModel,
+          fallbackModel,
+          consecutive503Count,
+        });
+        const result = await fn(candidate.rawKey, meta);
         const finishNow = this.nowFn();
         candidate.successCount += 1;
         candidate.consecutive429 = 0;
@@ -783,6 +878,7 @@ export class KeyPoolManager {
         let stateActionDesc = 'Retry next key';
 
         if (classified.kind === 'RATE_LIMIT_429') {
+          consecutive503Count = 0;
           candidate.error429Count += 1;
           candidate.consecutive429 += 1;
           const cooldownMs = computeCooldownMs(candidate.consecutive429, this.cooldownStepsMs);
@@ -791,12 +887,21 @@ export class KeyPoolManager {
           hitDesc = '429';
           stateActionDesc = `Cooldown ${Math.round(cooldownMs / 1000)}s`;
         } else if (classified.kind === 'OVERLOADED_503') {
+          consecutive503Count += 1;
           const cooldownMs = this.cooldownStepsMs[0] ?? 60_000;
           candidate.status = 'COOLDOWN';
           candidate.cooldownUntil = failNow + cooldownMs;
           hitDesc = '503 (Overloaded)';
           stateActionDesc = `Cooldown ${Math.round(cooldownMs / 1000)}s`;
+
+          if (!preferFallbackModel && consecutive503Count >= fallbackThreshold) {
+            preferFallbackModel = true;
+            this.logger.warn(
+              `[KeyPool] Model chính liên tục gặp 503 Overloaded trên ${consecutive503Count} key liên tiếp -> Tự động hạ cấp sang ${fallbackModel} cho request hiện tại.`,
+            );
+          }
         } else if (classified.kind === 'DAILY_QUOTA_EXHAUSTED') {
+          consecutive503Count = 0;
           candidate.error429Count += 1;
           candidate.consecutive429 += 1;
           const resetMs = computeNextMidnightMs(failNow, this.quotaResetTimeZone);
@@ -807,15 +912,24 @@ export class KeyPoolManager {
           hitDesc = '429 (RPD Daily Quota)';
           stateActionDesc = `EXHAUSTED until ${new Date(resetMs).toISOString()}`;
         } else if (classified.kind === 'MODEL_NOT_FOUND_404') {
+          consecutive503Count = 0;
           candidate.status = 'HEALTHY';
           candidate.cooldownUntil = null;
           hitDesc = '404 (Model Not Found)';
           stateActionDesc = 'Kept HEALTHY';
         } else if (classified.kind === 'INVALID_KEY') {
+          consecutive503Count = 0;
           candidate.status = 'INVALID';
           candidate.cooldownUntil = null;
           hitDesc = `${classified.httpStatus ?? 401} (Invalid/Revoked)`;
           stateActionDesc = 'Marked INVALID';
+        } else if (classified.kind === 'TRANSIENT_UPSTREAM') {
+          consecutive503Count = 0;
+          const shortCooldownMs = Math.min(30_000, this.cooldownStepsMs[0] ?? 30_000);
+          candidate.status = 'COOLDOWN';
+          candidate.cooldownUntil = failNow + shortCooldownMs;
+          hitDesc = `${classified.httpStatus ?? 'TIMEOUT'} (Upstream Timeout/Transient)`;
+          stateActionDesc = `Cooldown ${Math.round(shortCooldownMs / 1000)}s`;
         }
 
         this.persistRecordStateAsync(candidate);
@@ -828,17 +942,23 @@ export class KeyPoolManager {
           attempt < maxAttempts
             ? this.pickNextHealthyKey(triedIds, options.provider)
             : null;
+        shouldContinueToNext = nextCandidate;
         preselected = nextCandidate;
+
+        if (nextCandidate && classified.kind === 'OVERLOADED_503') {
+          pendingBackoffMs = this.compute503BackoffMs(consecutive503Count);
+        }
 
         const switchTarget = nextCandidate
           ? `Switched to Key #${nextCandidate.slotNumber} (${nextCandidate.shortMask})`
           : attempt >= maxAttempts
             ? `Reached maxAttempts (${maxAttempts})`
             : 'No healthy keys remaining';
+        const backoffDesc = pendingBackoffMs > 0 ? ` -> Backoff ${pendingBackoffMs}ms` : '';
 
-        const logLine = `[KeyPool] Key #${candidate.slotNumber} (${candidate.shortMask}) hit ${hitDesc} -> ${stateActionDesc} -> ${switchTarget}`;
+        const logLine = `[KeyPool] Key #${candidate.slotNumber} (${candidate.shortMask}) hit ${hitDesc} -> ${stateActionDesc}${backoffDesc} -> ${switchTarget}`;
         if (classified.kind === 'INVALID_KEY') {
-          this.logger.error(`[KeyPool] CẢNH BÁO KEY HỎNG: ${logLine}`);
+          this.logger.error(`[KeyPool] CẢNH BÁO KEY HỎNG: ${logLine} | Chi tiết: ${classified.reasonSummary}`);
         } else {
           this.logger.warn(logLine);
         }
@@ -849,10 +969,17 @@ export class KeyPoolManager {
       } finally {
         candidate.inFlight = Math.max(0, candidate.inFlight - 1);
       }
+
+      if (shouldContinueToNext && pendingBackoffMs > 0) {
+        await this.sleepFn(pendingBackoffMs);
+      }
     }
 
+    const safeLastErrMsg = redactSecretsInText(
+      lastError instanceof Error ? lastError.message : String(lastError),
+    );
     throw new KeyPoolExhaustedError(
-      `Đã xoay vòng qua ${attempt} API key nhưng đều thất bại (${lastError instanceof Error ? lastError.message : String(lastError)}).`,
+      `Đã xoay vòng qua ${attempt} API key nhưng đều thất bại (${safeLastErrMsg}).`,
       attempt,
       lastError,
     );
@@ -1021,7 +1148,12 @@ export class KeyPoolManager {
       const routing =
         provider === 'gemini'
           ? parseGeminiKeyRouting(item.apiKey, item.geminiEndpoint ?? 'ai_studio')
-          : { cleanKey: item.apiKey.trim(), geminiEndpoint: 'ai_studio' as GeminiEndpointKind };
+          : {
+              cleanKey: item.apiKey.trim(),
+              geminiEndpoint: 'ai_studio' as GeminiEndpointKind,
+              keyFormat: undefined,
+              formatMismatchWarning: undefined,
+            };
       const clean = routing.cleanKey;
       if (clean.length < 8 || /\s/.test(clean)) {
         invalidFormatCount += 1;
@@ -1082,6 +1214,7 @@ export class KeyPoolManager {
         label,
         provider,
         geminiEndpoint: routing.geminiEndpoint,
+        keyFormat: routing.keyFormat,
         source: 'db',
         weight,
         isEnabled: true,
@@ -1091,6 +1224,11 @@ export class KeyPoolManager {
       });
 
       if (mem) {
+        if (routing.formatMismatchWarning) {
+          this.logger.warn(
+            `[KeyPool] Cảnh báo phân loại Key #${mem.slotNumber} (${mem.shortMask}): ${routing.formatMismatchWarning}`,
+          );
+        }
         added.push(this.toMaskedInfo(mem, nowMs));
         toPersist.push({
           ...docCandidate,
@@ -1298,20 +1436,16 @@ export class KeyPoolManager {
         return { ok: true, detail: 'Groq API Key hợp lệ.' };
       }
 
-      const modelsToTry = buildGeminiModelChain(this.defaultGeminiModel);
-      const { text, modelUsed, endpointUsed } = await executeGeminiWithModelFallback({
+      const probeRes = await probeGeminiKeyEndpoint({
         apiKey,
         geminiEndpoint: meta.geminiEndpoint ?? 'ai_studio',
-        models: modelsToTry,
-        contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
-        config: { maxOutputTokens: 5, temperature: 0 },
+        keyFormat: meta.keyFormat,
+        defaultModel: this.defaultGeminiModel,
         timeoutMs: 8_000,
-        label: 'KeyPool Probe',
       });
-      const endpointLabel = endpointUsed === 'vertex' ? 'Vertex AI' : 'Google AI Studio';
       return {
-        ok: true,
-        detail: `${endpointLabel} (${modelUsed}) phản hồi thành công${text ? `: "${text.trim().slice(0, 24)}"` : ''}.`,
+        ok: probeRes.ok,
+        detail: probeRes.detail,
       };
     } finally {
       clearTimeout(timer);

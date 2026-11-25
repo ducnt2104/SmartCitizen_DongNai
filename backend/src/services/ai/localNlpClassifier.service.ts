@@ -335,10 +335,8 @@ export class LocalNlpClassifierService {
     const suggestedUnit = suggestTwoTierUnit(standardizedCategory, wardName);
 
     const defaults = CATEGORY_DEFAULT_COPY[chosenCategory];
-    const suggestedTitle =
-      rawText.length >= 12
-        ? rawText.split(/[.!?\n]/)[0].trim().slice(0, 88)
-        : defaults.title;
+    const firstSentence = rawText ? rawText.split(/[.!?\n]/)[0].trim().slice(0, 88) : '';
+    const suggestedTitle = firstSentence.length >= 6 ? firstSentence : defaults.title;
     const suggestedDescription = rawText.length >= 20 ? rawText.slice(0, 420) : defaults.desc;
 
     const safetyHazards: string[] = [];

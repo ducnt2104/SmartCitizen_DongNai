@@ -26,6 +26,7 @@ export type { EdgeStatsMsg, ExifGpsCoords, ExtractedExifMetadata };
 export interface ProcessedImageResult {
   aiBlob: Blob;
   aiMimeType: string;
+  aiSha256: string;
   displayBlob: Blob;
   displayMimeType: string;
   /** Preview URL tạo bằng URL.createObjectURL (hoặc fallback), không giữ base64 trong React state */
@@ -151,6 +152,24 @@ function computeFallbackDHashAndStats(
   };
 }
 
+async function sha256Blob(blob: Blob): Promise<string> {
+  if (typeof crypto === 'undefined' || !crypto.subtle) return '';
+  const buf = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function encodeAiCanvasFallback(canvas: HTMLCanvasElement): Promise<{ blob: Blob; mimeType: string }> {
+  const MAX_AI_BYTES = 220 * 1024;
+  let enc = await encodeCanvasFallback(canvas, 0.80);
+  if (enc.blob.size <= MAX_AI_BYTES) return enc;
+  for (const q of [0.72, 0.62]) {
+    enc = await encodeCanvasFallback(canvas, q);
+    if (enc.blob.size <= MAX_AI_BYTES) return enc;
+  }
+  return enc;
+}
+
 async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Promise<ProcessedImageResult> {
   const t0 = performance.now();
   const exif = extractExifMetadata(rawBuf);
@@ -176,21 +195,27 @@ async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Prom
     };
 
     const disp = makeScaled(1280);
-    const ai = makeScaled(640);
+    const ai = makeScaled(1024);
     const [dispEnc, aiEnc] = await Promise.all([
       encodeCanvasFallback(disp.canvas, 0.82),
-      encodeCanvasFallback(ai.canvas, 0.72),
+      encodeAiCanvasFallback(ai.canvas),
     ]);
     const t1 = performance.now();
-    const cv = computeFallbackDHashAndStats(
-      ai.canvas,
-      natW / natH,
-      Boolean(exif.cameraMake || exif.cameraModel),
-    );
+    const [cv, aiSha256] = await Promise.all([
+      Promise.resolve(
+        computeFallbackDHashAndStats(
+          ai.canvas,
+          natW / natH,
+          Boolean(exif.cameraMake || exif.cameraModel),
+        ),
+      ),
+      sha256Blob(aiEnc.blob),
+    ]);
     const hashMs = performance.now() - t1;
     return {
       aiBlob: aiEnc.blob,
       aiMimeType: aiEnc.mimeType,
+      aiSha256,
       displayBlob: dispEnc.blob,
       displayMimeType: dispEnc.mimeType,
       previewUrl: URL.createObjectURL(dispEnc.blob),
@@ -222,7 +247,6 @@ export async function processImageInWorker(blob: Blob): Promise<ProcessedImageRe
   }
 
   try {
-    const transferBuf = rawBuf.slice(0);
     const res = await new Promise<Extract<ImageProcessorResponse, { type: 'processed' }>>((resolve, reject) => {
       const id = ++seq;
       const timer = window.setTimeout(() => {
@@ -233,11 +257,11 @@ export async function processImageInWorker(blob: Blob): Promise<ProcessedImageRe
       const req: ImageProcessorRequest = {
         id,
         type: 'process',
-        buffer: transferBuf,
+        buffer: rawBuf,
         mimeType: blob.type || 'image/jpeg',
         size: blob.size,
       };
-      w.postMessage(req, [transferBuf]);
+      w.postMessage(req, [rawBuf]);
     });
 
     const aiBlob = new Blob([res.aiBuffer], { type: res.aiMimeType });
@@ -245,6 +269,7 @@ export async function processImageInWorker(blob: Blob): Promise<ProcessedImageRe
     return {
       aiBlob,
       aiMimeType: res.aiMimeType,
+      aiSha256: res.aiSha256,
       displayBlob,
       displayMimeType: res.displayMimeType,
       previewUrl: URL.createObjectURL(displayBlob),
@@ -268,7 +293,7 @@ export async function processImageInWorker(blob: Blob): Promise<ProcessedImageRe
       workerUnsupported = true;
       worker?.terminate();
       worker = null;
-      return processImageCanvasFallback(blob, rawBuf);
+      return processImageCanvasFallback(blob, await blob.arrayBuffer());
     }
     throw err;
   }

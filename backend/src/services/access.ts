@@ -4,7 +4,7 @@ import { isValidHash } from '../shared/dhash';
 import type { Photo, Report, Role } from '../shared/types';
 import type { UserRecord } from '../repositories/types';
 import { badRequest, forbidden } from '../utils/errors';
-import { isAllowedImageMagicBytes } from '../utils/magicBytes';
+import { detectImageMagicBytes, isAllowedImageMagicBytes } from '../utils/magicBytes';
 import { mediaService } from './media.service';
 
 export const STAFF_ROLES: readonly Role[] = ['officer', 'admin'];
@@ -51,7 +51,17 @@ export interface PhotoInput {
   dataUrl?: string;
   buffer?: Buffer;
   aiBuffer?: Buffer;
+  aiMimeType?: string;
   dHash: string;
+}
+
+export function detectImageMimeFromBuffer(buf: Buffer | undefined, fallback = 'image/webp'): string {
+  if (!buf) return fallback;
+  const kind = detectImageMagicBytes(buf);
+  if (kind === 'jpeg') return 'image/jpeg';
+  if (kind === 'png') return 'image/png';
+  if (kind === 'webp') return 'image/webp';
+  return fallback;
 }
 
 const DATA_URL_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
@@ -86,9 +96,11 @@ export async function resolvePhotoInputFromRequest(
       candidateHash && isValidHash(candidateHash)
         ? candidateHash.toLowerCase()
         : await mediaService.computeDHashFromBuffer(up.aiBuffer ?? up.displayBuffer);
+    const aiBuf = up.aiBuffer ?? up.displayBuffer;
     return {
       buffer: up.displayBuffer,
-      aiBuffer: up.aiBuffer ?? up.displayBuffer,
+      aiBuffer: aiBuf,
+      aiMimeType: detectImageMimeFromBuffer(aiBuf, up.aiMimeType ?? up.displayMimeType ?? 'image/webp'),
       dHash,
     };
   }
@@ -102,6 +114,7 @@ export async function resolvePhotoInputFromRequest(
     return {
       dataUrl: bodyPhoto.dataUrl,
       buffer: parsed.buffer,
+      aiMimeType: parsed.mime,
       dHash,
     };
   }

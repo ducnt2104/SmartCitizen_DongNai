@@ -62,33 +62,44 @@ afterAll(async () => {
 });
 
 describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đội Cứu Hộ (/rescue)', () => {
-  it('chuẩn hóa chuỗi model Gemini 2026 ổn định, mặc định định tuyến AQ.* qua AI Studio và bóc sạch JSON từ markdown', async () => {
+  it('chuẩn hóa chuỗi model Gemini ổn định, định tuyến AIzaSy qua AI Studio và AQ.* qua Vertex AI, bóc sạch JSON từ markdown', async () => {
     const { buildGoogleGenAiClientOptions, extractJsonObject, resolveGeminiModelChain } = await import(
       '../src/services/gemini.service'
     );
-    expect(resolveGeminiModelChain('gemini-3.5-flash-lite')).toEqual([
-      'gemini-3.5-flash-lite',
-      'gemini-3.6-flash',
-      'gemini-3.8-flash',
-    ]);
     expect(resolveGeminiModelChain('gemini-2.5-flash')).toEqual([
-      'gemini-3.5-flash-lite',
-      'gemini-3.6-flash',
-      'gemini-3.8-flash',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
     ]);
-    expect(resolveGeminiModelChain('gemini-3.8-flash')).toEqual([
-      'gemini-3.8-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-3.6-flash',
+    expect(resolveGeminiModelChain('gemini-1.5-flash')).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+    ]);
+    expect(resolveGeminiModelChain('gemini-3.5-flash-lite')).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+    ]);
+    expect(resolveGeminiModelChain('gemini-2.5-flash-lite')).toEqual([
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
     ]);
     expect(resolveGeminiModelChain('')).toEqual([
-      'gemini-3.5-flash-lite',
-      'gemini-3.6-flash',
-      'gemini-3.8-flash',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+    ]);
+    expect(resolveGeminiModelChain('gemini-2.5-flash', { preferFallbackModel: true })).toEqual([
+      'gemini-2.0-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash',
     ]);
 
     expect(buildGoogleGenAiClientOptions('AQ.Ab8RN6J2zkHaPWh_test')).toEqual({
       apiKey: 'AQ.Ab8RN6J2zkHaPWh_test',
+      vertexai: true,
     });
     expect(buildGoogleGenAiClientOptions('AIzaSyTestStandardKey')).toEqual({
       apiKey: 'AIzaSyTestStandardKey',

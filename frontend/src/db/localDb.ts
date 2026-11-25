@@ -20,6 +20,7 @@ export interface OutboxItem {
 
 export interface AiCacheRow {
   dHash: string;
+  sha256?: string;
   result: VisionResult;
   at: number;
 }
@@ -43,6 +44,13 @@ class LocalDb extends Dexie {
       wards: 'wardCode, zone',
       outboxQueue: 'id, state, nextAttemptAt, createdAt',
       aiVisionCache: 'dHash, at',
+      settings: 'key',
+    });
+    this.version(2).stores({
+      reports: 'id, wardCode, status, category, createdAt, syncState',
+      wards: 'wardCode, zone',
+      outboxQueue: 'id, state, nextAttemptAt, createdAt',
+      aiVisionCache: 'dHash, sha256, at',
       settings: 'key',
     });
   }
