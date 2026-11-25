@@ -153,11 +153,65 @@ async function googleReverseGeocode(
   }
 }
 
+/** Reverse Geocode qua ArcGIS World Geocoder (CORS-enabled, chi tiết tới số nhà, con hẻm, POI). */
+async function arcgisReverseGeocode(
+  lat: number,
+  lng: number,
+  signal?: AbortSignal,
+): Promise<ReverseGeocodeResult | null> {
+  if (signal?.aborted) return null;
+  try {
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&location=${encodeURIComponent(`${lng.toFixed(6)},${lat.toFixed(6)}`)}&langCode=vi`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      address?: {
+        Match_addr?: string;
+        LongLabel?: string;
+        ShortLabel?: string;
+        PlaceName?: string;
+        AddNum?: string;
+        Address?: string;
+        Neighborhood?: string;
+        District?: string;
+        City?: string;
+        Subregion?: string;
+        Region?: string;
+      };
+    };
+    const a = json.address;
+    if (!a) return null;
+
+    const addrLine = (a.Address ?? '').trim();
+    const numLine = (a.AddNum ?? '').trim();
+    const street = addrLine && numLine && !addrLine.startsWith(numLine) ? `${numLine} ${addrLine}` : addrLine || (a.PlaceName ?? '').trim();
+    const rawText = [a.LongLabel, a.Neighborhood, a.District, a.City, a.Subregion, a.Region].filter(Boolean).join(', ');
+    const normalized = resolveAdminUnit({ lat, lng, street, rawAddressText: rawText });
+
+    if (normalized.inBounds && normalized.wardName) {
+      const poi = (a.PlaceName ?? '').trim();
+      const headPart =
+        poi && street && !street.toLowerCase().includes(poi.toLowerCase())
+          ? `${poi}, ${street}`
+          : street || poi || (a.ShortLabel ?? '').trim();
+      return {
+        ...normalized,
+        address: headPart ? `${headPart}, ${normalized.wardName}, Thành phố Đồng Nai` : `${normalized.wardName}, Thành phố Đồng Nai`,
+      };
+    }
+    return normalized;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return null;
+  }
+}
+
 /**
  * Reverse Geocoding đa tầng có AbortController:
  *  - Tầng 1: Kiểm tra khung bao toàn Thành phố Đồng Nai (ngoài biên giới -> báo rõ).
  *  - Tầng 2A: Google Maps Geocoder chính chủ (nếu đã nạp Google Maps) -> chuẩn hóa về 95 Phường/Xã.
  *  - Tầng 2B: Backend `/api/geo/reverse` (cache LRU ~11m + Nominatim 4s + chuẩn hóa 2 thế hệ về 95 Phường/Xã).
+ *  - Tầng 2C: ArcGIS World Geocoder client-side (chi tiết tới số nhà/hẻm/POI khi backend hoặc Nominatim không khả dụng).
  *  - Tầng 3: Fallback Nearest Centroid Haversine cục bộ (`needsConfirmation: true`).
  */
 export async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal): Promise<ReverseGeocodeResult> {
@@ -171,20 +225,106 @@ export async function reverseGeocode(lat: number, lng: number, signal?: AbortSig
   if (googleHit) return googleHit;
 
   try {
-    return await api<ReverseGeocodeResult>(
+    const apiHit = await api<ReverseGeocodeResult>(
       `/api/geo/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lng=${encodeURIComponent(lng.toFixed(6))}`,
-      { signal, timeoutMs: 5000 },
+      { signal, timeoutMs: 4500 },
     );
+    if (apiHit && apiHit.source !== 'local_fallback') return apiHit;
   } catch (err) {
     if (signal?.aborted) throw err;
-    return fallback;
+  }
+
+  const arcHit = await arcgisReverseGeocode(lat, lng, signal);
+  if (arcHit) return arcHit;
+
+  return fallback;
+}
+
+async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
+  try {
+    const extent = `${DONG_NAI_BBOX.lngMin},${DONG_NAI_BBOX.latMin},${DONG_NAI_BBOX.lngMax},${DONG_NAI_BBOX.latMax}`;
+    const singleLine = q.toLowerCase().includes('đồng nai') || q.toLowerCase().includes('dong nai') ? q : `${q}, Đồng Nai`;
+    const url = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?f=json&SingleLine=${encodeURIComponent(singleLine)}&countryCode=VNM&searchExtent=${extent}&maxLocations=6&langCode=vi`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      candidates?: Array<{
+        address?: string;
+        location?: { x: number; y: number };
+        score?: number;
+      }>;
+    };
+    const out: PlaceSuggestion[] = [];
+    const seen = new Set<string>();
+    for (const c of json.candidates ?? []) {
+      const lat = c.location?.y;
+      const lng = c.location?.x;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || !inDongNaiBBox(lat, lng)) continue;
+      const addr = (c.address ?? '').trim();
+      if (!addr) continue;
+      const key = `${addr}:${lat.toFixed(4)}:${lng.toFixed(4)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const resolved = resolveAdminUnit({ lat, lng, rawAddressText: addr });
+      const parts = addr.split(',').map((s) => s.trim());
+      const wardLabel = resolved.wardCode ? WARD_BY_CODE[resolved.wardCode]?.name : undefined;
+      out.push({
+        id: `arc:${out.length}:${lat.toFixed(5)}:${lng.toFixed(5)}`,
+        label: parts[0] || addr,
+        sublabel: [parts.slice(1, 3).join(', '), wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · '),
+        kind: 'place',
+        lat,
+        lng,
+        wardCode: resolved.wardCode ?? undefined,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function searchPhotonPlaces(q: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
+  try {
+    const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lat=11.05&lon=106.95`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      features?: Array<{
+        geometry?: { coordinates?: [number, number] };
+        properties?: { osm_id?: number; name?: string; street?: string; district?: string; city?: string; state?: string };
+      }>;
+    };
+    const out: PlaceSuggestion[] = [];
+    for (const f of json.features ?? []) {
+      const coords = f.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const [lng, lat] = coords;
+      if (!inDongNaiBBox(lat, lng)) continue;
+      const pr = f.properties ?? {};
+      const raw = [pr.name, pr.street, pr.district, pr.city, pr.state].filter(Boolean).join(', ');
+      const resolved = resolveAdminUnit({ lat, lng, street: pr.street, rawAddressText: raw });
+      const wardLabel = resolved.wardCode ? WARD_BY_CODE[resolved.wardCode]?.name : undefined;
+      out.push({
+        id: `photon:${pr.osm_id ?? out.length}:${lat.toFixed(5)}`,
+        label: pr.name?.trim() || pr.street?.trim() || raw,
+        sublabel: [pr.street && pr.street !== pr.name ? pr.street : '', wardLabel, 'TP. Đồng Nai'].filter(Boolean).join(' · '),
+        kind: 'place',
+        lat,
+        lng,
+        wardCode: resolved.wardCode ?? undefined,
+      });
+    }
+    return out;
+  } catch {
+    return [];
   }
 }
 
 /**
  * Tìm kiếm thông minh Địa chỉ / Con hẻm / 95 Phường Xã ưu tiên trong Bounding Box Thành phố Đồng Nai:
  *  - Khớp tức thì 0ms với 95 Phường/Xã (không dấu + bí danh cũ trước 01/07/2025 & 30/04/2026).
- *  - Khi trực tuyến: gọi Google Places Autocomplete (nếu có key) hoặc OSM Nominatim giới hạn trong `DONG_NAI_CITY_BOUNDS`.
+ *  - Khi trực tuyến: gọi Google Places Autocomplete (nếu có key), ArcGIS Geocoder, Photon, và OSM Nominatim.
  */
 export async function searchPlacesDongNai(query: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
   const q = query.trim();
@@ -230,13 +370,25 @@ export async function searchPlacesDongNai(query: string, signal?: AbortSignal): 
         kind: 'place',
         placeId: p.place_id,
       }));
-      return [...wardMatches, ...places];
+      if (places.length > 0) return [...wardMatches, ...places];
     } catch {
-      // Tự động rơi xuống Nominatim bên dưới nếu Places API chưa bật trên Google Cloud
+      // Tự động rơi xuống ArcGIS / Photon / Nominatim bên dưới
     }
   }
 
-  // 2) Fallback tìm kiếm địa chỉ chi tiết qua Nominatim giới hạn chặt trong khung bao TP. Đồng Nai
+  // 2) ArcGIS World Geocoder (CORS-enabled, nhanh và chính xác tại Việt Nam)
+  const arcMatches = await searchArcGisPlaces(q, signal);
+  if (signal?.aborted || arcMatches.length > 0) {
+    return [...wardMatches, ...arcMatches];
+  }
+
+  // 3) Photon OSM Geocoder
+  const photonMatches = await searchPhotonPlaces(q, signal);
+  if (signal?.aborted || photonMatches.length > 0) {
+    return [...wardMatches, ...photonMatches];
+  }
+
+  // 4) Fallback OSM Nominatim
   try {
     const viewbox = `${DONG_NAI_BBOX.lngMin},${DONG_NAI_BBOX.latMax},${DONG_NAI_BBOX.lngMax},${DONG_NAI_BBOX.latMin}`;
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=vn&bounded=1&viewbox=${viewbox}&accept-language=vi&q=${encodeURIComponent(q)}`;
@@ -272,8 +424,7 @@ export async function searchPlacesDongNai(query: string, signal?: AbortSignal): 
       });
     }
     return [...wardMatches, ...osmPlaces];
-  } catch (err) {
-    if (signal?.aborted) return wardMatches;
+  } catch {
     return wardMatches;
   }
 }
@@ -309,16 +460,16 @@ export async function resolvePlaceSuggestion(
 
 /** Địa danh đại diện phủ khắp 5 vùng toàn Thành phố Đồng Nai khi từ chối GPS. */
 export const QUICK_PLACES: ReadonlyArray<{ name: string; lat: number; lng: number; wardCode: string }> = [
-  { name: 'Phường Trấn Biên (Trung tâm)', lat: 10.9465, lng: 106.8243, wardCode: 'DN-TB' },
-  { name: 'Phường Long Thành (Sân bay)', lat: 10.79, lng: 106.95, wardCode: 'DN-LTH' },
-  { name: 'Phường Nhơn Trạch (Cảng)', lat: 10.732, lng: 106.906, wardCode: 'DN-NTR' },
-  { name: 'Phường Trảng Bom', lat: 10.954, lng: 107.01, wardCode: 'DN-TBO' },
-  { name: 'Phường Long Khánh', lat: 10.93, lng: 107.24, wardCode: 'DN-LKH' },
-  { name: 'Phường Xuân Lộc', lat: 10.924, lng: 107.405, wardCode: 'DN-XLO' },
-  { name: 'Xã Tà Lài (Cát Tiên)', lat: 11.385, lng: 107.362, wardCode: 'DN-TLA' },
-  { name: 'Phường Bình Phước (Đồng Xoài)', lat: 11.535, lng: 106.896, wardCode: 'DN-BP' },
-  { name: 'Phường Chơn Thành', lat: 11.425, lng: 106.625, wardCode: 'DN-CTH' },
-  { name: 'Phường Lộc Ninh', lat: 11.842, lng: 106.592, wardCode: 'DN-LNI' },
+  { name: 'Phường Trấn Biên (Trung tâm)', lat: 10.9492, lng: 106.8225, wardCode: 'DN-TB' },
+  { name: 'Phường Long Thành (Sân bay)', lat: 10.7782, lng: 106.9462, wardCode: 'DN-LTH' },
+  { name: 'Phường Nhơn Trạch (Cảng)', lat: 10.7458, lng: 106.9474, wardCode: 'DN-NTR' },
+  { name: 'Phường Trảng Bom', lat: 10.9526, lng: 107.0104, wardCode: 'DN-TBO' },
+  { name: 'Phường Long Khánh', lat: 10.9336, lng: 107.2627, wardCode: 'DN-LKH' },
+  { name: 'Phường Xuân Lộc', lat: 10.9336, lng: 107.4074, wardCode: 'DN-XLO' },
+  { name: 'Xã Tà Lài (Cát Tiên)', lat: 11.3626, lng: 107.3655, wardCode: 'DN-TLA' },
+  { name: 'Phường Bình Phước (Đồng Xoài)', lat: 11.5350, lng: 106.8832, wardCode: 'DN-BP' },
+  { name: 'Phường Chơn Thành', lat: 11.4282, lng: 106.6354, wardCode: 'DN-CTH' },
+  { name: 'Phường Lộc Ninh', lat: 11.8448, lng: 106.5907, wardCode: 'DN-LNI' },
 ];
 
 export { DONG_NAI_BBOX };

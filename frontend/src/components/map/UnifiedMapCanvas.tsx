@@ -153,17 +153,18 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
         </div>
       )}
 
-      {/* Tâm ngắm cố định giữa màn hình kiểu Google Maps / Grab (kéo bản đồ bên dưới mượt 60FPS) */}
+      {/* Tâm ngắm cố định giữa màn hình kiểu Google Maps / Grab (mũi kim chạm chính xác điểm (50%, 50%) = map.getCenter()) */}
       {p.crosshairPin && (
         <div className="pointer-events-none absolute inset-0 z-[30] grid place-items-center" aria-hidden>
-          <div className="relative -translate-y-5">
+          <div className="relative flex items-center justify-center">
+            <span className="h-2.5 w-2.5 rounded-full border-2 border-white bg-brand shadow" />
             <span
-              className={`absolute left-1/2 top-11 h-2.5 w-7 -translate-x-1/2 rounded-full bg-slate-950/40 blur-[2px] transition-transform duration-150 ${
-                dragging ? 'scale-125 opacity-40' : 'scale-100 opacity-75'
+              className={`absolute h-3 w-7 rounded-full bg-slate-950/35 blur-[2px] transition-transform duration-150 ${
+                dragging ? 'scale-125 opacity-40' : 'scale-90 opacity-75'
               }`}
             />
             <div
-              className={`transition-transform duration-150 ${
+              className={`absolute bottom-1/2 left-1/2 -translate-x-1/2 transition-transform duration-150 ${
                 dragging ? '-translate-y-3 scale-105' : 'translate-y-0 scale-100'
               }`}
             >
@@ -209,11 +210,11 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
       {/* Cụm nút điều khiển nổi bên phải (Zoom +/-, Toàn TP. Đồng Nai, Vị trí của tôi) */}
       <div className="absolute bottom-3 right-3 z-[35] flex flex-col items-end gap-2">
         {p.showZoomButtons !== false && (
-          <div className="hidden flex-col overflow-hidden rounded-2xl border border-line bg-surface/95 shadow-lift backdrop-blur-sm sm:flex">
+          <div className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface/95 shadow-lift backdrop-blur-sm">
             <button
               type="button"
               onClick={() => dispatchCamera({ kind: 'zoomDelta', delta: 1 })}
-              className="grid h-10 w-10 place-items-center border-b border-line text-ink hover:bg-surface-2"
+              className="grid h-9 w-9 place-items-center border-b border-line text-ink hover:bg-surface-2 sm:h-10 sm:w-10"
               aria-label="Phóng to bản đồ"
               title="Phóng to"
             >
@@ -222,7 +223,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
             <button
               type="button"
               onClick={() => dispatchCamera({ kind: 'zoomDelta', delta: -1 })}
-              className="grid h-10 w-10 place-items-center text-ink hover:bg-surface-2"
+              className="grid h-9 w-9 place-items-center text-ink hover:bg-surface-2 sm:h-10 sm:w-10"
               aria-label="Thu nhỏ bản đồ"
               title="Thu nhỏ"
             >

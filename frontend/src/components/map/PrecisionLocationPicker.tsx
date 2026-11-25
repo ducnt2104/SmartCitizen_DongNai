@@ -1,4 +1,4 @@
-import { AlertTriangle, Crosshair, MapPin, Search, ThumbsUp, X } from 'lucide-react';
+import { AlertTriangle, Crosshair, ExternalLink, MapPin, Search, ThumbsUp, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { DUPLICATE_SCAN_RADIUS_M, GPS_WARN_M } from '@shared/constants';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '@shared/geo';
@@ -16,6 +16,7 @@ import {
   type GpsFix,
   type PlaceSuggestion,
 } from '../../lib/geoClient';
+import { googleMapsPlaceUrl } from '../../lib/mapConfig';
 import { Spinner } from '../ui';
 import type { CameraCommand } from './GoogleMapEngine';
 import { UnifiedMapCanvas } from './UnifiedMapCanvas';
@@ -393,11 +394,22 @@ export function PrecisionLocationPicker({
         </div>
 
         {pin && (
-          <p className="mono text-xs text-muted">
-            {pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}
-            {fix ? ` · GPS ±${Math.round(fix.accuracy)}m` : ''}
-            {exifApplied ? ' · EXIF' : ''}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="mono text-xs text-muted">
+              {pin.lat.toFixed(6)}, {pin.lng.toFixed(6)}
+              {fix ? ` · GPS ±${Math.round(fix.accuracy)}m` : ''}
+              {exifApplied ? ' · EXIF' : ''}
+            </p>
+            <a
+              href={googleMapsPlaceUrl(pin.lat, pin.lng)}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-brand underline"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+              {t('map.openGoogleMaps')}
+            </a>
+          </div>
         )}
 
         {geo?.needsConfirmation && !manualWardCode && (

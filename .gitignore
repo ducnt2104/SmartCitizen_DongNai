@@ -39,8 +39,9 @@ Desktop.ini
 .idea/
 
 # Runtime data, logs & temporary files
-data/
+/data/
 backend/data/
+!frontend/src/data/
 logs/
 *.log
 npm-debug.log*

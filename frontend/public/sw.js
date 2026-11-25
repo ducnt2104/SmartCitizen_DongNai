@@ -52,7 +52,8 @@ self.addEventListener('fetch', (event) => {
   if (
     url.hostname.endsWith('tile.openstreetmap.org') ||
     url.hostname.endsWith('basemaps.cartocdn.com') ||
-    url.hostname === 'server.arcgisonline.com'
+    url.hostname === 'server.arcgisonline.com' ||
+    url.hostname === 'tiles.openfreemap.org'
   ) {
     event.respondWith(staleWhileRevalidate(TILES, req, false));
     return;

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
 import { ARTERIAL_ROADS } from '@shared/geo';
+import { useI18n } from '../../i18n';
 import { QUICK_PLACES } from '../../lib/geoClient';
 import {
   buildMapLibreStyle,
@@ -13,6 +14,7 @@ import {
   DONG_NAI_CAMERA_RESTRICTION,
   DONG_NAI_MAPLIBRE_BOUNDS,
   getPinState,
+  loadDetailedVectorRoadmapStyle,
   PIN_STATE_COLOR,
   PIN_STATE_RANK,
   type MapPoint,
@@ -113,6 +115,7 @@ function buildHeatmapGeoJson<T extends MapPoint>(reports: T[]): GeoJSON.FeatureC
  * - Nếu trình duyệt tắt cả WebGL, tự động rơi xuống bảng lưới tọa độ dự phòng cấp 2 — tuyệt đối 0% crash.
  */
 export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedEngineProps<T>) {
+  const { lang } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
@@ -133,6 +136,10 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   crosshairActiveRef.current = p.crosshairActive;
 
   const surfaceRef = useRef(p.surface);
+  const langRef = useRef(lang);
+  const vectorActiveRef = useRef(false);
+  const vectorLoadedRef = useRef(false);
+  const vectorFailedRef = useRef(false);
   const lastCmdSeqRef = useRef(0);
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi chuyển route SPA
@@ -155,6 +162,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         ],
         attributionControl: { compact: true },
       });
+      map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left');
     } catch (err) {
       console.warn('[MapLibre] Thiết bị không hỗ trợ WebGL, kích hoạt khung dự phòng 2D:', err);
       setWebglUnavailable(true);
@@ -163,6 +171,23 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
 
     mapRef.current = map;
     surfaceRef.current = p.surface;
+    langRef.current = lang;
+    let vectorDisposed = false;
+    const vectorAbort = new AbortController();
+
+    const applyDetailedVectorIfRoadmap = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
+      if (targetSurface !== 'roadmap' || vectorFailedRef.current) {
+        vectorActiveRef.current = false;
+        vectorLoadedRef.current = false;
+        return;
+      }
+      void loadDetailedVectorRoadmapStyle(targetLang, vectorAbort.signal).then((vecStyle) => {
+        if (vectorDisposed || !vecStyle || surfaceRef.current !== 'roadmap' || vectorFailedRef.current) return;
+        vectorActiveRef.current = true;
+        vectorLoadedRef.current = false;
+        map.setStyle(vecStyle);
+      });
+    };
 
     const emitViewport = (): void => {
       if (viewportRef.current) {
@@ -186,10 +211,26 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
       setStyleReadySeq((n) => n + 1);
       emitViewport();
+      applyDetailedVectorIfRoadmap(p.surface, lang);
+    });
+
+    map.on('style.load', () => {
+      if (vectorActiveRef.current) vectorLoadedRef.current = true;
+      setStyleReadySeq((n) => n + 1);
     });
 
     map.on('styledata', () => {
       if (map.isStyleLoaded()) setStyleReadySeq((n) => n + 1);
+    });
+
+    map.on('error', () => {
+      if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
+        vectorFailedRef.current = true;
+        vectorActiveRef.current = false;
+        if (surfaceRef.current === 'roadmap') {
+          map.setStyle(buildMapLibreStyle('roadmap'));
+        }
+      }
     });
 
     map.on('movestart', () => dragRef.current?.(true));
@@ -205,7 +246,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
 
     map.on('click', (ev) => {
       if (crosshairActiveRef.current) {
-        map.easeTo({ center: ev.lngLat, duration: 220 });
+        const curZoom = map.getZoom();
+        map.easeTo({
+          center: ev.lngLat,
+          zoom: curZoom < 14 ? 15 : curZoom,
+          duration: curZoom < 14 ? 320 : 220,
+        });
       }
     });
 
@@ -213,6 +259,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     ro?.observe(el);
 
     return () => {
+      vectorDisposed = true;
+      vectorAbort.abort();
       ro?.disconnect();
       for (const m of markersRef.current) m.remove();
       markersRef.current = [];
@@ -224,13 +272,40 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2) Đổi lớp nền (Đường phố / Vệ tinh + Đường / Tối) mượt không hủy instance Map
+  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Đường / Tối) mượt không hủy instance Map
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || surfaceRef.current === p.surface) return;
+    if (!map) return;
+    const surfaceChanged = surfaceRef.current !== p.surface;
+    const langChanged = langRef.current !== lang;
+    if (!surfaceChanged && !langChanged) return;
     surfaceRef.current = p.surface;
-    map.setStyle(buildMapLibreStyle(p.surface));
-  }, [p.surface]);
+    langRef.current = lang;
+
+    if (p.surface === 'roadmap' && !vectorFailedRef.current) {
+      let cancelled = false;
+      const ctrl = new AbortController();
+      if (surfaceChanged) {
+        vectorActiveRef.current = false;
+        map.setStyle(buildMapLibreStyle('roadmap'));
+      }
+      void loadDetailedVectorRoadmapStyle(lang, ctrl.signal).then((vecStyle) => {
+        if (cancelled || !vecStyle || surfaceRef.current !== 'roadmap' || vectorFailedRef.current) return;
+        vectorActiveRef.current = true;
+        vectorLoadedRef.current = false;
+        map.setStyle(vecStyle);
+      });
+      return () => {
+        cancelled = true;
+        ctrl.abort();
+      };
+    }
+
+    if (surfaceChanged) {
+      vectorActiveRef.current = false;
+      map.setStyle(buildMapLibreStyle(p.surface));
+    }
+  }, [p.surface, lang]);
 
   // 3) Điều khiển camera mệnh lệnh (flyTo, fitCity, fitPoints, zoomDelta)
   useEffect(() => {
@@ -262,7 +337,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   // 4) Vẽ lớp phủ GeoJSON (Trục huyết mạch, Vòng tròn sai số GPS ±m, Bán kính lọc & Bản đồ nhiệt)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || styleReadySeq === 0) return;
+    try {
+      if (!map.getStyle()) return;
+    } catch {
+      return;
+    }
 
     const overlayData = buildOverlaysGeoJson(p.userPos, p.accuracyM, p.radiusM, p.showArterials);
     const existingOverlay = map.getSource('sc-overlays') as maplibregl.GeoJSONSource | undefined;
@@ -303,7 +383,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         type: 'line',
         source: 'sc-overlays',
         filter: ['==', ['get', 'kind'], 'arterial'],
-        paint: { 'line-color': '#F59E0B', 'line-width': 2.6, 'line-opacity': 0.78, 'line-dasharray': [3, 2] },
+        paint: {
+          'line-color': '#F59E0B',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.8, 14, 2.8, 18, 4],
+          'line-opacity': 0.68,
+          'line-dasharray': [4, 2],
+        },
       });
     }
 

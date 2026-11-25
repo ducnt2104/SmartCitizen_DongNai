@@ -394,7 +394,8 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
         colorScheme={colorScheme}
         gestureHandling="greedy"
         disableDefaultUI
-        clickableIcons={false}
+        scaleControl
+        clickableIcons={!p.crosshairActive}
         minZoom={7}
         maxZoom={20}
         restriction={{
@@ -425,6 +426,9 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
         onClick={(ev) => {
           if (p.crosshairActive && ev.detail.latLng) {
             ev.map.panTo(ev.detail.latLng);
+            if ((ev.map.getZoom() ?? 12) < 14) {
+              ev.map.setZoom(15);
+            }
           }
         }}
       >
@@ -447,8 +451,8 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
             key={r.name}
             path={r.path}
             strokeColor="#F59E0B"
-            strokeOpacity={0.78}
-            strokeWeight={3}
+            strokeOpacity={0.68}
+            strokeWeight={2.6}
             clickable={false}
           />
         ))}
