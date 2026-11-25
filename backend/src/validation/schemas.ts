@@ -108,9 +108,13 @@ export const schemas = {
   updateProfile: z.object({
     name: z.string().min(2).max(80).optional(),
     defaultWardCode: wardCode.nullable().optional(),
+    followedWardCodes: z.array(wardCode).max(30).optional(),
     notificationsEnabled: z.boolean().optional(),
     newPassword: z.string().min(8).max(128).optional(),
     currentPassword: z.string().min(1).max(128).optional(),
+  }),
+  updateFollowedWards: z.object({
+    wardCodes: z.array(wardCode).max(30),
   }),
   adminTrustFlag: z.object({
     trustLevel: z.enum(['high', 'normal', 'watchlist', 'flagged']),
@@ -326,6 +330,41 @@ export const schemas = {
     exif: exifMetadataSchema.optional(),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
+  }),
+
+  createAlert: z.object({
+    title: z.string().trim().min(5).max(180),
+    description: z.string().trim().min(5).max(1500),
+    category: z.enum(['disaster', 'traffic', 'utility', 'official_notice']),
+    severity: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    wardIds: z.array(z.union([wardCode, z.literal('ALL_DONG_NAI')])).min(1).max(95),
+    affectedRoads: z.array(z.string().trim().min(2).max(120)).max(20).default([]),
+    detourNote: z.string().trim().max(500).optional(),
+    geometryType: z.enum(['point', 'circle', 'polyline']).default('circle'),
+    lat: z.number().min(10.3).max(12.2),
+    lng: z.number().min(106.4).max(107.9),
+    radiusM: z.number().min(50).max(50000).optional(),
+    polyline: z.array(z.tuple([z.number().min(10.3).max(12.2), z.number().min(106.4).max(107.9)])).min(2).max(80).optional(),
+    expiresAt: z.string().max(64).optional(),
+    sourceUrl: z.string().url().max(500).optional(),
+  }),
+  updateAlert: z.object({
+    status: z.enum(['active', 'resolved']).optional(),
+    severity: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+    title: z.string().trim().min(5).max(180).optional(),
+    description: z.string().trim().min(5).max(1500).optional(),
+    detourNote: z.string().trim().max(500).nullable().optional(),
+    isVerifiedOfficial: z.boolean().optional(),
+  }),
+  createCommunityAlert: z.object({
+    title: z.string().trim().min(5).max(160),
+    description: z.string().trim().min(8).max(1000),
+    category: z.enum(['disaster', 'traffic', 'utility', 'official_notice']).default('disaster'),
+    severity: z.union([z.literal(1), z.literal(2)]).default(1),
+    wardCode: wardCode.optional(),
+    lat: z.number().min(10.3).max(12.2),
+    lng: z.number().min(106.4).max(107.9),
+    affectedRoads: z.array(z.string().trim().min(2).max(120)).max(10).default([]),
   }),
 } as const;
 

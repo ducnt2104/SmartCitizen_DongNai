@@ -1,4 +1,4 @@
-import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
+import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldAlert, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { normalizeRole } from '@shared/constants';
@@ -155,6 +155,15 @@ export function Header({ showScope = true }: { showScope?: boolean }) {
             <Logo />
           </Link>
           <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            <Link
+              to="/alerts"
+              className="btn btn-soft !min-h-9 !min-w-9 !px-2 !text-xs text-rose-700 sm:!min-h-10 sm:!px-3 md:hidden"
+              aria-label={t('nav.alerts')}
+              title="Cảnh báo thiên tai & giao thông"
+            >
+              <ShieldAlert className="h-4 w-4 text-rose-600" aria-hidden />
+              <span className="hidden xs:inline">{t('nav.alerts')}</span>
+            </Link>
             <button
               type="button"
               data-tour="senior"

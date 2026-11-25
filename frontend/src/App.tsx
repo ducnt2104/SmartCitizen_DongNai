@@ -17,6 +17,7 @@ import { useRouteSeo } from './utils/usePageSeo';
 
 const ReportPage = lazyWithRetry(() => import('./pages/Report'), 'ReportPage');
 const MapPage = lazyWithRetry(() => import('./pages/MapPage'), 'MapPage');
+const AlertsPage = lazyWithRetry(() => import('./pages/AlertsPage'), 'AlertsPage');
 const MinePage = lazyWithRetry(() => import('./pages/MinePage'), 'MinePage');
 const ProfilePage = lazyWithRetry(() => import('./pages/ProfilePage'), 'ProfilePage');
 const NotFoundPage = lazyWithRetry(() => import('./pages/NotFoundPage'), 'NotFoundPage');
@@ -130,6 +131,7 @@ export default function App() {
               <Route index element={<HomePage />} />
               <Route path="report" element={<ReportPage />} />
               <Route path="map" element={<MapPage />} />
+              <Route path="alerts" element={<AlertsPage />} />
               <Route path="mine" element={<MinePage />} />
               <Route path="gioi-thieu" element={<AboutPage />} />
               <Route path="phan-anh/:code" element={<PublicReportPage />} />

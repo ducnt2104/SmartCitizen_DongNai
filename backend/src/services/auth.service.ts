@@ -1147,6 +1147,7 @@ export class AuthService {
     patch: {
       name?: string;
       defaultWardCode?: string | null;
+      followedWardCodes?: string[];
       notificationsEnabled?: boolean;
       newPassword?: string;
       currentPassword?: string;
@@ -1163,12 +1164,18 @@ export class AuthService {
           { currentPassword: patch.currentPassword, newPassword: patch.newPassword },
           metaInput,
         );
-        if (patch.name !== undefined || patch.defaultWardCode !== undefined || patch.notificationsEnabled !== undefined) {
+        if (
+          patch.name !== undefined ||
+          patch.defaultWardCode !== undefined ||
+          patch.followedWardCodes !== undefined ||
+          patch.notificationsEnabled !== undefined
+        ) {
           return this.updateProfile(
             userId,
             {
               name: patch.name,
               defaultWardCode: patch.defaultWardCode,
+              followedWardCodes: patch.followedWardCodes,
               notificationsEnabled: patch.notificationsEnabled,
             },
             currentSessionId,
@@ -1190,6 +1197,17 @@ export class AuthService {
         throw badRequest('Phường/Xã cư trú không nằm trong 95 ĐVHC Thành phố Đồng Nai.', 'invalid_ward');
       }
       u.defaultWardCode = patch.defaultWardCode;
+    }
+    if (patch.followedWardCodes !== undefined) {
+      const unique: string[] = [];
+      for (const rawCode of patch.followedWardCodes) {
+        const code = String(rawCode).trim().toUpperCase();
+        if (!getWard(code)) {
+          throw badRequest(`Mã xã/phường theo dõi không hợp lệ: ${code}`, 'invalid_ward');
+        }
+        if (!unique.includes(code)) unique.push(code);
+      }
+      u.followedWardCodes = unique.slice(0, 30);
     }
     if (patch.notificationsEnabled !== undefined) {
       u.notificationsEnabled = patch.notificationsEnabled;

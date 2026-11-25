@@ -12,6 +12,7 @@ export interface UserRecord {
   wardCode: string | null;
   unitCode: string | null;
   defaultWardCode?: string | null;
+  followedWardCodes?: string[];
   notificationsEnabled?: boolean;
   revoked?: boolean;
   tokenVersion?: number;

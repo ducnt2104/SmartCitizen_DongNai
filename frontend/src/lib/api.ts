@@ -1,6 +1,7 @@
 import type { AuthSession } from '@shared/types';
 import { authStore } from './authStore';
 import { deviceFingerprintSync } from './deviceFp';
+import { requiresPowSolution, solvePowHeader } from './securityChallenge';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 
@@ -190,16 +191,22 @@ async function parseJsonResponse<T>(
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+  const method = opts.method ?? (opts.body === undefined ? 'GET' : 'POST');
+  const powHeaders: Record<string, string> = {};
+  if (requiresPowSolution(path, method) && !opts.headers?.['X-PoW-Solution']) {
+    powHeaders['X-PoW-Solution'] = await solvePowHeader(BASE, authHeaders());
+  }
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
   opts.signal?.addEventListener('abort', () => ctrl.abort());
   let res: Response;
   try {
     res = await fetch(apiUrl(path), {
-      method: opts.method ?? (opts.body === undefined ? 'GET' : 'POST'),
+      method,
       credentials: 'include',
       headers: authHeaders({
         ...(opts.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...powHeaders,
         ...(opts.headers ?? {}),
       }),
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
@@ -215,15 +222,20 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 }
 
 export async function apiMultipart<T>(path: string, opts: MultipartOptions): Promise<T> {
+  const method = opts.method ?? 'POST';
+  const powHeaders: Record<string, string> = {};
+  if (requiresPowSolution(path, method)) {
+    powHeaders['X-PoW-Solution'] = await solvePowHeader(BASE, authHeaders());
+  }
   const ctrl = new AbortController();
   const timeout = window.setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30000);
   opts.signal?.addEventListener('abort', () => ctrl.abort());
   let res: Response;
   try {
     res = await fetch(apiUrl(path), {
-      method: opts.method ?? 'POST',
+      method,
       credentials: 'include',
-      headers: authHeaders(),
+      headers: authHeaders(powHeaders),
       body: opts.body,
       signal: ctrl.signal,
     });

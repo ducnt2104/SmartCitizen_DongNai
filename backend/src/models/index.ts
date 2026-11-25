@@ -57,6 +57,8 @@ const appUserSchema = mk({
   email: { type: String, default: null, index: true },
   staffCode: { type: String, default: null, index: true },
   wardCode: { type: String, default: null, index: true },
+  defaultWardCode: { type: String, default: null },
+  followedWardCodes: { type: [String], default: [] },
   revoked: { type: Boolean, default: false, index: true },
   trustScore: { type: Number, default: 70, min: 0, max: 100 },
   createdAt: { type: String, required: true },
@@ -266,6 +268,22 @@ export {
 } from './AuditLog';
 export { ApiKey, apiKeySchema, type IApiKey, type ApiKeyDocument } from './ApiKey';
 export { MediaAsset, mediaAssetSchema, type IMediaAsset, type MediaAssetDocument } from './Media';
+export {
+  SecurityAuditLog,
+  securityAuditLogSchema,
+  SECURITY_AUDIT_TTL_SECONDS,
+  type ISecurityAuditLog,
+  type SecurityAuditLogDocument,
+} from './SecurityAuditLog';
+export {
+  WeatherSnapshot,
+  weatherSnapshotSchema,
+  type IWeatherSnapshot,
+  type WeatherSnapshotDocument,
+} from './WeatherSnapshot';
+export { Alert, alertSchema, type IAlert, type AlertDocument } from './Alert';
+export { Bulletin, bulletinSchema, type IBulletin, type BulletinDocument } from './Bulletin';
+export { DailyDigest, dailyDigestSchema, type IDailyDigest, type DailyDigestDocument } from './DailyDigest';
 export {
   DONG_NAI_GEO_BOUNDS,
   SYNC_STATUSES,

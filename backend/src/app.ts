@@ -33,7 +33,31 @@ import {
   type SitemapRoute,
 } from './utils/seo';
 
-const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+const LEGACY_JSON_IMAGE_ROUTE_RE =
+  /^\/api\/(?:reports(?:\/[^/]+\/attach-photo)?|volunteer\/(?:proxy-report|tasks\/[^/]+\/verify)|rescue\/missions\/[^/]+\/(?:status|complete)|admin\/reports\/[^/]+\/resolve|ai\/(?:analyze-image|verify-resolution))$/;
+
+function isTrustedCorsOrigin(origin: string, host: string | undefined): boolean {
+  const sameHost = Boolean(
+    host && (origin === `https://${host}` || origin === `http://${host}`),
+  );
+  if (sameHost) return true;
+
+  const normalized = origin.replace(/\/+$/, '').toLowerCase();
+  if (normalized === 'https://smartcitizen-dongnai.onrender.com') return true;
+  if (env.siteUrl && normalized === env.siteUrl.toLowerCase()) return true;
+
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized);
+  if (isLocal) return !env.isProd;
+
+  // Chỉ cho phép các origin khai báo tường minh (không mở wildcard *.onrender.com cho bên thứ ba)
+  return env.allowedOrigins.some((allowed) => {
+    const clean = allowed.trim().replace(/\/+$/, '').toLowerCase();
+    if (!clean || clean.includes('*')) return false;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(clean) && env.isProd) return false;
+    return clean === normalized;
+  });
+}
 
 export function createApp(
   s: Services,
@@ -45,6 +69,12 @@ export function createApp(
 
   app.use(
     helmet({
+      frameguard: { action: 'deny' },
+      noSniff: true,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      hsts: env.isProd
+        ? { maxAge: 31_536_000, includeSubDomains: true, preload: true }
+        : false,
       contentSecurityPolicy: {
         useDefaults: true,
         directives: {
@@ -100,7 +130,7 @@ export function createApp(
           'frame-src': ["'self'", 'https://*.google.com', 'https://*.firebaseapp.com'],
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
-          'frame-ancestors': ["'self'"],
+          'frame-ancestors': ["'none'"],
         },
       },
       crossOriginEmbedderPolicy: false,
@@ -110,18 +140,19 @@ export function createApp(
     cors((req, cb) => {
       const origin = req.header('Origin');
       const host = req.get('host');
-      const sameHost = Boolean(
-        origin &&
-          host &&
-          (origin === `https://${host}` || origin === `http://${host}`),
-      );
-      const isLocalDev = Boolean(origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin));
-      if (!origin || sameHost || isLocalDev || env.isOriginAllowed(origin)) {
+      if (!origin || isTrustedCorsOrigin(origin, host)) {
         cb(null, {
           origin: true,
           credentials: true,
           methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-          allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Fp', 'X-Reauth-Token', 'X-Reauth-Password'],
+          allowedHeaders: [
+            'Content-Type',
+            'Authorization',
+            'X-Device-Fp',
+            'X-PoW-Solution',
+            'X-Reauth-Token',
+            'X-Reauth-Password',
+          ],
         });
         return;
       }
@@ -130,7 +161,15 @@ export function createApp(
   );
   // Nén Brotli (`br`) & Gzip đa chuẩn, bỏ qua SSE và ảnh WebP đã nén
   app.use(smartCompressionMiddleware());
-  app.use(express.json({ limit: '4mb' }));
+  const strictJsonParser = express.json({ limit: '100kb' });
+  const legacyImageJsonParser = express.json({ limit: '2mb' });
+  app.use((req, res, next) => {
+    if (LEGACY_JSON_IMAGE_ROUTE_RE.test(req.path)) {
+      legacyImageJsonParser(req, res, next);
+      return;
+    }
+    strictJsonParser(req, res, next);
+  });
   app.use(limits.global);
   app.use(sanitizeInput);
   app.use(mongoSanitize({ replaceWith: '_' }));

@@ -5,6 +5,7 @@ import { onIntentPrefetch } from '../lib/prefetch';
 import { useSettings } from '../state/settings';
 import { lazyWithRetry } from '../utils/lazyWithRetry';
 import { BottomNav, TopNav } from './BottomNav';
+import { FloatingSosWidget } from './FloatingSosWidget';
 import { Header } from './Header';
 import { Logo } from './Logo';
 import { OfflineBanner } from './OfflineBanner';
@@ -43,12 +44,14 @@ export function CommunityLayout() {
           <nav aria-label="Liên kết thông tin" className="mt-1 flex flex-wrap items-center justify-center gap-4 text-xs font-semibold text-brand">
             <Link to="/" onMouseEnter={() => onIntentPrefetch('/')} className="hover:underline">Trang chủ</Link>
             <Link to="/map" onMouseEnter={() => onIntentPrefetch('/map')} className="hover:underline">Bản đồ sự cố</Link>
+            <Link to="/alerts" onMouseEnter={() => onIntentPrefetch('/alerts')} className="hover:underline">Cảnh báo thiên tai & giao thông</Link>
             <Link to="/report" onMouseEnter={() => onIntentPrefetch('/report')} className="hover:underline">Gửi phản ánh</Link>
             <Link to="/mine" onMouseEnter={() => onIntentPrefetch('/mine')} className="hover:underline">Tra cứu hồ sơ</Link>
             <Link to="/gioi-thieu" onMouseEnter={() => onIntentPrefetch('/gioi-thieu')} className="hover:underline">Giới thiệu & Team Victer</Link>
           </nav>
         </div>
       </footer>
+      <FloatingSosWidget />
       {assistantOpen && (
         <Suspense fallback={null}>
           <ChatWidget />

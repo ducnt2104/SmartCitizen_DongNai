@@ -116,6 +116,8 @@ export default function ReportPage() {
   const [description, setDescription] = useState('');
   const [localDup, setLocalDup] = useState<number | null>(null);
   const [listening, setListening] = useState(false);
+  const [honeypot, setHoneypot] = useState('');
+  const formLoadedAtRef = useRef(Date.now());
   const stopListen = useRef<(() => void) | null>(null);
   const mountedRef = useRef(true);
   const visionAbortRef = useRef<AbortController | null>(null);
@@ -378,6 +380,8 @@ export default function ReportPage() {
           seniorSubmitted: settings.senior || proxy,
           edge: photo.stats,
           vision,
+          formLoadedAt: formLoadedAtRef.current,
+          website: honeypot,
         },
         proxy,
       );
@@ -409,6 +413,8 @@ export default function ReportPage() {
     setOutcome(null);
     setRejectedMessage(null);
     setLocalDup(null);
+    setHoneypot('');
+    formLoadedAtRef.current = Date.now();
   };
 
   const currentRole = session?.user ? normalizeRole(session.user.role) : null;
@@ -498,6 +504,21 @@ export default function ReportPage() {
 
   return (
     <div className="space-y-4">
+      <div
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}
+      >
+        <label htmlFor="report-website-trap">Website</label>
+        <input
+          id="report-website-trap"
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={honeypot}
+          onChange={(e) => setHoneypot(e.target.value)}
+        />
+      </div>
       <div>
         <h1 className="text-2xl font-extrabold">{proxy ? t('report.proxyTitle') : t('report.title')}</h1>
         {proxy && <p className="mt-1 rounded-xl bg-brand-soft p-2 text-sm font-semibold text-brand">{t('report.proxyNote')}</p>}

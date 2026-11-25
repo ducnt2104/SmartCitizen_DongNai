@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler, extractClientMeta, setAuthCookies } from '../middleware/auth';
 import { limits } from '../middleware/rateLimit';
+import { securityMiddleware } from '../middleware/security';
 import { validateBody } from '../middleware/validate';
 import type { Services } from '../services/container';
 import { parseVnPhone } from '../services/otp';
@@ -92,6 +93,7 @@ function detectIsEmailChannel(input: {
 export function buildAuthRouter(s: Services): Router {
   const router = Router();
   const h = asyncHandler;
+  const sec = securityMiddleware(s);
 
   router.get(
     '/otp/status',
@@ -118,6 +120,8 @@ export function buildAuthRouter(s: Services): Router {
   router.post(
     '/otp/send',
     limits.otp,
+    sec.requirePow,
+    sec.botTrapCheck,
     validateBody(phoneAuthSchemas.otpSend),
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpSend>;
@@ -145,6 +149,8 @@ export function buildAuthRouter(s: Services): Router {
   router.post(
     '/otp/verify',
     limits.login,
+    sec.requirePow,
+    sec.botTrapCheck,
     validateBody(phoneAuthSchemas.otpVerify),
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpVerify>;

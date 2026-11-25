@@ -53,9 +53,11 @@ async function main(): Promise<void> {
       );
     }),
   ]);
+  services.aggregator.startScheduler();
 
   const shutdown = (signal: string): void => {
     console.log(`[server] nhận ${signal}, đang tắt an toàn...`);
+    services.aggregator.stopScheduler();
     server.close(() => {
       Promise.allSettled([services.cvEngine.stop(), bootCtrl.stop()]).finally(() => process.exit(0));
     });

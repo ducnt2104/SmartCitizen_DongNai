@@ -489,6 +489,7 @@ export interface UserProfile {
   wardCode: string | null;
   unitCode: string | null;
   defaultWardCode?: string | null;
+  followedWardCodes?: string[];
   notificationsEnabled?: boolean;
   revoked?: boolean;
   isActive?: boolean;
@@ -574,4 +575,136 @@ export interface ScopeStats {
   emergency: number;
   quarantined: number;
   slaOverdue: number;
+}
+
+export type WeatherRiskLevel = 'normal' | 'advisory' | 'warning' | 'emergency';
+
+export interface WeatherSnapshotItem {
+  id: string;
+  regionKey: string;
+  regionName: string;
+  wardCode: string;
+  lat: number;
+  lng: number;
+  temperatureC: number;
+  humidityPct: number;
+  precipitationMm: number;
+  precipitation24hMm: number;
+  precipitationProbabilityPct: number;
+  windGustsKmh: number;
+  weatherCode: number;
+  weatherLabel: string;
+  riskLevel: WeatherRiskLevel;
+  isHazard: boolean;
+  source: string;
+  observedAt: string;
+  fetchedAt: string;
+}
+
+export type AlertCategory = 'disaster' | 'traffic' | 'utility' | 'official_notice';
+export type AlertSeverity = 1 | 2 | 3;
+export type AlertSourceType =
+  | 'official_rss'
+  | 'weather_api'
+  | 'rescue_admin'
+  | 'community_cluster'
+  | 'community_user';
+export type AlertGeometryType = 'point' | 'circle' | 'polyline';
+
+export interface CivicAlertItem {
+  id: string;
+  title: string;
+  description: string;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  sourceType: AlertSourceType;
+  sourceLabel: string;
+  sourceUrl?: string | null;
+  sourceUrlHash?: string | null;
+  wardIds: string[];
+  affectedRoads: string[];
+  detourNote?: string | null;
+  geometryType: AlertGeometryType;
+  lat: number;
+  lng: number;
+  radiusM?: number | null;
+  polyline?: Array<[number, number]>;
+  status: 'active' | 'resolved';
+  isVerifiedOfficial: boolean;
+  confirmCount: number;
+  confirmedByUserIds?: string[];
+  clusterReportCount?: number | null;
+  clusterDistinctUsers?: number | null;
+  createdById?: string | null;
+  createdByName?: string | null;
+  startsAt?: string | null;
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OfficialBulletinItem {
+  id: string;
+  title: string;
+  cleanSummary: string;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  wardIds: string[];
+  affectedRoads: string[];
+  sourceName: string;
+  sourceUrl: string;
+  sourceUrlHash: string;
+  publishedAt: string;
+  fetchedAt: string;
+}
+
+export interface DailyDigestItem {
+  id: string;
+  dateKey: string;
+  bullets: string[];
+  highlightsCount: {
+    alerts: number;
+    bulletins: number;
+    openIncidents: number;
+  };
+  generatedAt: string;
+  expiresAt: string;
+  cached: boolean;
+  model?: string;
+}
+
+export type WardOverviewStatus = 'Ổn định' | 'Cần chú ý' | 'Điểm nóng';
+
+export interface WardOverviewResponse {
+  ward: Ward;
+  stats30d: {
+    totalReports: number;
+    resolvedReports: number;
+    resolvedPct: number;
+    openReports: number;
+    emergencyReports: number;
+    avgResolutionHours: number | null;
+    areaStatus: WardOverviewStatus;
+  };
+  heatmapPoints: Array<[number, number, number]>;
+  incidents: {
+    items: Report[];
+    total: number;
+    page: number;
+    pageSize: number;
+    hasMore: boolean;
+  };
+  alerts: CivicAlertItem[];
+  bulletins: OfficialBulletinItem[];
+  weather: WeatherSnapshotItem | null;
+}
+
+export interface RouteCheckResponse {
+  roadQuery: string;
+  status: 'clear' | 'caution' | 'danger';
+  maxSeverity: 0 | 1 | 2 | 3;
+  activeAlerts: CivicAlertItem[];
+  relatedIncidentsCount: number;
+  message: string;
+  checkedAt: string;
 }

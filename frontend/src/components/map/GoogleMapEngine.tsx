@@ -13,6 +13,7 @@ import {
 } from '@vis.gl/react-google-maps';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
+import type { CivicAlertItem } from '@shared/types';
 import { useI18n } from '../../i18n';
 import {
   createClusterElement,
@@ -95,6 +96,11 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   selectedPin?: { lat: number; lng: number; label?: string } | null;
   onMapClick?: (lat: number, lng: number) => void;
   routeOverlay?: RouteOverlaySpec | null;
+  alerts?: CivicAlertItem[];
+  onSelectAlert?: (a: CivicAlertItem) => void;
+  onWardClick?: (wardCode: string) => void;
+  draftPolyline?: Array<[number, number]>;
+  draftCircle?: { lat: number; lng: number; radiusM: number } | null;
 }
 
 const GOOGLE_LIBRARIES = ['places', 'geocoding', 'marker', 'routes'];
@@ -846,6 +852,68 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
               strokeWeight={1.5}
               fillColor="#0B57D0"
               fillOpacity={0.06}
+              clickable={false}
+            />
+          )}
+
+          {p.alerts?.map((al) => {
+            const color = al.severity === 3 ? '#E11D48' : al.severity === 2 ? '#EA580C' : '#D97706';
+            return (
+              <span key={al.id}>
+                {al.geometryType === 'polyline' && al.polyline && al.polyline.length >= 2 ? (
+                  <Polyline
+                    path={al.polyline.map(([lat, lng]) => ({ lat, lng }))}
+                    strokeColor={color}
+                    strokeOpacity={0.9}
+                    strokeWeight={5}
+                    onClick={() => p.onSelectAlert?.(al)}
+                  />
+                ) : (
+                  <Circle
+                    center={{ lat: al.lat, lng: al.lng }}
+                    radius={al.radiusM ?? (al.geometryType === 'point' ? 280 : 500)}
+                    strokeColor={color}
+                    strokeOpacity={0.9}
+                    strokeWeight={2}
+                    fillColor={color}
+                    fillOpacity={0.2}
+                    onClick={() => p.onSelectAlert?.(al)}
+                  />
+                )}
+                <AdvancedMarker
+                  position={{ lat: al.lat, lng: al.lng }}
+                  title={al.title}
+                  onClick={() => p.onSelectAlert?.(al)}
+                >
+                  <div
+                    className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white text-xs font-extrabold text-white shadow-md"
+                    style={{ backgroundColor: color }}
+                  >
+                    !
+                  </div>
+                </AdvancedMarker>
+              </span>
+            );
+          })}
+
+          {p.draftPolyline && p.draftPolyline.length >= 2 && (
+            <Polyline
+              path={p.draftPolyline.map(([lat, lng]) => ({ lat, lng }))}
+              strokeColor="#0B57D0"
+              strokeOpacity={0.95}
+              strokeWeight={5}
+              clickable={false}
+            />
+          )}
+          {p.draftCircle && (
+            <Circle
+              center={{ lat: p.draftCircle.lat, lng: p.draftCircle.lng }}
+              radius={p.draftCircle.radiusM}
+              strokeColor="#0B57D0"
+              strokeOpacity={0.9}
+              strokeWeight={2}
+              fillColor="#0B57D0"
+              fillOpacity={0.18}
               clickable={false}
             />
           )}

@@ -13,7 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
-import { haversineMeters, inDongNaiBBox, matchArterial } from '@shared/geo';
+import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '@shared/geo';
 import type { Category, ReportStatus, ReportSummary } from '@shared/types';
 import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { useOnline, useScopedReports } from '../../db/hooks';
@@ -32,6 +32,7 @@ import { CATEGORY_META } from '../../lib/meta';
 import { useSettings } from '../../state/settings';
 import { useToast } from '../../state/toast';
 import { ReportDetail } from '../ReportDetail';
+import { WardInspectorDrawer } from '../WardInspectorDrawer';
 import { EmptyState, SkeletonBlock } from '../ui';
 import type { CameraCommand } from './GoogleMapEngine';
 import { UnifiedMapCanvas } from './UnifiedMapCanvas';
@@ -62,6 +63,7 @@ interface InspectedSpot {
   lng: number;
   label: string;
   address: string;
+  wardCode?: string;
   wardName?: string;
   arterialName?: string;
   loading?: boolean;
@@ -131,6 +133,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
   const [bboxPoints, setBboxPoints] = useState<ReportSummary[] | null>(null);
   const [cameraCmd, setCameraCmd] = useState<CameraCommand | null>(null);
   const [inspectedSpot, setInspectedSpot] = useState<InspectedSpot | null>(null);
+  const [inspectorWardCode, setInspectorWardCode] = useState<string | null>(null);
 
   const bboxAbortRef = useRef<AbortController | null>(null);
   const inspectAbortRef = useRef<AbortController | null>(null);
@@ -266,6 +269,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     if (nextScope === 'city') {
       inspectAbortRef.current?.abort();
       setInspectedSpot(null);
+      setInspectorWardCode(null);
       pushCamera({ kind: 'fitCity' });
       setQuery('');
     } else {
@@ -273,6 +277,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       const w = WARD_BY_CODE[code];
       if (w) {
         pushCamera({ kind: 'flyTo', lat: w.centerLat, lng: w.centerLng, zoom: 14 });
+        setInspectorWardCode(w.wardCode);
       }
     }
   };
@@ -288,11 +293,14 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       inspectAbortRef.current = ctrl;
 
       const arterial = matchArterial(lat, lng, 80);
+      const fallbackW = nearestWard(lat, lng);
       setInspectedSpot({
         lat,
         lng,
         label: labelHint ?? 'Đang dò địa chỉ chi tiết…',
         address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        wardCode: fallbackW.wardCode,
+        wardName: fallbackW.name,
         arterialName: arterial?.name,
         loading: true,
       });
@@ -310,7 +318,8 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
           lng,
           label: labelHint || (firstPart && firstPart !== res.wardName ? firstPart : res.wardName ?? 'Vị trí đã chọn'),
           address: res.address,
-          wardName: res.wardName ?? undefined,
+          wardCode: res.wardCode ?? fallbackW.wardCode,
+          wardName: res.wardName ?? fallbackW.name,
           arterialName: arterial?.name,
           loading: false,
         });
@@ -329,6 +338,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     if (!resolved) return;
     if (item.kind === 'ward' && item.wardCode) {
       set({ scope: `ward:${item.wardCode}` });
+      setInspectorWardCode(item.wardCode);
       void inspectLocation(resolved.lat, resolved.lng, item.label, 14.5);
     } else {
       if (resolved.wardCode) set({ scope: 'city' });
@@ -636,6 +646,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
           onMapClick={(lat, lng) => {
             void inspectLocation(lat, lng);
           }}
+          onWardClick={(wc) => setInspectorWardCode(wc)}
           onViewportChange={onViewportChange}
           showArterials
           showFitCityButton
@@ -692,15 +703,27 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
             <p className="font-mono text-[11px] text-muted">
               {inspectedSpot.lat.toFixed(6)}, {inspectedSpot.lng.toFixed(6)}
             </p>
-            <a
-              href={googleMapsPlaceUrl(inspectedSpot.lat, inspectedSpot.lng)}
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn-soft !min-h-8 !px-3 !text-xs"
-            >
-              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-              {t('map.openGoogleMaps')}
-            </a>
+            <div className="flex flex-wrap items-center gap-2">
+              {inspectedSpot.wardCode && (
+                <button
+                  type="button"
+                  onClick={() => setInspectorWardCode(inspectedSpot.wardCode!)}
+                  className="btn btn-primary !min-h-8 !px-3 !text-xs"
+                >
+                  <MapPinned className="h-3.5 w-3.5" aria-hidden />
+                  Xem Hồ sơ {WARD_BY_CODE[inspectedSpot.wardCode]?.shortName ?? 'Xã/Phường'}
+                </button>
+              )}
+              <a
+                href={googleMapsPlaceUrl(inspectedSpot.lat, inspectedSpot.lng)}
+                target="_blank"
+                rel="noreferrer"
+                className="btn btn-soft !min-h-8 !px-3 !text-xs"
+              >
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                {t('map.openGoogleMaps')}
+              </a>
+            </div>
           </div>
         </div>
       )}
@@ -752,6 +775,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
       {/* Bottom Sheet (Mobile) / Slide-over Drawer (Desktop) khi bấm vào ghim */}
       <ReportDetail id={openId} onClose={() => setOpenId(null)} variant="drawer" />
+      <WardInspectorDrawer wardCode={inspectorWardCode} onClose={() => setInspectorWardCode(null)} />
     </div>
   );
 }

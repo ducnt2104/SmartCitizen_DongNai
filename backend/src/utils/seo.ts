@@ -11,6 +11,7 @@ export interface SitemapRoute {
 export const PUBLIC_SITEMAP_ROUTES: readonly SitemapRoute[] = [
   { path: '/', changefreq: 'daily', priority: '1.0' },
   { path: '/map', changefreq: 'hourly', priority: '0.9' },
+  { path: '/alerts', changefreq: 'hourly', priority: '0.9' },
   { path: '/report', changefreq: 'weekly', priority: '0.9' },
   { path: '/mine', changefreq: 'daily', priority: '0.8' },
   { path: '/gioi-thieu', changefreq: 'weekly', priority: '0.8' },
@@ -56,6 +57,11 @@ const PUBLIC_HTML_META: Readonly<Record<string, PublicHtmlMeta>> = {
     title: 'Bản Đồ Sự Cố Trực Tuyến 95 Phường/Xã — SmartCitizen Đồng Nai',
     description:
       'Xem bản đồ phản ánh hiện trường trực tuyến trên toàn Thành phố Đồng Nai (95 xã/phường): điểm ghim sự cố, bản đồ nhiệt và lọc theo bán kính gần bạn.',
+  },
+  '/alerts': {
+    title: 'Cảnh Báo Thiên Tai, Ngập Lụt & Giao Thông — SmartCitizen Đồng Nai',
+    description:
+      'Theo dõi lượng mưa Open-Meteo, cảnh báo thiên tai/ngập lụt, tuyến đường đang thi công và bản tin chính thống toàn tỉnh Đồng Nai 24/7.',
   },
   '/mine': {
     title: 'Tra Cứu Hồ Sơ & Phản Ánh Của Tôi — SmartCitizen Đồng Nai',

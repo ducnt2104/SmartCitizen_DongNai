@@ -84,6 +84,7 @@ export function TopNav() {
   const links = [
     { to: '/', label: t('nav.home'), end: true },
     { to: '/map', label: t('nav.map'), end: false },
+    { to: '/alerts', label: t('nav.alerts'), end: false },
     { to: '/report', label: t('nav.report'), end: false },
     { to: '/mine', label: t('nav.mine'), end: false },
   ];

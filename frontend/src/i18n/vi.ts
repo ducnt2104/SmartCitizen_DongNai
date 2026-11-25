@@ -3,6 +3,7 @@ export const vi = {
   // ── Điều hướng chung ──
   'nav.home': 'Trang chủ',
   'nav.map': 'Bản đồ',
+  'nav.alerts': 'Cảnh báo',
   'nav.report': 'Báo cáo',
   'nav.mine': 'Của tôi',
   'nav.assistant': 'Trợ lý AI',

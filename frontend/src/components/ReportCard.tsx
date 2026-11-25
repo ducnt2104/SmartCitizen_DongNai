@@ -29,6 +29,11 @@ export const ReportCard = memo(function ReportCard({ r, onOpen }: { r: ClientRep
         <span className="flex flex-wrap items-center gap-1.5">
           <StatusBadge status={r.status} />
           <PriorityBadges r={r} />
+          {r.afterPhoto && (
+            <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-500/25">
+              Có ảnh Trước–Sau
+            </span>
+          )}
         </span>
         <span className="mt-1 block break-words font-semibold leading-snug text-ink [overflow-wrap:anywhere]">{r.title}</span>
         <span className="mt-0.5 flex items-center gap-1 text-xs text-muted">

@@ -1,6 +1,7 @@
 import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useId, useState, type ComponentType, type ReactNode } from 'react';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
+import type { CivicAlertItem } from '@shared/types';
 import { useI18n } from '../../i18n';
 import {
   markGoogleMapsFailed,
@@ -57,6 +58,11 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   selectedPin?: { lat: number; lng: number; label?: string } | null;
   onMapClick?: (lat: number, lng: number) => void;
   routeOverlay?: RouteOverlaySpec | null;
+  alerts?: CivicAlertItem[];
+  onSelectAlert?: (a: CivicAlertItem) => void;
+  onWardClick?: (wardCode: string) => void;
+  draftPolyline?: Array<[number, number]>;
+  draftCircle?: { lat: number; lng: number; radiusM: number } | null;
   onLocate?: () => void;
   locating?: boolean;
   tone?: 'default' | 'ioc';
@@ -140,6 +146,11 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     selectedPin: p.selectedPin,
     onMapClick: p.onMapClick,
     routeOverlay: p.routeOverlay,
+    alerts: p.alerts,
+    onSelectAlert: p.onSelectAlert,
+    onWardClick: p.onWardClick,
+    draftPolyline: p.draftPolyline,
+    draftCircle: p.draftCircle,
   };
 
   return (

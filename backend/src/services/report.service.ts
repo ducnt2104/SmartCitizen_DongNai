@@ -22,6 +22,7 @@ import { badRequest, forbidden, HttpError, notFound, tooMany } from '../utils/er
 import { newId } from '../utils/crypto';
 import { canSee, isOwner, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { Stage2PostProcessorService } from './ai';
+import type { AlertsAndWardsService } from './alertsAndWards.service';
 import { SYSTEM_ACTOR, type AuditService } from './audit.service';
 import type { CacheService } from './cache.service';
 import type { CvEngineService } from './cvEngine.service';
@@ -101,6 +102,7 @@ export class ReportService {
     private readonly cache?: CacheService,
     private readonly media?: MediaService,
     private readonly stage2?: Stage2PostProcessorService,
+    private readonly alerts?: AlertsAndWardsService,
   ) {}
 
   async list(user: UserRecord | null, scope: string, category?: string): Promise<ClientReport[]> {
@@ -445,6 +447,9 @@ export class ReportService {
         priority: mother.priority,
         byUser: user.id,
       });
+      if (this.alerts) {
+        await this.alerts.checkAndEscalateGeoCluster(mother).catch(() => undefined);
+      }
       return { outcome: 'merged', messageCode: 'merged', report: toClientReport(mother) };
     }
 
@@ -623,6 +628,9 @@ export class ReportService {
           registerOnPass: true,
         }),
       );
+    }
+    if (!quarantined && this.alerts) {
+      postWriteTasks.push(this.alerts.checkAndEscalateGeoCluster(report));
     }
     await Promise.allSettled(postWriteTasks);
 

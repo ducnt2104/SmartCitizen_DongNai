@@ -500,6 +500,11 @@ export async function ensureDatabaseIndexes(): Promise<IndexSyncSummary[]> {
     models.AuditLogModel,
     models.ApiKey,
     models.MediaAsset,
+    models.SecurityAuditLog,
+    models.WeatherSnapshot,
+    models.Alert,
+    models.Bulletin,
+    models.DailyDigest,
   ].filter(Boolean);
 
   const summaries = await Promise.all(

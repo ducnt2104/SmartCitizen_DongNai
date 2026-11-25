@@ -4,6 +4,7 @@ import type { Role } from '../shared/types';
 import { env } from '../config/env';
 import type { UserRecord } from '../repositories/types';
 import type { Services } from '../services/container';
+import { sha256 } from '../utils/crypto';
 import { forbidden, unauthorized } from '../utils/errors';
 
 declare module 'express-serve-static-core' {
@@ -14,12 +15,24 @@ declare module 'express-serve-static-core' {
   }
 }
 
-export function extractClientMeta(req: Request): { userAgent: string; ip: string; deviceFingerprint: string } {
+export function normalizeClientIp(req: Request): string {
+  const rawIp = (req.ip || req.socket?.remoteAddress || '').trim();
+  const clean = rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
+  return clean.slice(0, 64);
+}
+
+export function extractClientMeta(req: Request): {
+  userAgent: string;
+  ip: string;
+  deviceFingerprint: string;
+  deviceHash: string;
+} {
   const fp = req.headers['x-device-fp'];
   const deviceFingerprint = typeof fp === 'string' && fp.trim() ? fp.trim().slice(0, 64) : 'web-browser';
-  const ip = (req.ip || req.socket?.remoteAddress || '').slice(0, 64);
+  const ip = normalizeClientIp(req);
   const userAgent = (req.get('user-agent') ?? '').slice(0, 180);
-  return { userAgent, ip, deviceFingerprint };
+  const deviceHash = sha256(`${userAgent}|${deviceFingerprint}`).slice(0, 24);
+  return { userAgent, ip, deviceFingerprint, deviceHash };
 }
 
 export const ACCESS_COOKIE = 'sc_access';
@@ -113,10 +126,27 @@ export function authMiddleware(s: Services) {
 
   const requireRole = (...roles: Role[]): RequestHandler[] => [
     required,
-    (req: Request, _res: Response, next: NextFunction) => {
-      if (!req.user || !roles.includes(normalizeRole(req.user.role))) return next(forbidden());
+    asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+      if (!req.user || !req.sessionId) return next(forbidden());
+      const [freshUser, freshSession] = await Promise.all([
+        s.repos.users.get(req.user.id),
+        s.repos.sessions.get(req.sessionId),
+      ]);
+      if (!freshUser || freshUser.revoked) {
+        return next(unauthorized('Tài khoản không tồn tại hoặc đã bị thu hồi quyền truy cập.', 'SESSION_REVOKED'));
+      }
+      if (
+        !freshSession ||
+        freshSession.isRevoked ||
+        freshSession.revokedAt !== null ||
+        freshSession.expiresAt <= Date.now()
+      ) {
+        return next(unauthorized('Phiên làm việc đã hết hạn hoặc bị thu hồi.', 'SESSION_REVOKED'));
+      }
+      req.user = freshUser;
+      if (!roles.includes(normalizeRole(freshUser.role))) return next(forbidden());
       next();
-    },
+    }),
   ];
 
   const requireReauth: RequestHandler = asyncHandler(async (req, _res, next) => {

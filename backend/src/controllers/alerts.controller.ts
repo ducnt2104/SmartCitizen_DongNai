@@ -1,0 +1,158 @@
+import type { Request, Response } from 'express';
+import type { z } from 'zod';
+import { env } from '../config/env';
+import { extractClientMeta } from '../middleware/auth';
+import type { Services } from '../services/container';
+import type { AlertCategory, AlertSeverity } from '../shared/types';
+import { safeEqualHex, sha256 } from '../utils/crypto';
+import { badRequest, unauthorized } from '../utils/errors';
+import type { schemas } from '../validation/schemas';
+
+const VALID_ALERT_CATS = new Set<AlertCategory>(['disaster', 'traffic', 'utility', 'official_notice']);
+
+export function alertsController(s: Services) {
+  const secAudit = (
+    req: Request,
+    action: string,
+    targetType: string,
+    targetId: string,
+    beforeState: unknown,
+    afterState: unknown,
+  ) => {
+    const meta = extractClientMeta(req);
+    void s.securityAudit
+      .log({
+        actorId: req.user?.id ?? 'unknown',
+        actorName: req.user?.name ?? 'Unknown',
+        actorRole: req.user?.role ?? 'unknown',
+        action,
+        targetType,
+        targetId,
+        ip: meta.ip,
+        deviceHash: meta.deviceHash,
+        userAgent: meta.userAgent,
+        beforeState,
+        afterState,
+      })
+      .catch(() => undefined);
+  };
+
+  return {
+    wardOverview: async (req: Request, res: Response) => {
+      const wardId = String(req.params.wardId || '').trim();
+      const rawFilter = typeof req.query.status === 'string' ? req.query.status : 'all';
+      const statusFilter = rawFilter === 'open' || rawFilter === 'resolved' ? rawFilter : 'all';
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const pageSize = Math.min(Math.max(1, Number(req.query.pageSize) || 20), 60);
+      res.json(await s.alerts.getWardOverview(wardId, { statusFilter, page, pageSize }));
+    },
+
+    listWeather: async (_req: Request, res: Response) => {
+      const items = await s.alerts.getLatestWeatherSnapshots();
+      res.json({
+        items,
+        lastSyncAt: s.aggregator.status.lastSyncSummary?.finishedAt ?? items[0]?.fetchedAt ?? null,
+        source: 'Open-Meteo API (Miễn phí)',
+      });
+    },
+
+    listBulletins: async (req: Request, res: Response) => {
+      const wardId = typeof req.query.wardId === 'string' && req.query.wardId ? req.query.wardId : undefined;
+      const rawCat = typeof req.query.category === 'string' ? (req.query.category as AlertCategory) : undefined;
+      const category = rawCat && VALID_ALERT_CATS.has(rawCat) ? rawCat : undefined;
+      const limit = Math.min(Math.max(1, Number(req.query.limit) || 30), 100);
+      res.json({ items: await s.alerts.listBulletins({ wardId, category, limit }) });
+    },
+
+    listAlerts: async (req: Request, res: Response) => {
+      const wardId = typeof req.query.wardId === 'string' && req.query.wardId ? req.query.wardId : undefined;
+      const rawCat = typeof req.query.category === 'string' ? (req.query.category as AlertCategory) : undefined;
+      const category = rawCat && VALID_ALERT_CATS.has(rawCat) ? rawCat : undefined;
+      const rawSev = Number(req.query.severity);
+      const severity = [1, 2, 3].includes(rawSev) ? (rawSev as AlertSeverity) : undefined;
+      const rawStatus = typeof req.query.status === 'string' ? req.query.status : 'active';
+      const status = rawStatus === 'resolved' || rawStatus === 'all' ? rawStatus : 'active';
+      const limit = Math.min(Math.max(1, Number(req.query.limit) || 80), 200);
+      res.json({ items: await s.alerts.listAlerts({ wardId, category, severity, status, limit }) });
+    },
+
+    routeCheck: async (req: Request, res: Response) => {
+      const road = typeof req.query.road === 'string' ? req.query.road : '';
+      if (!road.trim()) {
+        throw badRequest('Thiếu tham số tên tuyến đường (?road=...).');
+      }
+      res.json(await s.alerts.checkRouteSafety(road));
+    },
+
+    dailyDigest: async (_req: Request, res: Response) => {
+      res.json(await s.aggregator.getDailyDigest());
+    },
+
+    createCommunityAlert: async (req: Request, res: Response) => {
+      const b = req.body as z.infer<typeof schemas.createCommunityAlert>;
+      const created = await s.alerts.createCommunityAlert(req.user!, b);
+      res.status(201).json(created);
+    },
+
+    confirmAlert: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const updated = await s.alerts.confirmAlert(req.user!.id, id);
+      res.json(updated);
+    },
+
+    adminCreateAlert: async (req: Request, res: Response) => {
+      const b = req.body as z.infer<typeof schemas.createAlert>;
+      const created = await s.alerts.createAdminOrRescueAlert(req.user!, b);
+      secAudit(req, 'admin.alert_create', 'alert', created.id, null, {
+        title: created.title,
+        category: created.category,
+        severity: created.severity,
+        wardIds: created.wardIds,
+        geometryType: created.geometryType,
+      });
+      res.status(201).json(created);
+    },
+
+    adminUpdateAlert: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const b = req.body as z.infer<typeof schemas.updateAlert>;
+      const { before, after } = await s.alerts.updateAlert(id, b);
+      secAudit(
+        req,
+        'admin.alert_update',
+        'alert',
+        id,
+        { status: before.status, severity: before.severity, title: before.title },
+        { status: after.status, severity: after.severity, title: after.title },
+      );
+      res.json(after);
+    },
+
+    adminDeleteAlert: async (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const before = await s.alerts.deleteAlert(id);
+      secAudit(req, 'admin.alert_delete', 'alert', id, { title: before.title, status: before.status }, { deleted: true });
+      res.json({ ok: true, id });
+    },
+
+    adminTriggerSync: async (req: Request, res: Response) => {
+      const out = await s.aggregator.syncAll();
+      secAudit(req, 'admin.aggregator_sync', 'aggregator', 'manual', null, out);
+      res.json(out);
+    },
+
+    internalTriggerSync: async (req: Request, res: Response) => {
+      const rawSecret = typeof req.headers['x-cron-secret'] === 'string' ? req.headers['x-cron-secret'].trim() : '';
+      if (!rawSecret || !safeEqualHex(sha256(rawSecret), sha256(env.cronSecret))) {
+        throw unauthorized('Thiếu hoặc sai X-Cron-Secret cho tác vụ nội bộ.', 'invalid_cron_secret');
+      }
+      res.json(await s.aggregator.syncAll());
+    },
+
+    updateFollowedWards: async (req: Request, res: Response) => {
+      const b = req.body as z.infer<typeof schemas.updateFollowedWards>;
+      const { user } = await s.auth.updateProfile(req.user!.id, { followedWardCodes: b.wardCodes }, req.sessionId);
+      res.json({ followedWardCodes: user.followedWardCodes ?? [] });
+    },
+  };
+}

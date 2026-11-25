@@ -12,14 +12,18 @@ import {
   toSeverityLabel,
 } from '../shared/constants';
 import { hammingDistance } from '../shared/dhash';
-import { WARD_BY_CODE } from '../shared/dongNaiWards';
+import { WARD_BY_CODE, DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { haversineMeters } from '../shared/geo';
 import {
   CATEGORIES,
   type AiMode,
+  type AlertCategory,
+  type AlertSeverity,
   type Category,
+  type CivicAlertItem,
   type Department,
   type ForensicSignals,
+  type OfficialBulletinItem,
   type SeverityLabel,
   type TacticalBriefing,
   type VisionResult,
@@ -222,6 +226,58 @@ const BRIEFING_SCHEMA: Record<string, unknown> = {
   },
   required: ['riskSummary', 'equipmentAndCrew', 'safetyWarning'],
 };
+
+const BulletinClassificationZ = z.object({
+  isRelevant: z.boolean(),
+  category: z.enum(['disaster', 'traffic', 'utility', 'official_notice']),
+  severity: z.coerce.number().int().min(1).max(3),
+  wardIds: z.array(z.string().max(24)).max(25).default(['ALL_DONG_NAI']),
+  affectedRoads: z.array(z.string().max(120)).max(10).default([]),
+  cleanSummary: z.string().min(4).max(400),
+});
+
+const BULLETIN_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    isRelevant: { type: 'BOOLEAN' },
+    category: { type: 'STRING', enum: ['disaster', 'traffic', 'utility', 'official_notice'] },
+    severity: { type: 'INTEGER' },
+    wardIds: { type: 'ARRAY', items: { type: 'STRING' } },
+    affectedRoads: { type: 'ARRAY', items: { type: 'STRING' } },
+    cleanSummary: { type: 'STRING' },
+  },
+  required: ['isRelevant', 'category', 'severity', 'wardIds', 'affectedRoads', 'cleanSummary'],
+};
+
+const DailyDigestZ = z.object({
+  bullets: z.array(z.string().min(8).max(260)).min(1).max(4),
+});
+
+const DAILY_DIGEST_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    bullets: { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['bullets'],
+};
+
+const BULLETIN_SYSTEM = `Bạn là Biên tập viên Phân tích Dữ liệu Đô thị SmartCitizen Tỉnh Đồng Nai.
+Nhiệm vụ: Đánh giá bài viết từ nguồn chính thống/báo chí và trả về DUY NHẤT JSON:
+- isRelevant: true CHỈ KHI bài viết liên quan trực tiếp tới Tỉnh Đồng Nai (hoặc khu vực Đông Nam Bộ có tác động trực tiếp đến Đồng Nai như lưu lượng xả lũ hồ Trị An, cao tốc TP.HCM - Long Thành - Dầu Giây, Biên Hòa, Long Khánh, Long Thành, Nhơn Trạch, Trảng Bom, Định Quán, Tân Phú, Xuân Lộc, Bình Phước cũ hợp nhất...) VỀ CÁC CHỦ ĐỀ: thiên tai, mưa lớn, ngập lụt, sạt lở, thủy điện xả tràn, cây đổ, tai nạn giao thông nghiêm trọng, cấm đường / thi công cầu đường, kẹt xe kéo dài, lịch/sự cố cúp điện, cúp nước, hoặc thông báo khẩn của UBND/CSGT/Sở ban ngành. Tin giải trí, thể thao, chứng khoán, quốc tế không liên quan -> isRelevant=false.
+- category: 'disaster' | 'traffic' | 'utility' | 'official_notice'
+- severity: 1 (Chú ý), 2 (Cảnh báo), 3 (Khẩn cấp)
+- wardIds: mảng mã wardCode dạng 'DN-...' khớp 95 xã/phường Đồng Nai nếu nhận diện được, hoặc ["ALL_DONG_NAI"] nếu phạm vi toàn tỉnh / nhiều khu vực.
+- affectedRoads: tên các tuyến đường/cầu/quốc lộ bị ảnh hưởng (nếu có).
+- cleanSummary: tóm tắt khách quan, trung thực tối đa 2 câu tiếng Việt, không phóng đại hay suy diễn ngoài nội dung cung cấp.`;
+
+export interface OfficialBulletinClassification {
+  isRelevant: boolean;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  wardIds: string[];
+  affectedRoads: string[];
+  cleanSummary: string;
+}
 
 const VERIFY_SYSTEM = `Bạn là Kiểm toán viên Nghiệm thu AI của SmartCitizen Đồng Nai. Nhận ảnh TRƯỚC xử lý và ảnh SAU xử lý.
 Thực hiện đối chiếu 4 tiêu chí nghiêm ngặt và trả JSON:
@@ -1874,5 +1930,257 @@ export class GeminiService {
     for (let i = 0; i < ans.length; i += 64) {
       yield { delta: ans.slice(i, i + 64), mode: 'fallback' };
     }
+  }
+
+  private normalizeMatchedWardIds(candidates: string[], textForInference: string): string[] {
+    const matched = new Set<string>();
+    for (const raw of candidates) {
+      const code = String(raw).trim().toUpperCase();
+      if (code === 'ALL_DONG_NAI') continue;
+      if (WARD_BY_CODE[code]) matched.add(code);
+    }
+    const lower = textForInference.toLowerCase();
+    for (const ward of DONG_NAI_WARDS) {
+      if (
+        lower.includes(ward.shortName.toLowerCase()) ||
+        lower.includes(ward.name.toLowerCase()) ||
+        ward.legacyAliases.some((a) => a.length >= 4 && lower.includes(a.toLowerCase()))
+      ) {
+        matched.add(ward.wardCode);
+        if (matched.size >= 8) break;
+      }
+    }
+    return matched.size > 0 ? Array.from(matched) : ['ALL_DONG_NAI'];
+  }
+
+  private extractAffectedRoadsFromText(text: string): string[] {
+    const roadPatterns: Array<[RegExp, string]> = [
+      [/quốc lộ 1a|ql\s*1a|ql1\b/i, 'Quốc lộ 1A'],
+      [/quốc lộ 51|ql\s*51|ql51/i, 'Quốc lộ 51'],
+      [/quốc lộ 20|ql\s*20|ql20/i, 'Quốc lộ 20'],
+      [/quốc lộ 56|ql\s*56|ql56/i, 'Quốc lộ 56'],
+      [/quốc lộ 13|ql\s*13|ql13/i, 'Quốc lộ 13'],
+      [/quốc lộ 14|ql\s*14|ql14/i, 'Quốc lộ 14'],
+      [/cao tốc\s+tp\.?\s*hcm\s*[-–]\s*long thành/i, 'Cao tốc TP.HCM - Long Thành - Dầu Giây'],
+      [/cao tốc\s+biên hòa\s*[-–]\s*vũng tàu/i, 'Cao tốc Biên Hòa - Vũng Tàu'],
+      [/vành đai 3/i, 'Vành đai 3'],
+      [/đồng khởi/i, 'Đường Đồng Khởi'],
+      [/võ nguyên giáp/i, 'Đường Võ Nguyên Giáp'],
+      [/phạm văn thuận/i, 'Đường Phạm Văn Thuận'],
+      [/bùi văn hòa/i, 'Đường Bùi Văn Hòa'],
+      [/nguyễn ái quốc/i, 'Đường Nguyễn Ái Quốc'],
+      [/đt\s*768|tỉnh lộ 768/i, 'ĐT 768'],
+      [/đt\s*769|tỉnh lộ 769/i, 'ĐT 769'],
+    ];
+    const found: string[] = [];
+    for (const [re, label] of roadPatterns) {
+      if (re.test(text) && !found.includes(label)) found.push(label);
+    }
+    return found.slice(0, 6);
+  }
+
+  private deterministicBulletinClassify(input: {
+    title: string;
+    summary: string;
+    sourceName: string;
+  }): OfficialBulletinClassification {
+    const combined = `${input.title} ${input.summary}`.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    const lower = combined.toLowerCase();
+    const mentionsDongNai =
+      /(đồng nai|biên hòa|trấn biên|long thành|nhơn trạch|trảng bom|long khánh|định quán|tân phú|tà lài|trị an|vĩnh cửu|xuân lộc|cẩm mỹ|thống nhất|bình phước|đồng xoài|dầu giây|cầu hóa an|cầu đồng nai|cầu an hảo|ngã tư vũng tàu|tam hiệp|hố nai|bùi văn hòa|đồng khởi)/i.test(
+        combined,
+      );
+    const isDisaster = /(mưa lớn|ngập lụt|ngập úng|ngập sâu|triều cường|xả lũ|xả tràn|thủy điện trị an|sạt lở|lũ quét|bão|áp thấp|gió giật|cảnh báo thiên tai|cây ngã|cây đổ)/i.test(lower);
+    const isTraffic = /(cấm đường|phân luồng|thi công|tai nạn giao thông|kẹt xe|ùn tắc|sửa chữa cầu|hầm chui|đứt cáp|quốc lộ 1a|quốc lộ 51|quốc lộ 20|cao tốc)/i.test(lower);
+    const isUtility = /(cúp điện|ngừng cung cấp điện|mất điện|cắt điện|cúp nước|ngừng cấp nước|vỡ ống nước|sự cố lưới điện)/i.test(lower);
+    const isOfficialNotice = /(thông báo khẩn|ubnd tỉnh đồng nai|công an tỉnh|cảnh sát giao thông|sở giao thông|ban chỉ huy phòng chống thiên tai)/i.test(lower);
+
+    const isRelevant = mentionsDongNai && (isDisaster || isTraffic || isUtility || isOfficialNotice);
+    const category: AlertCategory = isDisaster
+      ? 'disaster'
+      : isTraffic
+        ? 'traffic'
+        : isUtility
+          ? 'utility'
+          : 'official_notice';
+    const severity: AlertSeverity = /(khẩn cấp|xả tràn|lũ quét|sạt lở|tử vong|tai nạn nghiêm trọng|ngập sâu|cấm hoàn toàn)/i.test(lower)
+      ? 3
+      : isDisaster || isTraffic || isUtility
+        ? 2
+        : 1;
+    const wardIds = this.normalizeMatchedWardIds([], combined);
+    const affectedRoads = this.extractAffectedRoadsFromText(combined);
+    const cleanText = sanitizeUserText(combined, 240);
+    return {
+      isRelevant,
+      category,
+      severity,
+      wardIds,
+      affectedRoads,
+      cleanSummary: cleanText.length > 0 ? cleanText : sanitizeUserText(input.title, 200),
+    };
+  }
+
+  async classifyOfficialBulletin(input: {
+    title: string;
+    summary: string;
+    sourceName: string;
+    sourceUrl: string;
+  }): Promise<OfficialBulletinClassification> {
+    const cleanTitle = sanitizeUserText(input.title, 200);
+    const cleanBody = sanitizeUserText(input.summary.replace(/<[^>]*>/g, ' '), 800);
+    const userPrompt = `Nguồn: ${input.sourceName}\nTiêu đề: ${cleanTitle}\nNội dung tóm tắt: ${cleanBody}\nLink: ${input.sourceUrl}`;
+
+    if (await this.cloudAllowed()) {
+      try {
+        const parsed = await this.keyPool.executeWithRotation(
+          async (apiKey, meta) => {
+            if (meta.provider === 'openrouter' || meta.provider === 'groq') {
+              const raw = await this.callOpenAiCompatible({
+                apiKey,
+                provider: meta.provider,
+                systemInstruction: BULLETIN_SYSTEM,
+                userContent: userPrompt,
+                jsonMode: true,
+                temperature: 0.1,
+                timeoutMs: 10_000,
+                label: `${meta.provider} BulletinClassify`,
+              });
+              return safeParseStructuredJson(raw, BulletinClassificationZ);
+            }
+            const { text } = await this.generateGeminiWithModelChain(
+              apiKey,
+              meta.geminiEndpoint,
+              (modelId) => ({
+                model: modelId,
+                contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+                config: {
+                  systemInstruction: BULLETIN_SYSTEM,
+                  temperature: 0.1,
+                  responseMimeType: 'application/json',
+                  responseSchema: BULLETIN_SCHEMA as never,
+                },
+              }),
+              10_000,
+              'Gemini BulletinClassify',
+            );
+            return safeParseStructuredJson(text, BulletinClassificationZ);
+          },
+          { operationName: 'Gemini BulletinClassify' },
+        );
+        this.ok();
+        return {
+          isRelevant: parsed.isRelevant,
+          category: parsed.category,
+          severity: Math.min(3, Math.max(1, parsed.severity)) as AlertSeverity,
+          wardIds: this.normalizeMatchedWardIds(parsed.wardIds ?? [], `${cleanTitle} ${cleanBody}`),
+          affectedRoads:
+            (parsed.affectedRoads ?? []).length > 0
+              ? (parsed.affectedRoads ?? []).slice(0, 8)
+              : this.extractAffectedRoadsFromText(`${cleanTitle} ${cleanBody}`),
+          cleanSummary: sanitizeUserText(parsed.cleanSummary, 320),
+        };
+      } catch (err) {
+        this.recordPoolExhausted(err);
+      }
+    }
+
+    return this.deterministicBulletinClassify({
+      title: cleanTitle,
+      summary: cleanBody,
+      sourceName: input.sourceName,
+    });
+  }
+
+  async generateDailyDigest(input: {
+    dateKey: string;
+    activeAlerts: CivicAlertItem[];
+    bulletins: OfficialBulletinItem[];
+    openIncidentsCount: number;
+    hotWardNames: string[];
+  }): Promise<{ bullets: string[]; model: string }> {
+    const fallbackBullets = (): string[] => {
+      const topAlerts = input.activeAlerts.slice(0, 2).map((a) => a.title);
+      const b1 =
+        input.activeAlerts.length > 0
+          ? `Toàn tỉnh Đồng Nai hiện có ${input.activeAlerts.length} cảnh báo đang hiệu lực${topAlerts.length ? `: ${topAlerts.join('; ')}` : ''}.`
+          : 'Hiện chưa ghi nhận cảnh báo thiên tai hay sự cố giao thông khẩn cấp đang hiệu lực trên địa bàn Đồng Nai.';
+      const b2 =
+        input.bulletins.length > 0
+          ? `Có ${input.bulletins.length} thông báo từ nguồn chính thống/báo chí gần nhất: ${input.bulletins[0].title}.`
+          : 'Chưa có bản tin cảnh báo chính thống mới được cập nhật trong 24 giờ gần nhất.';
+      const b3 =
+        input.hotWardNames.length > 0
+          ? `Hệ thống ghi nhận ${input.openIncidentsCount} phản ánh hiện trường đang xử lý; tập trung chú ý tại ${input.hotWardNames.slice(0, 3).join(', ')}.`
+          : `Hệ thống ghi nhận ${input.openIncidentsCount} phản ánh hiện trường đang được lực lượng chức năng tiếp nhận xử lý.`;
+      return [b1, b2, b3];
+    };
+
+    const alertLines = input.activeAlerts
+      .slice(0, 8)
+      .map((a) => `- [Mức ${a.severity} | ${a.category} | ${a.sourceLabel}] ${a.title}`)
+      .join('\n');
+    const bulletinLines = input.bulletins
+      .slice(0, 6)
+      .map((b) => `- [${b.sourceName}] ${b.title}: ${b.cleanSummary}`)
+      .join('\n');
+
+    if ((await this.cloudAllowed()) && (input.activeAlerts.length > 0 || input.bulletins.length > 0 || input.openIncidentsCount > 0)) {
+      const prompt = [
+        `Ngày: ${input.dateKey}`,
+        `Số phản ánh đang xử lý: ${input.openIncidentsCount}`,
+        `Khu vực nhiều sự cố: ${input.hotWardNames.join(', ') || 'Không có'}`,
+        `Cảnh báo đang hiệu lực (${input.activeAlerts.length}):\n${alertLines || '(Không có)'}`,
+        `Tin chính thống (${input.bulletins.length}):\n${bulletinLines || '(Không có)'}`,
+        'Hãy tóm tắt thành ĐÚNG 3 gạch đầu dòng tiếng Việt súc tích, chỉ dựa trên số liệu thực tế ở trên, không bịa thêm.',
+      ].join('\n\n');
+
+      try {
+        const parsed = await this.keyPool.executeWithRotation(
+          async (apiKey, meta) => {
+            if (meta.provider === 'openrouter' || meta.provider === 'groq') {
+              const raw = await this.callOpenAiCompatible({
+                apiKey,
+                provider: meta.provider,
+                systemInstruction: 'Chỉ tổng hợp đúng số liệu và sự kiện được cung cấp bằng tiếng Việt thành JSON { "bullets": [...] } gồm tối đa 3 câu ngắn gọn.',
+                userContent: prompt,
+                jsonMode: true,
+                temperature: 0.15,
+                timeoutMs: 12_000,
+                label: `${meta.provider} DailyDigest`,
+              });
+              return safeParseStructuredJson(raw, DailyDigestZ);
+            }
+            const { text } = await this.generateGeminiWithModelChain(
+              apiKey,
+              meta.geminiEndpoint,
+              (modelId) => ({
+                model: modelId,
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                config: {
+                  systemInstruction: 'Chỉ tổng hợp đúng số liệu và sự kiện được cung cấp bằng tiếng Việt thành JSON gồm 3 câu súc tích.',
+                  temperature: 0.15,
+                  responseMimeType: 'application/json',
+                  responseSchema: DAILY_DIGEST_SCHEMA as never,
+                },
+              }),
+              12_000,
+              'Gemini DailyDigest',
+            );
+            return safeParseStructuredJson(text, DailyDigestZ);
+          },
+          { operationName: 'Gemini DailyDigest' },
+        );
+        this.ok();
+        return {
+          bullets: parsed.bullets.slice(0, 3).map((b) => sanitizeUserText(b, 240)),
+          model: 'gemini',
+        };
+      } catch (err) {
+        this.recordPoolExhausted(err);
+      }
+    }
+
+    return { bullets: fallbackBullets(), model: 'deterministic' };
   }
 }

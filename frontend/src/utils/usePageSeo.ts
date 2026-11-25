@@ -36,6 +36,13 @@ const PUBLIC_SEO_VI: Record<string, RouteSeoEntry> = {
     robots: INDEX_ROBOTS,
     canonicalPath: '/map',
   },
+  '/alerts': {
+    title: 'Cảnh Báo Thiên Tai, Ngập Lụt & Giao Thông — SmartCitizen Đồng Nai',
+    description:
+      'Theo dõi lượng mưa thực tế Open-Meteo, cảnh báo thiên tai/ngập lụt, tuyến đường thi công và bản tin chính thống toàn tỉnh Đồng Nai 24/7.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/alerts',
+  },
   '/mine': {
     title: 'Tra Cứu Hồ Sơ & Phản Ánh Của Tôi — SmartCitizen Đồng Nai',
     description:
@@ -73,6 +80,13 @@ const PUBLIC_SEO_EN: Record<string, RouteSeoEntry> = {
       'Explore the live civic incident map of Dong Nai with clustered pins, heatmaps, and radius filtering across 95 wards and communes.',
     robots: INDEX_ROBOTS,
     canonicalPath: '/map',
+  },
+  '/alerts': {
+    title: 'Disaster, Flood & Traffic Alerts — SmartCitizen Dong Nai',
+    description:
+      'Live Open-Meteo rainfall monitoring, disaster/flood warnings, road construction zones, and verified official bulletins across Dong Nai.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/alerts',
   },
   '/mine': {
     title: 'Track Reports & Case Lookup — SmartCitizen Dong Nai',

@@ -7,6 +7,7 @@ const prefetchedRoutes = new Set<string>();
 const prefetchedApis = new Set<string>();
 
 const ROUTE_PRELOADERS: Record<string, () => Promise<unknown>> = {
+  '/alerts': () => import('../pages/AlertsPage'),
   '/report': () => import('../pages/Report'),
   '/map': () => import('../pages/MapPage'),
   '/mine': () => import('../pages/MinePage'),

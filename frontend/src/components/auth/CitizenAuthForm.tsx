@@ -99,6 +99,8 @@ export function CitizenAuthForm({
   const [err, setErr] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const [otpStatus, setOtpStatus] = useState<OtpStatusResponse | null>(null);
+  const [honeypot, setHoneypot] = useState('');
+  const formLoadedAtRef = useRef(Date.now());
 
   const firebaseConfirmationRef = useRef<ConfirmationResult | null>(null);
 
@@ -173,7 +175,13 @@ export function CitizenAuthForm({
         // Kênh 1: Firebase Phone Auth gửi mã SMS từ Google (khi đăng nhập bằng SĐT)
         if (shouldUseFirebaseClientFlow && purpose === 'login') {
           const serverAck = await api<OtpSendResponse>('/api/auth/otp/send', {
-            body: { channel: 'phone', phone: phoneCheck.e164, purpose },
+            body: {
+              channel: 'phone',
+              phone: phoneCheck.e164,
+              purpose,
+              formLoadedAt: formLoadedAtRef.current,
+              ...(honeypot ? { website: honeypot } : {}),
+            },
           });
           const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
           firebaseConfirmationRef.current = confirmation;
@@ -187,7 +195,13 @@ export function CitizenAuthForm({
 
         // Kênh 2 & 3: SpeedSMS / eSMS / Twilio / Vonage hoặc Webhook SMS Gateway (TextBee)
         const r = await api<OtpSendResponse>('/api/auth/otp/send', {
-          body: { channel: 'phone', phone: phoneCheck.e164, purpose },
+          body: {
+            channel: 'phone',
+            phone: phoneCheck.e164,
+            purpose,
+            formLoadedAt: formLoadedAtRef.current,
+            ...(honeypot ? { website: honeypot } : {}),
+          },
         });
 
         if (r.clientSideFirebase && purpose === 'login') {
@@ -211,7 +225,14 @@ export function CitizenAuthForm({
       // Kênh Email
       const cleanEmail = emailInput.trim().toLowerCase();
       const r = await api<OtpSendResponse>('/api/auth/otp/send', {
-        body: { channel: 'email', email: cleanEmail, identifier: cleanEmail, purpose },
+        body: {
+          channel: 'email',
+          email: cleanEmail,
+          identifier: cleanEmail,
+          purpose,
+          formLoadedAt: formLoadedAtRef.current,
+          ...(honeypot ? { website: honeypot } : {}),
+        },
       });
       setActiveProvider(r.provider);
       setTargetMasked(r.targetMasked);
@@ -257,6 +278,8 @@ export function CitizenAuthForm({
               phone: phoneCheck.e164 ?? phoneInput.trim(),
               identifier: phoneCheck.e164 ?? phoneInput.trim(),
               code: otpCode,
+              formLoadedAt: formLoadedAtRef.current,
+              ...(honeypot ? { website: honeypot } : {}),
               ...profileExtras,
             }
           : {
@@ -264,6 +287,8 @@ export function CitizenAuthForm({
               email: emailInput.trim().toLowerCase(),
               identifier: emailInput.trim().toLowerCase(),
               code: otpCode,
+              formLoadedAt: formLoadedAtRef.current,
+              ...(honeypot ? { website: honeypot } : {}),
               ...profileExtras,
             };
 
@@ -381,6 +406,22 @@ export function CitizenAuthForm({
 
   return (
     <div className="space-y-4">
+      {/* Honeypot bẫy bot tự động */}
+      <div
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', overflow: 'hidden' }}
+      >
+        <label htmlFor="auth-website-trap">Website</label>
+        <input
+          id="auth-website-trap"
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={honeypot}
+          onChange={(e) => setHoneypot(e.target.value)}
+        />
+      </div>
       {/* Vùng chứa ẩn cho Firebase Invisible RecaptchaVerifier */}
       <div id={recaptchaContainerId} className="sr-only" aria-hidden="true" />
 

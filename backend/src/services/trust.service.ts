@@ -28,6 +28,7 @@ export function toProfile(u: UserRecord): UserProfile {
     wardCode: u.wardCode,
     unitCode: u.unitCode,
     defaultWardCode: u.defaultWardCode ?? u.wardCode ?? null,
+    followedWardCodes: Array.isArray(u.followedWardCodes) ? u.followedWardCodes : [],
     notificationsEnabled: u.notificationsEnabled ?? true,
     revoked,
     isActive: !revoked,
@@ -60,6 +61,7 @@ export class TrustService {
     | 'points'
     | 'notifications'
     | 'defaultWardCode'
+    | 'followedWardCodes'
     | 'notificationsEnabled'
     | 'revoked'
     | 'tokenVersion'
@@ -74,6 +76,7 @@ export class TrustService {
       points: 0,
       notifications: [],
       defaultWardCode: null,
+      followedWardCodes: [],
       notificationsEnabled: true,
       revoked: false,
       tokenVersion: 0,
