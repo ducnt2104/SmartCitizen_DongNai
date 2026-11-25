@@ -2,15 +2,20 @@ import type { Report, Role } from '../shared/types';
 import type { UserRecord } from '../repositories/types';
 import { badRequest, forbidden } from '../utils/errors';
 
-export const STAFF_ROLES: readonly Role[] = ['ward_officer', 'city_admin'];
+export const STAFF_ROLES: readonly Role[] = ['ward_officer', 'city_admin', 'super_admin'];
+export const ADMIN_ROLES: readonly Role[] = ['city_admin', 'super_admin'];
 
 export function isStaff(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
   return !!u && STAFF_ROLES.includes(u.role);
 }
 
-/** Cán bộ phường chỉ thao tác trong wardCode của mình; cấp thành phố toàn quyền. */
+export function isAdminRole(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
+  return !!u && ADMIN_ROLES.includes(u.role);
+}
+
+/** Cán bộ phường chỉ thao tác trong wardCode của mình; cấp thành phố & Super Admin toàn quyền. */
 export function inScope(u: Pick<UserRecord, 'role' | 'wardCode'>, wardCode: string): boolean {
-  if (u.role === 'city_admin') return true;
+  if (u.role === 'super_admin' || u.role === 'city_admin') return true;
   if (u.role === 'ward_officer') return u.wardCode === wardCode;
   return false;
 }
@@ -23,7 +28,6 @@ export function isOwner(u: Pick<UserRecord, 'id'>, r: Pick<Report, 'reporterId' 
   return r.reporterId === u.id || r.contributors.some((c) => c.userId === u.id);
 }
 
-/** Ai được xem hồ sơ: công khai trừ hồ sơ cách ly/từ chối (chỉ chủ đơn, cán bộ trong phạm vi, tình nguyện viên làm nhiệm vụ). */
 export function canSee(u: UserRecord | null, r: Report): boolean {
   if (r.status !== 'quarantined' && r.status !== 'rejected') return true;
   if (!u) return false;

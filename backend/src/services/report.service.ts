@@ -1,5 +1,5 @@
 import {
-  CLUSTER_RADIUS_M, DEPARTMENT_BY_CATEGORY, DUPLICATE_WINDOW_MS, GPS_WARN_M,
+  CLUSTER_RADIUS_M, DEPARTMENT_BY_CATEGORY, DUPLICATE_WINDOW_MS, GPS_WARN_M, normalizeCategoryInput,
 } from '../shared/constants';
 import { hammingDistance } from '../shared/dhash';
 import { WARD_BY_CODE } from '../shared/dongNaiWards';
@@ -8,14 +8,14 @@ import { computeStats, toClientReport, toReportSummary } from '../shared/report'
 import type {
   Category, ClientReport, Department, DispatchOrder, PaginatedReports, Photo, Report, ReportStatus, ReportSummary, ScopeStats, TimelineEvent,
 } from '../shared/types';
-import type { BoundingBoxQuery } from '../repositories/types';
+import type { BoundingBoxQuery, Repositories, UserRecord } from '../repositories/types';
 import { env } from '../config/env';
-import type { Repositories, UserRecord } from '../repositories/types';
 import type { CreateReportInput } from '../validation/schemas';
 import { badRequest, forbidden, notFound, tooMany } from '../utils/errors';
 import { newId } from '../utils/crypto';
 import { canSee, isOwner, parsePhotoDataUrl, type PhotoInput } from './access';
 import { SYSTEM_ACTOR, type AuditService } from './audit.service';
+import type { CvEngineService } from './cvEngine.service';
 import type { GeminiService } from './gemini.service';
 import { decideTriage, type KnownReport } from './triage.service';
 import type { TrustService } from './trust.service';
@@ -24,7 +24,6 @@ export type CreateOutcome = 'created' | 'merged' | 'quarantined' | 'duplicate_su
 
 export interface CreateResult {
   outcome: CreateOutcome;
-  /** Mã thông điệp để client i18n */
   messageCode: string;
   report: ClientReport;
 }
@@ -40,7 +39,7 @@ function unitsFor(category: Category, hazards: string[]): Department[] {
   const text = hazards.join(' ').toLowerCase();
   if (category === 'den_duong' || /điện|dây/.test(text)) units.add('dien_luc');
   if (category === 'rac_thai') units.add('moi_truong');
-  if (category === 'ngap_nuoc') units.add('ubnd_khu_pho');
+  if (category === 'ngap_nuoc' || category === 'khac') units.add('ubnd_khu_pho');
   if (category === 'mat_duong') units.add('giao_thong');
   return [...units];
 }
@@ -65,23 +64,24 @@ export class ReportService {
     private readonly gemini: GeminiService,
     private readonly trust: TrustService,
     private readonly audit: AuditService,
+    private readonly cvEngine?: CvEngineService,
   ) {}
 
-  // ── Đọc ────────────────────────────────────────────────────────────────────
   async list(user: UserRecord | null, scope: string, category?: string): Promise<ClientReport[]> {
     const wardCodes = scope.startsWith('ward:') ? [scope.slice(5)] : undefined;
-    const rows = await this.repos.reports.list({ wardCodes, category });
+    const normCat = category ? (normalizeCategoryInput(category) ?? category) : undefined;
+    const rows = await this.repos.reports.list({ wardCodes, category: normCat });
     return rows.filter((r) => canSee(user, r)).map(toClientReport);
   }
 
-  /** Phân trang keyset/cursor theo createdAt DESC cho danh sách phản ánh quy mô lớn. */
   async listPaginated(
     user: UserRecord | null,
     opts: { scope: string; category?: string; status?: ReportStatus; cursor?: string; limit: number },
   ): Promise<PaginatedReports> {
     const wardCodes = opts.scope.startsWith('ward:') ? [opts.scope.slice(5)] : undefined;
     const statuses = opts.status ? [opts.status] : undefined;
-    const allVisible = (await this.repos.reports.list({ wardCodes, category: opts.category, statuses })).filter((r) =>
+    const normCat = opts.category ? (normalizeCategoryInput(opts.category) ?? opts.category) : undefined;
+    const allVisible = (await this.repos.reports.list({ wardCodes, category: normCat, statuses })).filter((r) =>
       canSee(user, r),
     );
     const total = allVisible.length;
@@ -96,16 +96,16 @@ export class ReportService {
     };
   }
 
-  /** Endpoint bản đồ hiệu năng cao: chỉ trả điểm nằm trong khung nhìn bbox với payload gọn (không ảnh base64). */
   async listSummary(
     user: UserRecord | null,
     opts: { scope: string; bbox?: BoundingBoxQuery; category?: string; status?: ReportStatus; limit?: number },
   ): Promise<ReportSummary[]> {
     const wardCodes = opts.scope.startsWith('ward:') ? [opts.scope.slice(5)] : undefined;
     const statuses = opts.status ? [opts.status] : undefined;
+    const normCat = opts.category ? (normalizeCategoryInput(opts.category) ?? opts.category) : undefined;
     const rows = await this.repos.reports.list({
       wardCodes,
-      category: opts.category,
+      category: normCat,
       statuses,
       bbox: opts.bbox,
       limit: opts.limit ?? 1500,
@@ -130,7 +130,6 @@ export class ReportService {
     return rows.map(toClientReport);
   }
 
-  /** Tra cứu theo mã hồ sơ (công khai) hoặc theo SĐT (chỉ chính chủ đã xác thực OTP). */
   async lookup(user: UserRecord | null, q: string): Promise<ClientReport[]> {
     const term = q.trim();
     if (/^0\d{9}$|^\+?84\d{9}$/.test(term.replace(/[\s.]/g, ''))) {
@@ -144,7 +143,7 @@ export class ReportService {
     return r && canSee(user, r) ? [toClientReport(r)] : [];
   }
 
-  // ── Tạo mới + AI Triage ────────────────────────────────────────────────────
+  // ── Tạo mới + Rust CV Forensics + Crop/ORB Dedup + AI Triage ───────────────
   async create(user: UserRecord, input: CreateReportInput, proxyVolunteerId: string | null = null): Promise<CreateResult> {
     const id = `rp_${input.idempotencyKey}`;
     const existing = await this.repos.reports.get(id);
@@ -163,34 +162,77 @@ export class ReportService {
       throw badRequest('Vị trí nằm ngoài địa bàn Thành phố Đồng Nai.', 'out_of_bounds');
     }
     const { mime, base64 } = parsePhotoDataUrl(input.photo.dataUrl);
-    const category = input.category as Category;
-
-    // Lớp 4: Gemini luôn được chạy lại phía server (cache theo dHash) — không tin điểm authenticity do client gửi.
-    const analysis = await this.gemini.analyzeImage({
-      imageBase64: base64, mimeType: mime, dHash: input.photo.dHash, hintCategory: category,
-      hintText: `${input.title}. ${input.description}`, edge: input.edge,
-    });
-
+    const category = normalizeCategoryInput(input.category) ?? 'khac';
     const ward = (input.wardCode && WARD_BY_CODE[input.wardCode]) || nearestWard(input.lat, input.lng);
     const arterial = matchArterial(input.lat, input.lng);
+    const firstPhoto = mkPhoto(input.photo, 'before', user.id);
 
-    // Lớp 5: GPS
+    const dynCfg = this.cvEngine ? await this.cvEngine.getConfig() : null;
+
+    // Chạy song song: (A) Phân tích Vision + Authenticity 3 tầng, (B) Quét ảnh cắt / trùng lặp ORB + RANSAC trong bán kính 200m
+    const [analysis, rustDup] = await Promise.all([
+      this.gemini.analyzeImage({
+        imageBase64: base64,
+        mimeType: mime,
+        dHash: input.photo.dHash,
+        hintCategory: category,
+        hintText: `${input.title}. ${input.description}`,
+        edge: input.edge,
+        reportId: id,
+      }),
+      this.cvEngine
+        ? this.cvEngine.checkAndRegisterDuplicate({
+            imageBase64: base64,
+            dHash: input.photo.dHash,
+            reportId: id,
+            photoId: firstPhoto.id,
+            wardCode: ward.wardCode,
+            category,
+            lat: input.lat,
+            lng: input.lng,
+            registerOnPass: true,
+          })
+        : Promise.resolve(null),
+    ]);
+
     const exempt = input.leftScene || isProxy || input.isProxyReport;
-    const gpsDistM = input.deviceLat !== undefined && input.deviceLng !== undefined
-      ? haversineMeters(input.lat, input.lng, input.deviceLat, input.deviceLng) : null;
+    const gpsDistM =
+      input.deviceLat !== undefined && input.deviceLng !== undefined
+        ? haversineMeters(input.lat, input.lng, input.deviceLat, input.deviceLng)
+        : null;
     const gpsWarn = !exempt && gpsDistM !== null && gpsDistM > GPS_WARN_M;
 
     const nowIso = new Date().toISOString();
     const recent = (await this.repos.reports.findSince(new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString())).map(known);
     const nearby = (await this.repos.reports.findNearby({ lat: input.lat, lng: input.lng, radiusM: CLUSTER_RADIUS_M, category }))
-      .filter((r) => ['received', 'verifying', 'processing'].includes(r.status)).map(known);
+      .filter((r) => ['received', 'verifying', 'processing'].includes(r.status))
+      .map(known);
 
     const decision = decideTriage({
       userId: user.id,
       trustSupervised: this.trust.isSupervised(user),
       authenticityScore: analysis.authenticityScore,
+      isAuthenticOverride: analysis.isAuthentic,
+      authenticityReason:
+        analysis.isAuthentic === false && analysis.fraudFlags.length
+          ? `Hệ thống CV chặn ảnh nghi chụp màn hình / giả mạo (${analysis.fraudFlags.join(', ')})`
+          : undefined,
       photoHash: input.photo.dHash,
-      recent, nearby, gpsDistanceM: gpsDistM, gpsExempt: exempt,
+      recent,
+      nearby,
+      gpsDistanceM: gpsDistM,
+      gpsExempt: exempt,
+      authenticityThreshold: dynCfg?.screenshotThreshold,
+      duplicateThreshold: dynCfg?.duplicateThreshold,
+      cropDuplicate:
+        rustDup && rustDup.is_duplicate && rustDup.matched_incident_id
+          ? {
+              matchedIncidentId: rustDup.matched_incident_id,
+              matchType: rustDup.match_type,
+              inlierCount: rustDup.inlier_count,
+              similarityScore: rustDup.similarity_score,
+            }
+          : null,
     });
 
     const phoneMasked = user.phone ? maskPhone(user.phone) : user.email ? `${user.email.slice(0, 2)}***` : '***';
@@ -205,11 +247,21 @@ export class ReportService {
       mother.clusterCount += 1;
       if (mother.priority === 'normal') mother.priority = 'high';
       if (mother.clusterCount >= 4 && mother.severity < 4) mother.severity = 4;
-      if (mother.priority !== 'emergency') mother.slaDueAt = new Date(Date.parse(mother.createdAt) + slaHoursFor(mother.priority) * HOUR).toISOString();
-      mother.timeline.push({ stage: 'escalated', at: nowIso, note: `AI gom thêm 1 phản ánh góc ảnh mới (dHash distance = ${decision.minDistance}) — cụm ${mother.clusterCount} người, Ưu tiên ${mother.priority === 'emergency' ? 'Khẩn cấp' : 'Cao'}` });
+      if (mother.priority !== 'emergency') {
+        mother.slaDueAt = new Date(Date.parse(mother.createdAt) + slaHoursFor(mother.priority) * HOUR).toISOString();
+      }
+      mother.timeline.push({
+        stage: 'escalated',
+        at: nowIso,
+        note: `AI gom thêm 1 phản ánh góc ảnh mới (dHash distance = ${decision.minDistance}) — cụm ${mother.clusterCount} người, Ưu tiên ${mother.priority === 'emergency' ? 'Khẩn cấp' : 'Cao'}`,
+      });
       mother.updatedAt = nowIso;
       await this.repos.reports.update(mother);
-      await this.audit.log(SYSTEM_ACTOR, 'report.cluster_merge', mother.id, before, { clusterCount: mother.clusterCount, priority: mother.priority, byUser: user.id });
+      await this.audit.log(SYSTEM_ACTOR, 'report.cluster_merge', mother.id, before, {
+        clusterCount: mother.clusterCount,
+        priority: mother.priority,
+        byUser: user.id,
+      });
       return { outcome: 'merged', messageCode: 'merged', report: toClientReport(mother) };
     }
 
@@ -219,8 +271,14 @@ export class ReportService {
     const quarantined = decision.action === 'quarantine';
     const status: Report['status'] = quarantined ? 'quarantined' : 'received';
     const dept = analysis.suggestedDepartment ?? DEPARTMENT_BY_CATEGORY[category];
+    const aiSuggestedLabel =
+      category === 'khac'
+        ? (input.aiSuggestedLabel?.trim() || analysis.aiSuggestedLabel || 'Sự cố hạ tầng / trật tự khác')
+        : null;
 
-    const timeline: TimelineEvent[] = [{ stage: 'received', at: nowIso, note: isProxy ? 'Tình nguyện viên báo cáo hộ người cao tuổi' : 'Hệ thống tiếp nhận phản ánh' }];
+    const timeline: TimelineEvent[] = [
+      { stage: 'received', at: nowIso, note: isProxy ? 'Tình nguyện viên báo cáo hộ người cao tuổi' : 'Hệ thống tiếp nhận phản ánh' },
+    ];
     if (quarantined) timeline.push({ stage: 'quarantined', at: nowIso, note: decision.detail });
     if (level1) timeline.push({ stage: 'escalated', at: nowIso, note: `AI gắn KHẨN CẤP CẤP ĐỘ 1 — trục huyết mạch ${arterial!.name}` });
 
@@ -228,6 +286,7 @@ export class ReportService {
       id,
       code: await this.nextCode(ward.wardCode),
       category,
+      aiSuggestedLabel,
       title: input.title,
       description: input.description || analysis.description,
       severity: level1 ? 5 : analysis.severity,
@@ -241,7 +300,7 @@ export class ReportService {
       onArterial: arterial !== null,
       lat: input.lat,
       lng: input.lng,
-      photos: [mkPhoto(input.photo, 'before', user.id)],
+      photos: [firstPhoto],
       afterPhoto: null,
       clusterCount: 1,
       contributors: [{ userId: user.id, phoneMasked, at: nowIso }],
@@ -255,8 +314,16 @@ export class ReportService {
       assignedVolunteerId: null,
       verification: null,
       ai: {
-        authenticityScore: analysis.authenticityScore, fraudFlags: analysis.fraudFlags, confidence: analysis.confidence,
-        safetyHazards: analysis.safetyHazards, suggestedDepartment: dept, mode: analysis.mode,
+        authenticityScore: analysis.authenticityScore,
+        fraudFlags: analysis.fraudFlags,
+        confidence: analysis.confidence,
+        safetyHazards: analysis.safetyHazards,
+        suggestedDepartment: dept,
+        aiSuggestedLabel,
+        isDuplicateCrop: Boolean(rustDup?.is_duplicate),
+        duplicateSimilarity: rustDup?.similarity_score ?? null,
+        inlierCount: rustDup?.inlier_count ?? null,
+        mode: analysis.mode,
       },
       gpsMismatchWarning: gpsWarn,
       gpsDistanceKm: gpsDistM === null ? null : Math.round(gpsDistM / 100) / 10,
@@ -276,7 +343,6 @@ export class ReportService {
       updatedAt: nowIso,
     };
 
-    // Lệnh chi viện liên phường tự động cho KHẨN CẤP CẤP 1
     if (report.emergencyLevel === 1) {
       const order: DispatchOrder = {
         id: newId('dp'),
@@ -296,15 +362,25 @@ export class ReportService {
 
     await this.repos.reports.insert(report);
     await this.audit.log(actor, 'report.create', report.id, null, {
-      code: report.code, status: report.status, priority: report.priority, quarantine: report.quarantine?.reason ?? null,
+      code: report.code,
+      category: report.category,
+      status: report.status,
+      priority: report.priority,
+      quarantine: report.quarantine?.reason ?? null,
     });
     if (report.dispatches.length) await this.audit.log(SYSTEM_ACTOR, 'dispatch.auto', report.id, null, report.dispatches[0]);
 
     const messageCode = quarantined
-      ? decision.reason === 'duplicate_image' ? 'quarantine_duplicate'
-        : decision.reason === 'low_authenticity' ? 'quarantine_fake'
-        : decision.reason === 'gps_anomaly' ? 'quarantine_gps' : 'quarantine_trust'
-      : report.emergencyLevel === 1 ? 'emergency' : 'created';
+      ? decision.reason === 'duplicate_image'
+        ? 'quarantine_duplicate'
+        : decision.reason === 'low_authenticity'
+          ? 'quarantine_fake'
+          : decision.reason === 'gps_anomaly'
+            ? 'quarantine_gps'
+            : 'quarantine_trust'
+      : report.emergencyLevel === 1
+        ? 'emergency'
+        : 'created';
     return { outcome: quarantined ? 'quarantined' : 'created', messageCode, report: toClientReport(report) };
   }
 
@@ -315,10 +391,11 @@ export class ReportService {
     return `${prefix}${String(max + 1).padStart(3, '0')}`;
   }
 
-  // ── Cùng xác nhận / thêm góc ảnh / đánh giá ───────────────────────────────
   async confirm(user: UserRecord, id: string): Promise<ClientReport> {
     const r = await this.getVisible(user, id);
-    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') throw badRequest('Hồ sơ này không còn nhận xác nhận.', 'not_confirmable');
+    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
+      throw badRequest('Hồ sơ này không còn nhận xác nhận.', 'not_confirmable');
+    }
     if (isOwner(user, r)) throw badRequest('Bạn là người gửi hồ sơ này.', 'own_report');
     if (r.confirmations.includes(user.id)) throw badRequest('Bạn đã xác nhận hồ sơ này rồi (mỗi SĐT chỉ 1 lần).', 'already_confirmed');
     const before = { confirmCount: r.confirmations.length, priority: r.priority };
@@ -329,13 +406,18 @@ export class ReportService {
     }
     r.updatedAt = new Date().toISOString();
     await this.repos.reports.update(r);
-    await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.confirm', r.id, before, { confirmCount: r.confirmations.length, priority: r.priority });
+    await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.confirm', r.id, before, {
+      confirmCount: r.confirmations.length,
+      priority: r.priority,
+    });
     return toClientReport(r);
   }
 
   async attachPhoto(user: UserRecord, id: string, photo: PhotoInput): Promise<ClientReport> {
     const r = await this.getVisible(user, id);
-    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') throw badRequest('Hồ sơ này không nhận thêm ảnh.', 'not_attachable');
+    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
+      throw badRequest('Hồ sơ này không nhận thêm ảnh.', 'not_attachable');
+    }
     parsePhotoDataUrl(photo.dataUrl);
     if (r.photos.length >= 8) throw badRequest('Hồ sơ đã đủ số ảnh tối đa (8).', 'photo_limit');
     const min = r.photos.reduce((m, p) => Math.min(m, hammingDistance(photo.dHash, p.dHash)), 64);
@@ -351,7 +433,10 @@ export class ReportService {
     }
     r.updatedAt = nowIso;
     await this.repos.reports.update(r);
-    await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.attach_photo', r.id, null, { photos: r.photos.length, clusterCount: r.clusterCount });
+    await this.audit.log({ id: user.id, name: user.name, role: user.role }, 'report.attach_photo', r.id, null, {
+      photos: r.photos.length,
+      clusterCount: r.clusterCount,
+    });
     return toClientReport(r);
   }
 

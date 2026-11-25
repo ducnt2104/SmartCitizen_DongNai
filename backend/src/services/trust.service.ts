@@ -1,7 +1,7 @@
 import type { Notification, UserProfile } from '../shared/types';
 import { maskPhone } from '../shared/geo';
 import {
-  TRUST_SPAM_PENALTY, TRUST_START, TRUST_SUPERVISED_BELOW, TRUST_VERIFIED_BONUS,
+  toRoleCode, TRUST_SPAM_PENALTY, TRUST_START, TRUST_SUPERVISED_BELOW, TRUST_VERIFIED_BONUS,
 } from '../shared/constants';
 import type { UserRecord, UserRepository } from '../repositories/types';
 import { newId } from '../utils/crypto';
@@ -9,9 +9,11 @@ import { newId } from '../utils/crypto';
 export const CIVIC_BADGE = 'Công dân Văn minh Đồng Nai';
 
 export function toProfile(u: UserRecord): UserProfile {
+  const revoked = Boolean(u.revoked);
   return {
     id: u.id,
     role: u.role,
+    roleCode: toRoleCode(u.role),
     name: u.name,
     phoneMasked: u.phone ? maskPhone(u.phone) : null,
     email: u.email,
@@ -20,13 +22,15 @@ export function toProfile(u: UserRecord): UserProfile {
     unitCode: u.unitCode,
     defaultWardCode: u.defaultWardCode ?? u.wardCode ?? null,
     notificationsEnabled: u.notificationsEnabled ?? true,
-    revoked: Boolean(u.revoked),
+    revoked,
+    isActive: !revoked,
     trustScore: u.trustScore,
     badges: u.badges,
     volunteerHours: u.volunteerHours,
     points: u.points,
     supervised: u.trustScore < TRUST_SUPERVISED_BELOW,
     notifications: [...u.notifications].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 30),
+    createdAt: u.createdAt,
   };
 }
 

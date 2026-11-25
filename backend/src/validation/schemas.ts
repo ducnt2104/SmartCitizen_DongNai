@@ -1,14 +1,20 @@
 import { z } from 'zod';
-import { DEPARTMENTS } from '../shared/constants';
+import { DEPARTMENTS, normalizeCategoryInput, normalizeRoleInput } from '../shared/constants';
 import { isValidHash } from '../shared/dhash';
-import { CATEGORIES } from '../shared/types';
+import type { Category } from '../shared/types';
 
 const hash = z.string().refine(isValidHash, 'dHash phải là 16 ký tự hex');
 const photo = z.object({ dataUrl: z.string().max(1_900_000), dHash: hash });
 const identifier = z.string().min(5).max(120);
-const category = z.enum([...CATEGORIES] as [string, ...string[]]);
+const category = z
+  .string()
+  .refine((v) => normalizeCategoryInput(v) !== null, 'Loại sự cố không hợp lệ (rac_thai, den_duong, ngap_nuoc, mat_duong, khac / OTHER)')
+  .transform((v) => normalizeCategoryInput(v) as Category);
 const department = z.enum([...DEPARTMENTS] as [string, ...string[]]);
 const wardCode = z.string().regex(/^DN-[A-Z]{2,4}$/);
+const roleInput = z
+  .string()
+  .refine((v) => normalizeRoleInput(v) !== null, 'Vai trò không hợp lệ (SUPER_ADMIN, ADMIN, OFFICER, YOUTH_UNION, CITIZEN)');
 
 export const edgeStatsSchema = z.object({
   blurScore: z.number().min(0).max(1e6),
@@ -18,7 +24,6 @@ export const edgeStatsSchema = z.object({
 });
 
 export const schemas = {
-  // Hỗ trợ cả `identifier` (email/SĐT) lẫn alias cũ `phone`
   otpRequest: z
     .object({
       identifier: identifier.optional(),
@@ -46,9 +51,9 @@ export const schemas = {
     newPassword: z.string().min(8).max(128),
   }),
   staffLogin: z.object({
-    staffCode: z.string().min(2).max(32).regex(/^[A-Za-z0-9-]+$/),
+    staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/),
     password: z.string().min(1).max(128),
-    unit: z.union([z.literal('city'), wardCode]),
+    unit: z.union([z.literal('city'), wardCode]).default('city'),
   }),
   updateProfile: z.object({
     name: z.string().min(2).max(80).optional(),
@@ -67,6 +72,39 @@ export const schemas = {
   }),
   revokeStaff: z.object({ revoked: z.boolean() }),
   transferWard: z.object({ wardCode, note: z.string().max(300).default('') }),
+
+  // Super Admin & RBAC User CRUD
+  adminCreateUser: z.object({
+    name: z.string().min(2).max(80),
+    role: roleInput,
+    password: z.string().min(8).max(128).optional(),
+    email: z.string().email().max(120).nullable().optional(),
+    phone: z.string().max(24).nullable().optional(),
+    staffCode: z.string().min(2).max(32).regex(/^[A-Za-z0-9-]+$/).nullable().optional(),
+    wardCode: wardCode.nullable().optional(),
+    unitCode: z.string().max(24).nullable().optional(),
+  }),
+  adminUpdateUser: z.object({
+    name: z.string().min(2).max(80).optional(),
+    role: roleInput.optional(),
+    wardCode: z.union([wardCode, z.literal(''), z.null()]).optional(),
+    staffCode: z.union([z.string().min(2).max(32).regex(/^[A-Za-z0-9-]+$/), z.literal(''), z.null()]).optional(),
+    email: z.union([z.string().email().max(120), z.literal(''), z.null()]).optional(),
+    phone: z.union([z.string().max(24), z.literal(''), z.null()]).optional(),
+    isActive: z.boolean().optional(),
+    trustScore: z.number().min(0).max(100).optional(),
+  }),
+  adminResetPassword: z.object({
+    newPassword: z.string().min(8).max(128),
+  }),
+  adminUpdateAiConfig: z.object({
+    screenshotThreshold: z.number().min(25).max(85).optional(),
+    duplicateThreshold: z.number().min(2).max(16).optional(),
+    minKeypointInliers: z.number().min(10).max(40).optional(),
+    sceneMatchThreshold: z.number().min(40).max(92).optional(),
+    resolutionThreshold: z.number().min(45).max(95).optional(),
+    allowCloudFallback: z.boolean().optional(),
+  }),
 
   analyzeImage: z.object({
     image: photo,
@@ -90,6 +128,7 @@ export const schemas = {
   createReport: z.object({
     idempotencyKey: z.string().regex(/^[A-Za-z0-9-]{8,64}$/),
     category,
+    aiSuggestedLabel: z.string().max(80).nullable().optional(),
     title: z.string().min(3).max(140),
     description: z.string().max(800).default(''),
     lat: z.number().min(-90).max(90),

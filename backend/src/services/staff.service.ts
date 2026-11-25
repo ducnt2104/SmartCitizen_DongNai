@@ -1,13 +1,14 @@
-import { DEPARTMENTS } from '../shared/constants';
+import { DEPARTMENTS, normalizeRoleInput, toRoleCode } from '../shared/constants';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../shared/dongNaiWards';
+import { normalizeEmail, normalizePhone } from '../shared/geo';
 import { computeStats, toClientReport } from '../shared/report';
 import type {
-  AuditEntry, Category, ClientReport, Department, DispatchOrder, Report, ScopeStats, UserProfile,
+  AuditEntry, ClientReport, Department, DispatchOrder, Report, Role, ScopeStats, UserProfile,
 } from '../shared/types';
-import type { Repositories, UserRecord } from '../repositories/types';
+import type { Repositories, UserFilterQuery, UserRecord } from '../repositories/types';
 import { badRequest, forbidden, notFound } from '../utils/errors';
 import { hashPassword, newId } from '../utils/crypto';
-import { assertScope, inScope, parsePhotoDataUrl, type PhotoInput } from './access';
+import { assertScope, isAdminRole, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { AuditService } from './audit.service';
 import type { GeminiService } from './gemini.service';
 import { slaHoursFor } from './report.service';
@@ -17,13 +18,18 @@ export type QueueTab = 'emergency' | 'high' | 'open' | 'quarantine';
 const HOUR = 3600000;
 
 const snap = (r: Report) => ({
-  status: r.status, priority: r.priority, department: r.department, slaDueAt: r.slaDueAt,
-  quarantine: r.quarantine?.reason ?? null, dispatches: r.dispatches.length, resolvedAt: r.resolvedAt,
+  status: r.status,
+  priority: r.priority,
+  department: r.department,
+  slaDueAt: r.slaDueAt,
+  quarantine: r.quarantine?.reason ?? null,
+  dispatches: r.dispatches.length,
+  resolvedAt: r.resolvedAt,
 });
 
 function csvCell(v: unknown): string {
   let s = v === null || v === undefined ? '' : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // chống CSV/Formula injection
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -39,11 +45,13 @@ export class StaffService {
     return { id: u.id, name: u.name, role: u.role };
   }
 
-  /** Cán bộ phường bị ép về wardCode của mình; cấp TP chọn tự do. */
+  /** Cán bộ phường bị ép về wardCode của mình; cấp TP & Super Admin chọn tự do. */
   resolveScope(u: UserRecord, requested: string | undefined): string {
     if (u.role === 'ward_officer') return `ward:${u.wardCode}`;
     if (!requested || requested === 'city') return 'city';
-    if (!/^ward:DN-[A-Z]{2,4}$/.test(requested) || !WARD_BY_CODE[requested.slice(5)]) throw badRequest('Phạm vi không hợp lệ.', 'invalid_scope');
+    if (!/^ward:DN-[A-Z]{2,4}$/.test(requested) || !WARD_BY_CODE[requested.slice(5)]) {
+      throw badRequest('Phạm vi không hợp lệ.', 'invalid_scope');
+    }
     return requested;
   }
 
@@ -58,7 +66,6 @@ export class StaffService {
     return r;
   }
 
-  // ── Dashboard ──────────────────────────────────────────────────────────────
   async overview(u: UserRecord, scope: string): Promise<{
     stats: ScopeStats;
     trend: Array<{ date: string; avgDays: number; resolved: number }>;
@@ -75,13 +82,16 @@ export class StaffService {
       e.n += 1;
       byDay.set(day, e);
     }
-    const trend = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b))
+    const trend = [...byDay.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, e]) => ({ date, avgDays: Math.round((e.sum / e.n) * 10) / 10, resolved: e.n }));
-    const ranking = u.role === 'city_admin'
+    const ranking = isAdminRole(u)
       ? DONG_NAI_WARDS.map((w) => {
           const s = computeStats(rows.filter((r) => r.wardCode === w.wardCode), w.wardCode);
           return { wardCode: w.wardCode, name: w.name, total: s.total, resolved: s.resolved, avgDays: s.avgDays };
-        }).filter((x) => x.total > 0).sort((a, b) => a.avgDays - b.avgDays)
+        })
+          .filter((x) => x.total > 0)
+          .sort((a, b) => a.avgDays - b.avgDays)
       : [];
     return { stats: computeStats(rows, scope), trend, targetDays: 1.5, ranking };
   }
@@ -98,10 +108,11 @@ export class StaffService {
     return rows.filter(pick[tab]).map(toClientReport);
   }
 
-  // ── Điều phối ──────────────────────────────────────────────────────────────
   async assign(u: UserRecord, id: string, department: Department, slaHours: number): Promise<ClientReport> {
     const r = await this.load(u, id);
-    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') throw badRequest('Không thể giao việc ở trạng thái hiện tại.', 'invalid_state');
+    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
+      throw badRequest('Không thể giao việc ở trạng thái hiện tại.', 'invalid_state');
+    }
     if (!DEPARTMENTS.includes(department)) throw badRequest('Bộ phận không hợp lệ.');
     const before = snap(r);
     const now = new Date().toISOString();
@@ -140,8 +151,13 @@ export class StaffService {
     const before = snap(r);
     const now = new Date().toISOString();
     const order: DispatchOrder = {
-      id: newId('dp'), fromWardCode: r.wardCode, toWardCodes: targets,
-      units: units?.length ? units : [r.department ?? 'ubnd_khu_pho'], issuedAt: now, issuedBy: u.id, auto: false,
+      id: newId('dp'),
+      fromWardCode: r.wardCode,
+      toWardCodes: targets,
+      units: units?.length ? units : [r.department ?? 'ubnd_khu_pho'],
+      issuedAt: now,
+      issuedBy: u.id,
+      auto: false,
       note: note || 'Cán bộ phát lệnh chi viện liên phường/xã.',
     };
     r.dispatches.push(order);
@@ -181,20 +197,57 @@ export class StaffService {
     return toClientReport(r);
   }
 
-  /** Nghiệm thu chống báo cáo khống: AI so ảnh Trước/Sau trước khi cho phép đóng hồ sơ. */
+  /** Nghiệm thu chống báo cáo khống bằng Rust CV Engine (CLAHE + ORB/RANSAC `scene_match_score` + `resolution_score`). */
   async resolve(u: UserRecord, id: string, afterPhoto: PhotoInput, note: string, override: boolean): Promise<{ report: ClientReport; accepted: boolean }> {
     const r = await this.load(u, id);
-    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') throw badRequest('Không thể nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
+    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
+      throw badRequest('Không thể nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
+    }
     const before = r.photos[0];
     const a = parsePhotoDataUrl(afterPhoto.dataUrl);
-    const b = parsePhotoDataUrl(before.url.startsWith('data:image/svg') ? afterPhoto.dataUrl : before.url);
     const svgBefore = before.url.startsWith('data:image/svg');
+    const b = svgBefore ? { mime: a.mime, base64: '' } : parsePhotoDataUrl(before.url);
+
     const verdict = svgBefore
-      ? this.gemini.fallbackVerify({ beforeBase64: '', beforeMime: a.mime, beforeHash: before.dHash, afterBase64: a.base64, afterMime: a.mime, afterHash: afterPhoto.dHash, category: r.category, title: r.title })
-      : await this.gemini.verifyResolution({ beforeBase64: b.base64, beforeMime: b.mime, beforeHash: before.dHash, afterBase64: a.base64, afterMime: a.mime, afterHash: afterPhoto.dHash, category: r.category, title: r.title });
+      ? this.gemini.fallbackVerify({
+          reportId: r.id,
+          beforeBase64: '',
+          beforeMime: a.mime,
+          beforeHash: before.dHash,
+          afterBase64: a.base64,
+          afterMime: a.mime,
+          afterHash: afterPhoto.dHash,
+          category: r.category,
+          title: r.title,
+        })
+      : await this.gemini.verifyResolution({
+          reportId: r.id,
+          beforeBase64: b.base64,
+          beforeMime: b.mime,
+          beforeHash: before.dHash,
+          afterBase64: a.base64,
+          afterMime: a.mime,
+          afterHash: afterPhoto.dHash,
+          category: r.category,
+          title: r.title,
+          beforeLat: r.lat,
+          beforeLng: r.lng,
+          afterLat: r.lat,
+          afterLng: r.lng,
+        });
+
     const now = new Date().toISOString();
     const prev = snap(r);
-    r.resolution = { resolutionVerified: verdict.resolutionVerified, matchConfidence: verdict.matchConfidence, summary: verdict.summary, mode: verdict.mode, at: now };
+    r.resolution = {
+      resolutionVerified: verdict.resolutionVerified,
+      matchConfidence: verdict.matchConfidence,
+      sceneMatchScore: verdict.sceneMatchScore,
+      resolutionScore: verdict.resolutionScore,
+      inlierKeypoints: verdict.inlierKeypoints,
+      summary: verdict.summary,
+      mode: verdict.mode,
+      at: now,
+    };
     r.afterPhoto = { id: newId('ph'), url: afterPhoto.dataUrl, dHash: afterPhoto.dHash, kind: 'after', takenBy: u.id, createdAt: now };
 
     const accepted = verdict.resolutionVerified || override;
@@ -207,72 +260,292 @@ export class StaffService {
     }
     r.status = 'resolved';
     r.resolvedAt = now;
-    r.timeline.push({ stage: 'resolved', at: now, note: override && !verdict.resolutionVerified ? `Cán bộ nghiệm thu thủ công (ghi đè AI). ${note}` : `Đã khắc phục và nghiệm thu. ${note}`.trim() });
+    r.timeline.push({
+      stage: 'resolved',
+      at: now,
+      note: override && !verdict.resolutionVerified ? `Cán bộ nghiệm thu thủ công (ghi đè AI). ${note}` : `Đã khắc phục và nghiệm thu. ${note}`.trim(),
+    });
     r.updatedAt = now;
     await this.repos.reports.update(r);
-    await this.audit.log(this.actor(u), override && !verdict.resolutionVerified ? 'report.resolve_override' : 'report.resolve', r.id, prev, { ...snap(r), resolution: r.resolution });
-    // Thông báo hàng loạt cho toàn bộ người dân trong cụm
+    await this.audit.log(this.actor(u), override && !verdict.resolutionVerified ? 'report.resolve_override' : 'report.resolve', r.id, prev, {
+      ...snap(r),
+      resolution: r.resolution,
+    });
     await Promise.all(r.contributors.map((c) => this.trust.notify(c.userId, `Hồ sơ ${r.code} "${r.title}" đã được khắc phục và nghiệm thu.`, r.code)));
     return { report: toClientReport(r), accepted: true };
   }
 
-  // ── Audit / Export / Staff ────────────────────────────────────────────────
   auditList(limit: number): Promise<AuditEntry[]> {
     return this.audit.list(limit);
   }
 
   async staffList(): Promise<UserProfile[]> {
-    const [a, b] = await Promise.all([this.repos.users.list('ward_officer'), this.repos.users.list('city_admin')]);
-    return [...b, ...a].map(toProfile);
+    const [s, b, a] = await Promise.all([
+      this.repos.users.list('super_admin'),
+      this.repos.users.list('city_admin'),
+      this.repos.users.list('ward_officer'),
+    ]);
+    return [...s, ...b, ...a].map(toProfile);
   }
 
-  /** Cấp tài khoản Cán bộ Phường/Xã mới (chỉ city_admin — mô hình RBAC 2 cấp). */
+  // ── Super Admin & RBAC User CRUD (`/api/admin/users`) ──────────────────────
+  async listUsers(actor: UserRecord, rawFilter: { role?: string; wardCode?: string; isActive?: boolean; q?: string }): Promise<UserProfile[]> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Super Admin / Admin mới có quyền quản lý người dùng.');
+    const filter: UserFilterQuery = {
+      wardCode: rawFilter.wardCode || undefined,
+      isActive: rawFilter.isActive,
+      q: rawFilter.q,
+    };
+    if (rawFilter.role) {
+      const parsed = normalizeRoleInput(rawFilter.role);
+      if (!parsed) throw badRequest(`Vai trò lọc không hợp lệ: ${rawFilter.role}`, 'invalid_role');
+      filter.role = parsed;
+    }
+    const rows = await this.repos.users.query(filter);
+    return rows.map(toProfile);
+  }
+
+  async createUser(
+    actor: UserRecord,
+    input: {
+      name: string;
+      role: string;
+      password?: string;
+      email?: string | null;
+      phone?: string | null;
+      staffCode?: string | null;
+      wardCode?: string | null;
+      unitCode?: string | null;
+    },
+  ): Promise<UserProfile> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Super Admin / Admin mới được tạo tài khoản.');
+    const role = normalizeRoleInput(input.role);
+    if (!role) throw badRequest('Vai trò không hợp lệ.', 'invalid_role');
+    if ((role === 'super_admin' || role === 'city_admin') && actor.role !== 'super_admin') {
+      throw forbidden('Chỉ SUPER_ADMIN mới được phép tạo tài khoản cấp Quản trị Thành phố hoặc Super Admin.');
+    }
+    if (role === 'ward_officer') {
+      if (!input.wardCode || !WARD_BY_CODE[input.wardCode]) {
+        throw badRequest('Cán bộ Phường/Xã (OFFICER) bắt buộc gắn với 1 mã Phường/Xã hợp lệ trong 95 ĐVHC Đồng Nai.', 'invalid_ward');
+      }
+    } else if (input.wardCode && !WARD_BY_CODE[input.wardCode]) {
+      throw badRequest('Mã Phường/Xã không thuộc 95 ĐVHC Thành phố Đồng Nai.', 'invalid_ward');
+    }
+
+    const email = input.email ? normalizeEmail(input.email) : null;
+    if (input.email && !email) throw badRequest('Địa chỉ Email không hợp lệ.', 'invalid_email');
+    const phone = input.phone ? normalizePhone(input.phone) : null;
+    if (input.phone && !phone) throw badRequest('Số điện thoại Việt Nam không hợp lệ (10 số bắt đầu bằng 0).', 'invalid_phone');
+
+    const isStaffType = role === 'super_admin' || role === 'city_admin' || role === 'ward_officer';
+    const staffCode = input.staffCode?.trim()
+      ? input.staffCode.trim().toUpperCase()
+      : isStaffType
+        ? `${role === 'super_admin' ? 'SA' : role === 'city_admin' ? 'TP' : 'CB'}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+        : null;
+
+    if (staffCode && (await this.repos.users.getByStaffCode(staffCode))) {
+      throw badRequest(`Mã cán bộ ${staffCode} đã tồn tại.`, 'staff_exists');
+    }
+    if (email && (await this.repos.users.getByEmail(email))) {
+      throw badRequest(`Email ${email} đã được sử dụng.`, 'email_exists');
+    }
+    if (phone && (await this.repos.users.getByPhone(phone))) {
+      throw badRequest(`Số điện thoại ${phone} đã được sử dụng.`, 'phone_exists');
+    }
+    if (isStaffType && (!input.password || input.password.length < 8)) {
+      throw badRequest('Tài khoản Quản trị / Cán bộ bắt buộc có mật khẩu tối thiểu 8 ký tự.', 'password_required');
+    }
+
+    const rec: UserRecord = {
+      id: newId('u'),
+      role,
+      name: input.name.trim(),
+      phone,
+      email,
+      staffCode,
+      passwordHash: input.password ? hashPassword(input.password) : null,
+      wardCode: input.wardCode ?? null,
+      unitCode: input.unitCode ?? null,
+      createdAt: new Date().toISOString(),
+      ...this.trust.newUserDefaults(),
+      defaultWardCode: input.wardCode ?? null,
+      trustScore: isStaffType ? 100 : 80,
+    };
+    await this.repos.users.save(rec);
+    await this.audit.log(this.actor(actor), 'admin.user_create', rec.id, null, {
+      role,
+      roleCode: toRoleCode(role),
+      staffCode: rec.staffCode,
+      wardCode: rec.wardCode,
+      email: rec.email,
+    });
+    return toProfile(rec);
+  }
+
+  async updateUser(
+    actor: UserRecord,
+    targetId: string,
+    patch: {
+      name?: string;
+      role?: string;
+      wardCode?: string | null;
+      staffCode?: string | null;
+      email?: string | null;
+      phone?: string | null;
+      isActive?: boolean;
+      trustScore?: number;
+    },
+  ): Promise<UserProfile> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Super Admin / Admin mới được chỉnh sửa tài khoản.');
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản người dùng.');
+
+    if ((target.role === 'super_admin' || target.role === 'city_admin') && actor.role !== 'super_admin' && target.id !== actor.id) {
+      throw forbidden('Chỉ SUPER_ADMIN mới được sửa tài khoản cấp Quản trị Thành phố / Super Admin.');
+    }
+
+    const before = {
+      name: target.name,
+      role: target.role,
+      wardCode: target.wardCode,
+      staffCode: target.staffCode,
+      revoked: Boolean(target.revoked),
+      trustScore: target.trustScore,
+    };
+
+    if (patch.role !== undefined) {
+      const nextRole = normalizeRoleInput(patch.role);
+      if (!nextRole) throw badRequest('Vai trò không hợp lệ.', 'invalid_role');
+      if (target.id === actor.id && nextRole !== target.role) {
+        throw badRequest('Không thể tự hạ quyền tài khoản đang đăng nhập.', 'cannot_demote_self');
+      }
+      if ((nextRole === 'super_admin' || nextRole === 'city_admin') && actor.role !== 'super_admin') {
+        throw forbidden('Chỉ SUPER_ADMIN mới được gán quyền SUPER_ADMIN hoặc ADMIN.');
+      }
+      target.role = nextRole;
+    }
+
+    if (patch.wardCode !== undefined) {
+      if (patch.wardCode !== null && patch.wardCode !== '' && !WARD_BY_CODE[patch.wardCode]) {
+        throw badRequest('Mã Phường/Xã không hợp lệ.', 'invalid_ward');
+      }
+      target.wardCode = patch.wardCode || null;
+    }
+    if (target.role === 'ward_officer' && (!target.wardCode || !WARD_BY_CODE[target.wardCode])) {
+      throw badRequest('Cán bộ Phường/Xã bắt buộc có mã Phường/Xã hợp lệ.', 'invalid_ward');
+    }
+
+    if (patch.name !== undefined) {
+      const n = patch.name.trim();
+      if (n.length < 2) throw badRequest('Họ tên tối thiểu 2 ký tự.');
+      target.name = n;
+    }
+    if (patch.staffCode !== undefined) {
+      const sc = patch.staffCode?.trim() ? patch.staffCode.trim().toUpperCase() : null;
+      if (sc) {
+        const dup = await this.repos.users.getByStaffCode(sc);
+        if (dup && dup.id !== target.id) throw badRequest(`Mã cán bộ ${sc} đã tồn tại.`, 'staff_exists');
+      }
+      target.staffCode = sc;
+    }
+    if (patch.email !== undefined) {
+      const em = patch.email?.trim() ? normalizeEmail(patch.email) : null;
+      if (patch.email?.trim() && !em) throw badRequest('Email không hợp lệ.', 'invalid_email');
+      if (em) {
+        const dup = await this.repos.users.getByEmail(em);
+        if (dup && dup.id !== target.id) throw badRequest(`Email ${em} đã tồn tại.`, 'email_exists');
+      }
+      target.email = em;
+    }
+    if (patch.phone !== undefined) {
+      const ph = patch.phone?.trim() ? normalizePhone(patch.phone) : null;
+      if (patch.phone?.trim() && !ph) throw badRequest('Số điện thoại không hợp lệ.', 'invalid_phone');
+      if (ph) {
+        const dup = await this.repos.users.getByPhone(ph);
+        if (dup && dup.id !== target.id) throw badRequest(`SĐT ${ph} đã tồn tại.`, 'phone_exists');
+      }
+      target.phone = ph;
+    }
+    if (patch.trustScore !== undefined) {
+      target.trustScore = Math.max(0, Math.min(100, Math.round(patch.trustScore)));
+    }
+    if (patch.isActive !== undefined) {
+      if (!patch.isActive && target.id === actor.id) {
+        throw badRequest('Không thể tự khóa tài khoản đang đăng nhập.', 'cannot_lock_self');
+      }
+      target.revoked = !patch.isActive;
+      if (target.revoked) {
+        await this.repos.sessions.revokeAllForUser(target.id);
+      }
+    }
+
+    await this.repos.users.save(target);
+    await this.audit.log(this.actor(actor), 'admin.user_update', target.id, before, {
+      name: target.name,
+      role: target.role,
+      wardCode: target.wardCode,
+      staffCode: target.staffCode,
+      revoked: Boolean(target.revoked),
+      trustScore: target.trustScore,
+    });
+    return toProfile(target);
+  }
+
+  async resetUserPassword(actor: UserRecord, targetId: string, newPassword: string): Promise<{ ok: true }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Super Admin / Admin mới được đặt lại mật khẩu.');
+    if (newPassword.length < 8) throw badRequest('Mật khẩu mới tối thiểu 8 ký tự.');
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản người dùng.');
+    if ((target.role === 'super_admin' || target.role === 'city_admin') && actor.role !== 'super_admin' && target.id !== actor.id) {
+      throw forbidden('Chỉ SUPER_ADMIN mới được đặt lại mật khẩu cho quản trị viên khác.');
+    }
+    target.passwordHash = hashPassword(newPassword);
+    await this.repos.users.save(target);
+    await this.repos.sessions.revokeAllForUser(target.id);
+    await this.audit.log(this.actor(actor), 'admin.user_reset_password', target.id, null, { revokedSessions: true });
+    return { ok: true };
+  }
+
+  async deleteUser(actor: UserRecord, targetId: string): Promise<{ ok: true }> {
+    if (!isAdminRole(actor)) throw forbidden('Chỉ Super Admin / Admin mới được xóa tài khoản.');
+    if (targetId === actor.id) {
+      throw badRequest('Chặn an toàn: Không thể tự xóa chính tài khoản Super Admin/Admin đang đăng nhập!', 'cannot_delete_self');
+    }
+    const target = await this.repos.users.get(targetId);
+    if (!target) throw notFound('Không tìm thấy tài khoản người dùng.');
+    if ((target.role === 'super_admin' || target.role === 'city_admin') && actor.role !== 'super_admin') {
+      throw forbidden('Chỉ SUPER_ADMIN mới được phép xóa tài khoản Quản trị viên.');
+    }
+    await this.repos.sessions.revokeAllForUser(target.id);
+    await this.repos.users.delete(target.id);
+    await this.audit.log(this.actor(actor), 'admin.user_delete', target.id, { role: target.role, name: target.name, staffCode: target.staffCode }, null);
+    return { ok: true };
+  }
+
+  // ── Backward-compatible Officer APIs (`/api/admin/staff`) ──────────────────
   async createOfficer(
     admin: UserRecord,
     input: { staffCode: string; name: string; password: string; wardCode: string; email?: string },
   ): Promise<UserProfile> {
-    if (admin.role !== 'city_admin') throw forbidden('Chỉ Quản trị viên cấp Thành phố mới được cấp tài khoản cán bộ.');
-    const ward = WARD_BY_CODE[input.wardCode];
-    if (!ward) throw badRequest('Phường/Xã phân công không thuộc 95 ĐVHC Thành phố Đồng Nai.', 'invalid_ward');
-    const code = input.staffCode.trim().toUpperCase();
-    const existing = await this.repos.users.getByStaffCode(code);
-    if (existing) throw badRequest(`Mã cán bộ ${code} đã tồn tại.`, 'staff_exists');
-    const record: UserRecord = {
-      id: newId('u_staff'),
+    return this.createUser(admin, {
+      staffCode: input.staffCode,
+      name: input.name,
+      password: input.password,
       role: 'ward_officer',
-      name: input.name.trim(),
-      phone: null,
-      email: input.email ? input.email.trim().toLowerCase() : null,
-      staffCode: code,
-      passwordHash: hashPassword(input.password),
-      wardCode: ward.wardCode,
-      unitCode: null,
-      createdAt: new Date().toISOString(),
-      ...this.trust.newUserDefaults(),
-      trustScore: 100,
-    };
-    await this.repos.users.save(record);
-    await this.audit.log(this.actor(admin), 'staff.create', record.id, null, { staffCode: code, wardCode: ward.wardCode, name: record.name });
-    return toProfile(record);
+      wardCode: input.wardCode,
+      email: input.email,
+    });
   }
 
-  /** Thu hồi / khôi phục quyền tài khoản cán bộ (đồng thời thu hồi mọi phiên đăng nhập đang mở). */
   async setStaffRevoked(admin: UserRecord, staffId: string, revoked: boolean): Promise<UserProfile> {
-    if (admin.role !== 'city_admin') throw forbidden('Chỉ Quản trị viên cấp Thành phố mới được thu hồi tài khoản cán bộ.');
+    if (!isAdminRole(admin)) throw forbidden('Chỉ Quản trị viên cấp Thành phố / Super Admin mới được thu hồi tài khoản cán bộ.');
     if (staffId === admin.id) throw badRequest('Không thể tự thu hồi tài khoản của chính mình.');
     const target = await this.repos.users.get(staffId);
-    if (!target || (target.role !== 'ward_officer' && target.role !== 'city_admin')) {
-      throw notFound('Không tìm thấy tài khoản cán bộ.');
-    }
-    const before = { revoked: Boolean(target.revoked) };
-    target.revoked = revoked;
-    await this.repos.users.save(target);
-    if (revoked) await this.repos.sessions.revokeAllForUser(target.id);
-    await this.audit.log(this.actor(admin), revoked ? 'staff.revoke' : 'staff.reinstate', target.id, before, { revoked });
-    return toProfile(target);
+    if (!target) throw notFound('Không tìm thấy tài khoản cán bộ.');
+    return this.updateUser(admin, staffId, { isActive: !revoked });
   }
 
-  /** Điều phối chuyển tuyến khi phản ánh bị gửi nhầm Phường/Xã sang đúng ĐVHC trong 95 Phường/Xã. */
   async transferWard(u: UserRecord, id: string, toWardCode: string, note: string): Promise<ClientReport> {
     const r = await this.load(u, id);
     const targetWard = WARD_BY_CODE[toWardCode];
@@ -299,18 +572,47 @@ export class StaffService {
     await this.audit.log(this.actor(u), 'report.export', scope, null, { month, format, rows: rows.length });
     const name = `bao-cao-${scope.replace(':', '-')}-${month}`;
     if (format === 'json') {
-      return { body: JSON.stringify({ scope, month, stats: computeStats(rows, scope), reports: rows.map(({ photos, afterPhoto, ...rest }) => { void photos; void afterPhoto; return rest; }) }, null, 2), contentType: 'application/json; charset=utf-8', filename: `${name}.json` };
+      return {
+        body: JSON.stringify(
+          {
+            scope,
+            month,
+            stats: computeStats(rows, scope),
+            reports: rows.map(({ photos, afterPhoto, ...rest }) => {
+              void photos;
+              void afterPhoto;
+              return rest;
+            }),
+          },
+          null,
+          2,
+        ),
+        contentType: 'application/json; charset=utf-8',
+        filename: `${name}.json`,
+      };
     }
     const head = ['Mã hồ sơ', 'Nhóm sự cố', 'Tiêu đề', 'Xã/Phường', 'Trạng thái', 'Ưu tiên', 'Ngày tạo', 'Ngày hoàn thành', 'Số ngày xử lý', 'Bộ phận', 'Số người cùng báo', 'Xác nhận'];
-    const lines = rows.map((r) => [
-      r.code, r.category, r.title, WARD_BY_CODE[r.wardCode]?.name ?? r.wardCode, r.status, r.priority, r.createdAt, r.resolvedAt ?? '',
-      r.resolvedAt ? Math.round(((Date.parse(r.resolvedAt) - Date.parse(r.createdAt)) / 86400000) * 10) / 10 : '',
-      r.department ?? '', r.clusterCount, r.confirmCount,
-    ].map(csvCell).join(','));
+    const lines = rows.map((r) =>
+      [
+        r.code,
+        r.category,
+        r.title,
+        WARD_BY_CODE[r.wardCode]?.name ?? r.wardCode,
+        r.status,
+        r.priority,
+        r.createdAt,
+        r.resolvedAt ?? '',
+        r.resolvedAt ? Math.round(((Date.parse(r.resolvedAt) - Date.parse(r.createdAt)) / 86400000) * 10) / 10 : '',
+        r.department ?? '',
+        r.clusterCount,
+        r.confirmCount,
+      ]
+        .map(csvCell)
+        .join(','),
+    );
     return { body: `\uFEFF${[head.map(csvCell).join(','), ...lines].join('\r\n')}`, contentType: 'text/csv; charset=utf-8', filename: `${name}.csv` };
   }
 
-  // ── Tình nguyện viên ───────────────────────────────────────────────────────
   async volunteerTasks(u: UserRecord): Promise<ClientReport[]> {
     const ward = u.wardCode ? WARD_BY_CODE[u.wardCode] : null;
     const wards = ward ? [ward.wardCode, ...ward.adjacentWardCodes] : undefined;
@@ -324,7 +626,9 @@ export class StaffService {
   async acceptTask(u: UserRecord, id: string): Promise<ClientReport> {
     const r = await this.repos.reports.get(id);
     if (!r || !r.needsFieldVerification) throw notFound('Nhiệm vụ không tồn tại.');
-    if (r.assignedVolunteerId && r.assignedVolunteerId !== u.id) throw badRequest('Nhiệm vụ đã có tình nguyện viên khác tiếp nhận.', 'task_taken');
+    if (r.assignedVolunteerId && r.assignedVolunteerId !== u.id) {
+      throw badRequest('Nhiệm vụ đã có tình nguyện viên khác tiếp nhận.', 'task_taken');
+    }
     const before = { assignedVolunteerId: r.assignedVolunteerId };
     r.assignedVolunteerId = u.id;
     r.updatedAt = new Date().toISOString();
@@ -341,7 +645,11 @@ export class StaffService {
     const before = snap(r);
     const now = new Date().toISOString();
     r.verification = {
-      verdict, note, volunteerId: u.id, volunteerName: u.name, at: now,
+      verdict,
+      note,
+      volunteerId: u.id,
+      volunteerName: u.name,
+      at: now,
       photo: photo ? { id: newId('ph'), url: photo.dataUrl, dHash: photo.dHash, kind: 'verify', takenBy: u.id, createdAt: now } : null,
     };
     r.needsFieldVerification = false;
@@ -386,16 +694,20 @@ export class StaffService {
     wards: Array<{ wardCode: string; name: string; hours: number; points: number; members: number }>;
   }> {
     const vols = await this.repos.users.list('volunteer');
-    const volunteers = vols.map((v) => ({ name: v.name, wardCode: v.wardCode, unitCode: v.unitCode, hours: v.volunteerHours, points: v.points }))
+    const volunteers = vols
+      .map((v) => ({ name: v.name, wardCode: v.wardCode, unitCode: v.unitCode, hours: v.volunteerHours, points: v.points }))
       .sort((a, b) => b.points - a.points);
     const byWard = new Map<string, { hours: number; points: number; members: number }>();
     for (const v of vols) {
       if (!v.wardCode) continue;
       const e = byWard.get(v.wardCode) ?? { hours: 0, points: 0, members: 0 };
-      e.hours += v.volunteerHours; e.points += v.points; e.members += 1;
+      e.hours += v.volunteerHours;
+      e.points += v.points;
+      e.members += 1;
       byWard.set(v.wardCode, e);
     }
-    const wards = [...byWard.entries()].map(([wardCode, e]) => ({ wardCode, name: WARD_BY_CODE[wardCode]?.name ?? wardCode, ...e }))
+    const wards = [...byWard.entries()]
+      .map(([wardCode, e]) => ({ wardCode, name: WARD_BY_CODE[wardCode]?.name ?? wardCode, ...e }))
       .sort((a, b) => b.points - a.points);
     return { volunteers, wards };
   }

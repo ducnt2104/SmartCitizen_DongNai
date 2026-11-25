@@ -1,9 +1,13 @@
+import { env } from '../config/env';
 import type { Repositories } from '../repositories/types';
 import { AuditService } from './audit.service';
 import { AuthService } from './auth.service';
 import { ChatService } from './chat.service';
+import { CvEngineService } from './cvEngine.service';
 import { GeminiService } from './gemini.service';
 import { GeoService } from './geo.service';
+import { KeyPoolManager } from './keyPool';
+import { LocalRagService } from './localRag.service';
 import { OtpDeliveryService } from './otpDelivery.service';
 import { ReportService } from './report.service';
 import { StaffService } from './staff.service';
@@ -15,6 +19,9 @@ export interface Services {
   trust: TrustService;
   otpDelivery: OtpDeliveryService;
   geo: GeoService;
+  keyPool: KeyPoolManager;
+  cvEngine: CvEngineService;
+  rag: LocalRagService;
   auth: AuthService;
   gemini: GeminiService;
   reports: ReportService;
@@ -25,7 +32,15 @@ export interface Services {
 export function createServices(repos: Repositories): Services {
   const audit = new AuditService(repos.audit);
   const trust = new TrustService(repos.users);
+  const keyPool = new KeyPoolManager({
+    dataDir: process.env.DATA_DIR ? process.env.DATA_DIR : env.dataDir,
+    encryptionSecret: process.env.KEY_ENCRYPTION_SECRET || env.jwtSecret,
+    defaultGeminiModel: env.geminiModel,
+  });
+  const cvEngine = new CvEngineService(repos);
+  const rag = new LocalRagService();
   const gemini = new GeminiService();
+  gemini.attachLocalEngines(cvEngine, rag);
   const otpDelivery = new OtpDeliveryService();
   const geo = new GeoService();
   return {
@@ -34,10 +49,13 @@ export function createServices(repos: Repositories): Services {
     trust,
     otpDelivery,
     geo,
+    keyPool,
+    cvEngine,
+    rag,
     gemini,
     auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit),
-    reports: new ReportService(repos, gemini, trust, audit),
+    reports: new ReportService(repos, gemini, trust, audit, cvEngine),
     staff: new StaffService(repos, gemini, trust, audit),
-    chat: new ChatService(repos),
+    chat: new ChatService(repos, rag),
   };
 }

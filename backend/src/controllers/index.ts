@@ -4,6 +4,7 @@ import { toClientReport } from '../shared/report';
 import type { ReportStatus } from '../shared/types';
 import { clearAuthCookies, readCookie, REFRESH_COOKIE, setAuthCookies } from '../middleware/auth';
 import type { BoundingBoxQuery } from '../repositories/types';
+import { isAdminRole } from '../services/access';
 import type { Services } from '../services/container';
 import { toProfile } from '../services/trust.service';
 import { sha256 } from '../utils/crypto';
@@ -264,7 +265,7 @@ export function adminController(s: Services) {
     audit: async (req: Request, res: Response) => {
       const limit = Math.min(Number(req.query.limit) || 200, 1000);
       const rows = await s.staff.auditList(limit);
-      res.json(req.user!.role === 'city_admin' ? rows : rows.filter((e) => e.actorId === req.user!.id));
+      res.json(isAdminRole(req.user) ? rows : rows.filter((e) => e.actorId === req.user!.id));
     },
     auditVerify: async (_req: Request, res: Response) => {
       res.json(await s.audit.verifyChain());
@@ -280,6 +281,62 @@ export function adminController(s: Services) {
       const b = body(req, 'revokeStaff');
       res.json(await s.staff.setStaffRevoked(req.user!, String(req.params.id), b.revoked));
     },
+    // Super Admin & Admin User CRUD + AI Config
+    listUsers: async (req: Request, res: Response) => {
+      const role = typeof req.query.role === 'string' && req.query.role ? req.query.role : undefined;
+      const wardCode = typeof req.query.wardCode === 'string' && req.query.wardCode ? req.query.wardCode : undefined;
+      const isActive =
+        req.query.isActive === 'true' ? true : req.query.isActive === 'false' ? false : undefined;
+      const q = typeof req.query.q === 'string' ? req.query.q : undefined;
+      res.json(await s.staff.listUsers(req.user!, { role, wardCode, isActive, q }));
+    },
+    createUser: async (req: Request, res: Response) => {
+      const b = body(req, 'adminCreateUser');
+      res.status(201).json(await s.staff.createUser(req.user!, b));
+    },
+    updateUser: async (req: Request, res: Response) => {
+      const b = body(req, 'adminUpdateUser');
+      res.json(await s.staff.updateUser(req.user!, String(req.params.id), b));
+    },
+    resetUserPassword: async (req: Request, res: Response) => {
+      const b = body(req, 'adminResetPassword');
+      res.json(await s.staff.resetUserPassword(req.user!, String(req.params.id), b.newPassword));
+    },
+    deleteUser: async (req: Request, res: Response) => {
+      res.json(await s.staff.deleteUser(req.user!, String(req.params.id)));
+    },
+    getAiConfig: async (_req: Request, res: Response) => {
+      const [config, cv, llm, dbStats, recentEvaluations] = await Promise.all([
+        s.cvEngine.getConfig(),
+        s.cvEngine.health(),
+        s.gemini.checkLocalLlmHealth(),
+        s.repos.healthStats(),
+        s.repos.evaluations.recent(25),
+      ]);
+      res.json({
+        config,
+        engines: {
+          cvEngine: cv,
+          localLlm: llm,
+          ragDocs: s.rag.documentCount,
+          db: { mode: s.repos.mode, ...dbStats },
+        },
+        recentEvaluations,
+      });
+    },
+    updateAiConfig: async (req: Request, res: Response) => {
+      const b = body(req, 'adminUpdateAiConfig');
+      const prev = await s.cvEngine.getConfig();
+      const next = await s.cvEngine.updateConfig(b, req.user!.id);
+      await s.audit.log(
+        { id: req.user!.id, name: req.user!.name, role: req.user!.role },
+        'admin.ai_config_update',
+        'ai_config',
+        prev,
+        next,
+      );
+      res.json(next);
+    },
     export: async (req: Request, res: Response) => {
       const format = req.query.format === 'json' ? 'json' : 'csv';
       const month = typeof req.query.month === 'string' ? req.query.month : '2026-11';
@@ -292,19 +349,37 @@ export function adminController(s: Services) {
 export function metaController(s: Services, bootInfo: { fallbackReason: string | null }) {
   return {
     health: async (_req: Request, res: Response) => {
-      const dbOk = await s.repos.ping().catch(() => false);
+      const [dbStats, cv, llm] = await Promise.all([
+        s.repos.healthStats(),
+        s.cvEngine.health(),
+        s.gemini.checkLocalLlmHealth(),
+      ]);
       const ai = s.gemini.status;
       const otp = s.otpDelivery.status;
+      const aiMode = llm.online
+        ? 'ollama'
+        : ai.configured && !ai.circuitOpen
+          ? 'gemini'
+          : 'fallback';
       const body = {
-        status: dbOk ? (ai.configured && !ai.circuitOpen ? 'ok' : 'degraded') : 'down',
+        status: dbStats.ok ? (cv.online || llm.online || (ai.configured && !ai.circuitOpen) ? 'ok' : 'degraded') : 'down',
         time: new Date().toISOString(),
         uptimeSec: Math.round(process.uptime()),
-        db: { mode: s.repos.mode, ok: dbOk, note: bootInfo.fallbackReason },
-        ai: { ...ai, mode: ai.configured && !ai.circuitOpen ? 'gemini' : 'fallback' },
+        db: {
+          mode: s.repos.mode,
+          ok: dbStats.ok,
+          latencyMs: dbStats.latencyMs,
+          counts: dbStats.counts,
+          note: bootInfo.fallbackReason,
+        },
+        cvEngine: cv,
+        localLlm: llm,
+        rag: { indexedDocuments: s.rag.documentCount },
+        ai: { ...ai, mode: aiMode },
         otp,
         wardsCount: DONG_NAI_WARDS.length,
       };
-      res.status(dbOk ? 200 : 503).json(body);
+      res.status(dbStats.ok ? 200 : 503).json(body);
     },
   };
 }
