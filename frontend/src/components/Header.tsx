@@ -1,6 +1,6 @@
-import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
+import { CircleHelp, ClipboardList, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { normalizeRole } from '@shared/constants';
 import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
 import { useStats } from '../db/hooks';
@@ -108,6 +108,9 @@ function UserMenu() {
             <p className="text-xs text-muted">{t(`role.${role}`)} · {t('auth.trust')}: <span className="mono">{u.trustScore}</span></p>
             {u.supervised && <p className="mt-1 text-xs font-semibold text-danger">{t('auth.supervised')}</p>}
           </div>
+          <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/mine'); }}>
+            <ClipboardList className="h-4 w-4 text-brand" aria-hidden /> Hồ sơ của tôi
+          </button>
           <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/profile'); }}>
             <UserCog className="h-4 w-4" aria-hidden /> {t('nav.profile')}
           </button>
@@ -147,26 +150,38 @@ export function Header({ showScope = true }: { showScope?: boolean }) {
   const { t } = useI18n();
   const { settings, toggleSenior, setDrawerOpen, setTourOpen } = useSettings();
   const nav = useNavigate();
+  const { pathname } = useLocation();
+  const isMine = pathname === '/mine';
   const scaleLabel = settings.fontScale === 150 ? 'Rất lớn' : settings.senior || settings.fontScale === 125 ? 'Lớn' : 'Tiêu chuẩn';
   return (
     <header className="sticky top-0 z-40 border-b border-line/80 bg-surface/95 shadow-[0_1px_12px_rgb(15_23_42/0.04)] backdrop-blur-xl">
       <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 py-2">
-        <div className="flex w-full items-center justify-between gap-2">
+        <div className="flex w-full items-center justify-between gap-1.5 sm:gap-2">
           <Link to="/" className="min-w-0 shrink overflow-hidden" aria-label={t('nav.home')}>
             <Logo />
           </Link>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            <Link
+              to="/mine"
+              aria-current={isMine ? 'page' : undefined}
+              aria-label="Hồ sơ của tôi"
+              title="Tra cứu & theo dõi hồ sơ của tôi"
+              className={`btn !min-h-11 !min-w-11 !px-2 text-xs font-bold sm:!px-3 sm:text-sm ${isMine ? 'btn-primary' : 'btn-soft'}`}
+            >
+              <ClipboardList className="h-4 w-4 shrink-0" aria-hidden />
+              <span>Hồ sơ</span>
+            </Link>
             <button
               type="button"
               data-tour="senior"
               aria-pressed={settings.senior}
               onClick={toggleSenior}
               aria-label={`Đổi cỡ chữ (đang chọn: ${scaleLabel})`}
-              className={`btn !min-h-11 !min-w-11 !px-3 !text-xs sm:!text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
+              className={`btn !min-h-11 !min-w-11 !px-2.5 !text-xs sm:!px-3 sm:!text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
               title="Bấm để đổi cỡ chữ: Tiêu chuẩn → Lớn → Rất lớn"
             >
               <span className="font-extrabold">Aa+</span>
-              <span className="text-[11px] font-bold sm:text-xs">{scaleLabel}</span>
+              <span className="hidden text-[11px] font-bold sm:inline sm:text-xs">{scaleLabel}</span>
             </button>
             <button type="button" className="btn btn-ghost !min-h-11 !min-w-11 !px-2.5" onClick={() => { nav('/'); setTourOpen(true); }} aria-label={t('tour.open')} title={t('tour.open')}>
               <CircleHelp className="h-5 w-5" aria-hidden /> <span className="hidden text-sm md:inline">{t('tour.open')}</span>
