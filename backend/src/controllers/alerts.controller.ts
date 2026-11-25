@@ -4,6 +4,7 @@ import { env } from '../config/env';
 import { extractClientMeta } from '../middleware/auth';
 import type { Services } from '../services/container';
 import type { AlertCategory, AlertSeverity } from '../shared/types';
+import { safeFetchOfficial } from '../services/ssrfGuard';
 import { safeEqualHex, sha256 } from '../utils/crypto';
 import { badRequest, unauthorized } from '../utils/errors';
 import type { schemas } from '../validation/schemas';
@@ -83,12 +84,52 @@ export function alertsController(s: Services) {
         120_000,
         'public, max-age=60, stale-while-revalidate=120',
         async () => {
-          const items = await s.alerts.getLatestWeatherSnapshots();
+          let items = await s.alerts.getLatestWeatherSnapshots();
+          const newestMs = items[0]?.fetchedAt ? new Date(items[0].fetchedAt).getTime() : 0;
+          if (items.length === 0 || !Number.isFinite(newestMs) || Date.now() - newestMs > 20 * 60_000) {
+            try {
+              const synced = await s.aggregator.syncWeatherSnapshots();
+              if (synced.snapshots.length > 0) {
+                items = synced.snapshots;
+              }
+            } catch {
+              // Giữ snapshot gần nhất nếu mạng ngoài tạm gián đoạn
+            }
+          }
           return {
             items,
-            lastSyncAt: s.aggregator.status.lastSyncSummary?.finishedAt ?? items[0]?.fetchedAt ?? null,
-            source: 'Open-Meteo API (Miễn phí)',
+            lastSyncAt: items[0]?.fetchedAt ?? s.aggregator.status.lastSyncSummary?.finishedAt ?? null,
+            source: 'Open-Meteo API',
           };
+        },
+      );
+    },
+
+    forecastByCoords: async (req: Request, res: Response) => {
+      const lat = Number(req.query.lat);
+      const lng = Number(req.query.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        throw badRequest('Tọa độ lat/lng không hợp lệ.');
+      }
+      const key = `weather:fc:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+      await sendAlertCached(
+        req,
+        res,
+        key,
+        300_000,
+        'public, max-age=180, stale-while-revalidate=300',
+        async () => {
+          const url =
+            `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
+            '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,surface_pressure' +
+            '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,weather_code,uv_index,is_day' +
+            '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max,sunrise,sunset' +
+            '&timezone=auto&forecast_days=7';
+          const upstream = await safeFetchOfficial(url, { timeoutMs: 8000 });
+          if (!upstream.ok) {
+            throw badRequest(`Open-Meteo trả về HTTP ${upstream.status}`);
+          }
+          return upstream.json();
         },
       );
     },

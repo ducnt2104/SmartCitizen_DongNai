@@ -50,6 +50,7 @@ export function buildRouter(
   api.get('/wards', limits.publicRead, h(r.wards));
   api.get('/wards/:wardId/overview', limits.publicRead, auth.optional, h(al.wardOverview));
   api.get('/weather', limits.publicRead, h(al.listWeather));
+  api.get('/weather/forecast', limits.publicRead, h(al.forecastByCoords));
   api.get('/bulletins', limits.publicRead, h(al.listBulletins));
   api.get('/alerts', limits.publicRead, h(al.listAlerts));
   api.get('/alerts/route-check', limits.publicRead, h(al.routeCheck));

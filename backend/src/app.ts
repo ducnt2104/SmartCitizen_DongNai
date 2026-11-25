@@ -135,6 +135,8 @@ export function createApp(
             'https://tiles.openfreemap.org',
             'https://*.openfreemap.org',
             'https://router.project-osrm.org',
+            'https://api.open-meteo.com',
+            'https://geocoding-api.open-meteo.com',
           ],
           'worker-src': ["'self'", 'blob:'],
           'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],

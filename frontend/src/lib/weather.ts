@@ -1,4 +1,6 @@
-﻿export type WeatherKind = 'sun' | 'partlyCloudy' | 'cloud' | 'rain' | 'heavyRain' | 'storm';
+﻿import { api } from './api';
+
+export type WeatherKind = 'sun' | 'partlyCloudy' | 'cloud' | 'rain' | 'heavyRain' | 'storm';
 
 export interface HourlyPoint {
   timeIso: string;
@@ -6,6 +8,7 @@ export interface HourlyPoint {
   temp: number;
   rainProb: number;
   rainMm: number;
+  isDay: boolean;
   kind: WeatherKind;
 }
 
@@ -23,15 +26,19 @@ export interface DailyPoint {
 }
 
 export interface DongNaiWeather {
-  source: 'live' | 'fallback';
+  source: 'live';
   providerLabel: string;
   fetchedAt: string;
+  observedAt: string;
+  timezone: string;
   lat: number;
   lng: number;
   temp: number;
   feelsLike: number;
   humidity: number;
   windSpeed: number;
+  windGusts: number;
+  pressureHpa: number;
   rainNow: number;
   rainProbNow: number;
   cloudCover: number;
@@ -42,15 +49,33 @@ export interface DongNaiWeather {
   conditionEn: string;
   tempHigh: number;
   tempLow: number;
+  sunrise: string;
+  sunset: string;
   hourly: HourlyPoint[];
   daily: DailyPoint[];
 }
 
-function mapWmoCode(code: number): { kind: WeatherKind; vi: string; en: string } {
-  if (code === 0) return { kind: 'sun', vi: 'Trời quang, nắng ráo', en: 'Clear & sunny' };
-  if (code <= 2) return { kind: 'partlyCloudy', vi: 'Ít mây, nắng nhẹ', en: 'Partly cloudy' };
-  if (code === 3 || code === 45 || code === 48) return { kind: 'cloud', vi: 'Nhiều mây, âm u', en: 'Cloudy & overcast' };
-  if ((code >= 51 && code <= 63) || (code >= 80 && code <= 81)) {
+function mapWmoCode(code: number, isDay = true): { kind: WeatherKind; vi: string; en: string } {
+  if (code === 0) {
+    return {
+      kind: 'sun',
+      vi: isDay ? 'Trời quang, nắng ráo' : 'Trời quang, ít mây',
+      en: isDay ? 'Clear & sunny' : 'Clear night',
+    };
+  }
+  if (code <= 2) {
+    return {
+      kind: 'partlyCloudy',
+      vi: isDay ? 'Ít mây, nắng nhẹ' : 'Ít mây',
+      en: 'Partly cloudy',
+    };
+  }
+  if (code === 3) return { kind: 'cloud', vi: 'Nhiều mây, âm u', en: 'Overcast' };
+  if (code === 45 || code === 48) return { kind: 'cloud', vi: 'Có sương mù nhẹ', en: 'Foggy' };
+  if ((code >= 51 && code <= 57)) {
+    return { kind: 'rain', vi: 'Mưa phùn nhẹ', en: 'Light drizzle' };
+  }
+  if ((code >= 61 && code <= 63) || (code >= 80 && code <= 81)) {
     return { kind: 'rain', vi: 'Có mưa rào rải rác', en: 'Scattered showers' };
   }
   if (code === 65 || code === 67 || code === 82) {
@@ -59,107 +84,55 @@ function mapWmoCode(code: number): { kind: WeatherKind; vi: string; en: string }
   if (code >= 95) {
     return { kind: 'storm', vi: 'Mưa dông, có khả năng gió giật', en: 'Thunderstorm & gusty winds' };
   }
-  return { kind: 'partlyCloudy', vi: 'Mây thay đổi', en: 'Variable clouds' };
+  return { kind: 'partlyCloudy', vi: 'Mây thay đổi', en: 'Partly cloudy' };
 }
 
-function formatHour(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(11, 16);
-  return `${String(d.getHours()).padStart(2, '0')}:00`;
+function formatHourLabel(isoLocal: string): string {
+  const m = /T(\d{2}:\d{2})/.exec(isoLocal);
+  return m ? m[1] : isoLocal.slice(11, 16);
 }
 
-function formatDay(iso: string, idx: number, lang: 'vi' | 'en'): string {
+function formatDayLabel(isoDate: string, idx: number, lang: 'vi' | 'en'): string {
   if (idx === 0) return lang === 'vi' ? 'Hôm nay' : 'Today';
-  const d = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(lang === 'vi' ? 'vi-VN' : 'en-US', { weekday: 'short', day: '2-digit', month: '2-digit' });
-}
-
-export function buildFallbackWeather(lat: number, lng: number, lang: 'vi' | 'en'): DongNaiWeather {
-  const now = new Date();
-  const baseHour = now.getHours();
-  const hourly: HourlyPoint[] = Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(now.getTime() + i * 3600_000);
-    const h = d.getHours();
-    const isAfternoon = h >= 13 && h <= 18;
-    return {
-      timeIso: d.toISOString(),
-      hourLabel: i === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : `${String(h).padStart(2, '0')}:00`,
-      temp: isAfternoon ? 32 - Math.abs(h - 15) : h >= 6 && h < 13 ? 27 + Math.round((h - 6) * 0.8) : 25,
-      rainProb: isAfternoon ? 65 : h >= 19 && h <= 22 ? 40 : 20,
-      rainMm: isAfternoon ? 3.2 : 0.4,
-      kind: isAfternoon ? 'rain' : h >= 6 && h <= 17 ? 'partlyCloudy' : 'cloud',
-    };
+  if (idx === 1) return lang === 'vi' ? 'Ngày mai' : 'Tomorrow';
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return isoDate;
+  return d.toLocaleDateString(lang === 'vi' ? 'vi-VN' : 'en-US', {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    timeZone: 'UTC',
   });
-
-  const daily: DailyPoint[] = [
-    { tempMin: 24, tempMax: 33, rainProbMax: 65, rainSum: 8.4, uvMax: 8, code: 80 },
-    { tempMin: 24, tempMax: 32, rainProbMax: 75, rainSum: 14.2, uvMax: 7, code: 63 },
-    { tempMin: 23, tempMax: 31, rainProbMax: 80, rainSum: 22.5, uvMax: 6, code: 95 },
-    { tempMin: 24, tempMax: 33, rainProbMax: 45, rainSum: 3.1, uvMax: 9, code: 2 },
-    { tempMin: 25, tempMax: 34, rainProbMax: 30, rainSum: 1.0, uvMax: 9, code: 1 },
-  ].map((row, idx) => {
-    const d = new Date(now.getTime() + idx * 86400_000);
-    const dateIso = d.toISOString().slice(0, 10);
-    const mapped = mapWmoCode(row.code);
-    return {
-      dateIso,
-      dayLabel: formatDay(dateIso, idx, lang),
-      tempMin: row.tempMin,
-      tempMax: row.tempMax,
-      rainProbMax: row.rainProbMax,
-      rainSum: row.rainSum,
-      uvMax: row.uvMax,
-      kind: mapped.kind,
-      summaryVi: mapped.vi,
-      summaryEn: mapped.en,
-    };
-  });
-
-  const isDay = baseHour >= 6 && baseHour < 18;
-  return {
-    source: 'fallback',
-    providerLabel: lang === 'vi' ? 'Dữ liệu dự phòng ngoại tuyến' : 'Offline fallback',
-    fetchedAt: now.toISOString(),
-    lat,
-    lng,
-    temp: hourly[0].temp,
-    feelsLike: hourly[0].temp + 3,
-    humidity: 78,
-    windSpeed: 14,
-    rainNow: 0.8,
-    rainProbNow: hourly[0].rainProb,
-    cloudCover: 62,
-    uvIndex: isDay ? 7 : 0,
-    isDay,
-    kind: hourly[0].kind,
-    conditionVi: 'Mây thay đổi, chiều tối có mưa rào',
-    conditionEn: 'Partly cloudy with evening showers',
-    tempHigh: 33,
-    tempLow: 24,
-    hourly,
-    daily,
-  };
 }
 
 interface OpenMeteoPayload {
+  latitude?: number;
+  longitude?: number;
+  timezone?: string;
+  utc_offset_seconds?: number;
   current?: {
+    time?: string;
     temperature_2m?: number;
     relative_humidity_2m?: number;
     apparent_temperature?: number;
     is_day?: number;
     precipitation?: number;
+    rain?: number;
     weather_code?: number;
     cloud_cover?: number;
     wind_speed_10m?: number;
+    wind_gusts_10m?: number;
+    surface_pressure?: number;
   };
   hourly?: {
     time?: string[];
     temperature_2m?: number[];
+    relative_humidity_2m?: number[];
     precipitation_probability?: number[];
     precipitation?: number[];
     weather_code?: number[];
     uv_index?: number[];
+    is_day?: number[];
   };
   daily?: {
     time?: string[];
@@ -169,155 +142,135 @@ interface OpenMeteoPayload {
     precipitation_sum?: number[];
     precipitation_probability_max?: number[];
     uv_index_max?: number[];
-  };
-}
-
-interface MetNoPayload {
-  properties?: {
-    timeseries?: Array<{
-      data?: {
-        instant?: {
-          details?: {
-            air_temperature?: number;
-            relative_humidity?: number;
-            wind_speed?: number;
-            cloud_area_fraction?: number;
-          };
-        };
-      };
-    }>;
+    sunrise?: string[];
+    sunset?: string[];
   };
 }
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
-async function fetchMetNoCurrent(lat: number, lng: number, signal: AbortSignal): Promise<{
-  temp?: number;
-  humidity?: number;
-  windKmh?: number;
-  clouds?: number;
-} | null> {
+async function fetchOpenMeteoPayload(
+  lat: number,
+  lng: number,
+  signal?: AbortSignal,
+): Promise<{ payload: OpenMeteoPayload; via: 'direct' | 'proxy' }> {
+  const directUrl =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
+    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m,surface_pressure' +
+    '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,weather_code,uv_index,is_day' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max,sunrise,sunset' +
+    '&timezone=auto&forecast_days=7';
+
   try {
-    const res = await fetch(
-      `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}`,
-      { signal, cache: 'no-store' },
+    const res = await fetch(directUrl, { signal, cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = (await res.json()) as OpenMeteoPayload;
+    if (payload?.current && payload?.hourly?.time?.length && payload?.daily?.time?.length) {
+      return { payload, via: 'direct' };
+    }
+    throw new Error('Incomplete Open-Meteo payload');
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    const proxyPayload = await api<OpenMeteoPayload>(
+      `/api/weather/forecast?lat=${encodeURIComponent(lat.toFixed(5))}&lng=${encodeURIComponent(lng.toFixed(5))}`,
+      { signal, timeoutMs: 8000 },
     );
-    if (!res.ok) return null;
-    const json = (await res.json()) as MetNoPayload;
-    const det = json.properties?.timeseries?.[0]?.data?.instant?.details;
-    if (!det || typeof det.air_temperature !== 'number') return null;
-    return {
-      temp: det.air_temperature,
-      humidity: det.relative_humidity,
-      windKmh: typeof det.wind_speed === 'number' ? det.wind_speed * 3.6 : undefined,
-      clouds: det.cloud_area_fraction,
-    };
-  } catch {
-    return null;
+    if (!proxyPayload?.current || !proxyPayload?.hourly?.time?.length || !proxyPayload?.daily?.time?.length) {
+      throw new Error('Weather forecast unavailable');
+    }
+    return { payload: proxyPayload, via: 'proxy' };
   }
 }
 
-export async function fetchDongNaiWeather(lat: number, lng: number, lang: 'vi' | 'en'): Promise<DongNaiWeather> {
-  const url =
-    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
-    '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,cloud_cover,wind_speed_10m' +
-    '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,uv_index' +
-    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max' +
-    '&timezone=Asia%2FHo_Chi_Minh&forecast_days=5';
-
+export async function fetchDongNaiWeather(
+  lat: number,
+  lng: number,
+  lang: 'vi' | 'en',
+  signal?: AbortSignal,
+): Promise<DongNaiWeather> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 7000);
+  const onParentAbort = () => ctrl.abort();
+  signal?.addEventListener('abort', onParentAbort);
+  const timer = setTimeout(() => ctrl.abort(), 10_000);
+
   try {
-    const [omResult, metResult] = await Promise.allSettled([
-      fetch(url, { signal: ctrl.signal, cache: 'no-store' }).then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return (await res.json()) as OpenMeteoPayload;
-      }),
-      fetchMetNoCurrent(lat, lng, ctrl.signal),
-    ]);
+    const { payload: data, via } = await fetchOpenMeteoPayload(lat, lng, ctrl.signal);
+    const cur = data.current!;
+    const h = data.hourly!;
+    const d = data.daily!;
 
-    if (omResult.status !== 'fulfilled') throw new Error('Open-Meteo unavailable');
-    const data = omResult.value;
-    const met = metResult.status === 'fulfilled' ? metResult.value : null;
-
-    const cur = data.current;
-    const h = data.hourly;
-    const d = data.daily;
-    if (!cur || !h?.time?.length || !d?.time?.length) throw new Error('Incomplete weather payload');
-
-    const nowMs = Date.now();
-    let startIdx = h.time.findIndex((t) => new Date(t).getTime() >= nowMs - 1800_000);
+    // Khớp đúng giờ địa phương tại tọa độ đang xem dựa theo `current.time` của Open-Meteo (không lệch múi giờ)
+    const curHourPrefix = typeof cur.time === 'string' ? cur.time.slice(0, 13) : '';
+    let startIdx = curHourPrefix ? h.time!.findIndex((t) => t.slice(0, 13) >= curHourPrefix) : 0;
     if (startIdx < 0) startIdx = 0;
 
-    const hourly: HourlyPoint[] = h.time.slice(startIdx, startIdx + 12).map((t, idx) => {
+    const hourly: HourlyPoint[] = h.time!.slice(startIdx, startIdx + 24).map((t, idx) => {
       const i = startIdx + idx;
-      const mapped = mapWmoCode(h.weather_code?.[i] ?? 2);
+      const pointIsDay = (h.is_day?.[i] ?? (idx === 0 ? cur.is_day : 1) ?? 1) === 1;
+      const mapped = mapWmoCode(h.weather_code?.[i] ?? cur.weather_code ?? 0, pointIsDay);
       return {
         timeIso: t,
-        hourLabel: idx === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : formatHour(t),
-        temp: round1(h.temperature_2m?.[i] ?? cur.temperature_2m ?? 30),
+        hourLabel: idx === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : formatHourLabel(t),
+        temp: round1(h.temperature_2m?.[i] ?? cur.temperature_2m ?? 0),
         rainProb: Math.round(h.precipitation_probability?.[i] ?? 0),
         rainMm: round1(h.precipitation?.[i] ?? 0),
+        isDay: pointIsDay,
         kind: mapped.kind,
       };
     });
 
-    const daily: DailyPoint[] = d.time.slice(0, 5).map((dateIso, idx) => {
-      const mapped = mapWmoCode(d.weather_code?.[idx] ?? 2);
+    const daily: DailyPoint[] = d.time!.slice(0, 7).map((dateIso, idx) => {
+      const mapped = mapWmoCode(d.weather_code?.[idx] ?? 0, true);
       return {
         dateIso,
-        dayLabel: formatDay(dateIso, idx, lang),
-        tempMin: round1(d.temperature_2m_min?.[idx] ?? 24),
-        tempMax: round1(d.temperature_2m_max?.[idx] ?? 33),
+        dayLabel: formatDayLabel(dateIso, idx, lang),
+        tempMin: round1(d.temperature_2m_min?.[idx] ?? 0),
+        tempMax: round1(d.temperature_2m_max?.[idx] ?? 0),
         rainProbMax: Math.round(d.precipitation_probability_max?.[idx] ?? 0),
         rainSum: round1(d.precipitation_sum?.[idx] ?? 0),
-        uvMax: Math.round(d.uv_index_max?.[idx] ?? 7),
+        uvMax: Math.round(d.uv_index_max?.[idx] ?? 0),
         kind: mapped.kind,
         summaryVi: mapped.vi,
         summaryEn: mapped.en,
       };
     });
 
-    const curMapped = mapWmoCode(cur.weather_code ?? 2);
-    const uvNow = Math.round(h.uv_index?.[startIdx] ?? daily[0]?.uvMax ?? 5);
-
-    const omTemp = cur.temperature_2m ?? 30;
-    const blendedTemp = met?.temp !== undefined ? round1((omTemp + met.temp) / 2) : round1(omTemp);
-    const blendedHumidity =
-      met?.humidity !== undefined && cur.relative_humidity_2m !== undefined
-        ? Math.round((cur.relative_humidity_2m + met.humidity) / 2)
-        : Math.round(cur.relative_humidity_2m ?? 75);
-    const blendedWind =
-      met?.windKmh !== undefined && cur.wind_speed_10m !== undefined
-        ? Math.round((cur.wind_speed_10m + met.windKmh) / 2)
-        : Math.round(cur.wind_speed_10m ?? 10);
+    const isDay = (cur.is_day ?? 1) === 1;
+    const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
+    const uvNow = round1(h.uv_index?.[startIdx] ?? daily[0]?.uvMax ?? 0);
+    const currentTemp = round1(cur.temperature_2m ?? hourly[0]?.temp ?? 0);
 
     return {
       source: 'live',
-      providerLabel: met?.temp !== undefined ? 'Open-Meteo · Yr.no (MET Norway)' : 'Open-Meteo Trực tiếp',
+      providerLabel: via === 'direct' ? 'Open-Meteo Trực tiếp' : 'Open-Meteo (Máy chủ đồng bộ)',
       fetchedAt: new Date().toISOString(),
-      lat,
-      lng,
-      temp: blendedTemp,
-      feelsLike: round1(cur.apparent_temperature ?? blendedTemp),
-      humidity: blendedHumidity,
-      windSpeed: blendedWind,
-      rainNow: round1(cur.precipitation ?? 0),
+      observedAt: typeof cur.time === 'string' ? cur.time : new Date().toISOString(),
+      timezone: data.timezone ?? 'Asia/Ho_Chi_Minh',
+      lat: data.latitude ?? lat,
+      lng: data.longitude ?? lng,
+      temp: currentTemp,
+      feelsLike: round1(cur.apparent_temperature ?? currentTemp),
+      humidity: Math.round(cur.relative_humidity_2m ?? 0),
+      windSpeed: Math.round(cur.wind_speed_10m ?? 0),
+      windGusts: Math.round(cur.wind_gusts_10m ?? cur.wind_speed_10m ?? 0),
+      pressureHpa: Math.round(cur.surface_pressure ?? 1013),
+      rainNow: round1(cur.precipitation ?? cur.rain ?? 0),
       rainProbNow: hourly[0]?.rainProb ?? 0,
-      cloudCover: Math.round(cur.cloud_cover ?? met?.clouds ?? 45),
-      uvIndex: (cur.is_day ?? 1) ? uvNow : 0,
-      isDay: Boolean(cur.is_day ?? 1),
+      cloudCover: Math.round(cur.cloud_cover ?? 0),
+      uvIndex: isDay ? uvNow : 0,
+      isDay,
       kind: curMapped.kind,
       conditionVi: curMapped.vi,
       conditionEn: curMapped.en,
-      tempHigh: daily[0]?.tempMax ?? 33,
-      tempLow: daily[0]?.tempMin ?? 24,
+      tempHigh: daily[0]?.tempMax ?? currentTemp,
+      tempLow: daily[0]?.tempMin ?? currentTemp,
+      sunrise: d.sunrise?.[0] ? formatHourLabel(d.sunrise[0]) : '--:--',
+      sunset: d.sunset?.[0] ? formatHourLabel(d.sunset[0]) : '--:--',
       hourly,
       daily,
     };
-  } catch {
-    return buildFallbackWeather(lat, lng, lang);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onParentAbort);
   }
 }

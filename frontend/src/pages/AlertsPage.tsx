@@ -8,9 +8,11 @@ import {
   Compass,
   Droplets,
   ExternalLink,
+  Gauge,
   Layers,
   LocateFixed,
   MapPin,
+  Moon,
   Newspaper,
   Pencil,
   Plus,
@@ -20,6 +22,8 @@ import {
   ShieldAlert,
   Sparkles,
   Sun,
+  Sunrise,
+  Sunset,
   Thermometer,
   ThumbsUp,
   Trash2,
@@ -29,6 +33,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeRole } from '@shared/constants';
+import { inDongNaiBBox } from '@shared/geo';
 import type {
   AlertCategory,
   AlertSeverity,
@@ -43,8 +48,8 @@ import { useI18n } from '../i18n';
 import { api } from '../lib/api';
 import { fastFetch } from '../lib/swrCache';
 import { useSession } from '../lib/authStore';
+import { resolvePlaceSuggestion, searchPlacesDongNai, type PlaceSuggestion } from '../lib/geoClient';
 import {
-  buildFallbackWeather,
   fetchDongNaiWeather,
   type DongNaiWeather,
   type WeatherKind,
@@ -53,12 +58,20 @@ import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
 import { Spinner } from '../components/ui';
 
-function WeatherGlyph({ kind, className = 'h-6 w-6' }: { kind: WeatherKind; className?: string }) {
+function WeatherGlyph({ kind, isDay = true, className = 'h-6 w-6' }: { kind: WeatherKind; isDay?: boolean; className?: string }) {
   switch (kind) {
     case 'sun':
-      return <Sun className={`${className} text-amber-300`} aria-hidden />;
+      return isDay ? (
+        <Sun className={`${className} text-amber-300`} aria-hidden />
+      ) : (
+        <Moon className={`${className} text-indigo-200`} aria-hidden />
+      );
     case 'partlyCloudy':
-      return <CloudSun className={`${className} text-amber-200`} aria-hidden />;
+      return isDay ? (
+        <CloudSun className={`${className} text-amber-200`} aria-hidden />
+      ) : (
+        <Moon className={`${className} text-sky-200`} aria-hidden />
+      );
     case 'cloud':
       return <Cloud className={`${className} text-sky-200`} aria-hidden />;
     case 'rain':
@@ -70,12 +83,20 @@ function WeatherGlyph({ kind, className = 'h-6 w-6' }: { kind: WeatherKind; clas
   }
 }
 
-function WeatherGlyphInk({ kind, className = 'h-5 w-5' }: { kind: WeatherKind; className?: string }) {
+function WeatherGlyphInk({ kind, isDay = true, className = 'h-5 w-5' }: { kind: WeatherKind; isDay?: boolean; className?: string }) {
   switch (kind) {
     case 'sun':
-      return <Sun className={`${className} text-amber-500`} aria-hidden />;
+      return isDay ? (
+        <Sun className={`${className} text-amber-500`} aria-hidden />
+      ) : (
+        <Moon className={`${className} text-indigo-500`} aria-hidden />
+      );
     case 'partlyCloudy':
-      return <CloudSun className={`${className} text-amber-500`} aria-hidden />;
+      return isDay ? (
+        <CloudSun className={`${className} text-amber-500`} aria-hidden />
+      ) : (
+        <Moon className={`${className} text-sky-600`} aria-hidden />
+      );
     case 'cloud':
       return <Cloud className={`${className} text-slate-500`} aria-hidden />;
     case 'rain':
@@ -174,21 +195,24 @@ export default function AlertsPage() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const { latitude, longitude, accuracy } = pos.coords;
+          const insideDn = inDongNaiBBox(latitude, longitude);
           let nearest = DONG_NAI_WARDS[0];
-          let bestDist = Infinity;
-          for (const w of DONG_NAI_WARDS) {
-            const d = (w.centerLat - latitude) ** 2 + (w.centerLng - longitude) ** 2;
-            if (d < bestDist) {
-              bestDist = d;
-              nearest = w;
+          if (insideDn) {
+            let bestDist = Infinity;
+            for (const w of DONG_NAI_WARDS) {
+              const d = (w.centerLat - latitude) ** 2 + (w.centerLng - longitude) ** 2;
+              if (d < bestDist) {
+                bestDist = d;
+                nearest = w;
+              }
             }
           }
           const accM = Number.isFinite(accuracy) ? Math.round(accuracy) : undefined;
           setWeatherLoc({
-            label: `Vị trí hiện tại · ${nearest.name}`,
+            label: insideDn ? `Vị trí hiện tại · ${nearest.name}` : 'Vị trí hiện tại (GPS)',
             lat: latitude,
             lng: longitude,
-            wardCode: nearest.wardCode,
+            wardCode: insideDn ? nearest.wardCode : undefined,
             isGps: true,
             accuracyM: accM,
           });
@@ -211,7 +235,7 @@ export default function AlertsPage() {
                 const fullAddr = Array.from(new Set(parts)).join(', ');
                 setWeatherLoc((prev) =>
                   prev.isGps && prev.lat === latitude && prev.lng === longitude
-                    ? { ...prev, detailAddress: fullAddr }
+                    ? { ...prev, label: insideDn ? prev.label : fullAddr, detailAddress: fullAddr }
                     : prev,
                 );
               }
@@ -239,20 +263,74 @@ export default function AlertsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [forecast, setForecast] = useState<DongNaiWeather>(() =>
-    buildFallbackWeather(forecastCoords.lat, forecastCoords.lng, lang),
-  );
+  const [forecast, setForecast] = useState<DongNaiWeather | null>(null);
   const [forecastLoading, setForecastLoading] = useState(true);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+  const [weatherQuery, setWeatherQuery] = useState('');
+  const [weatherSuggestions, setWeatherSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [weatherSearchOpen, setWeatherSearchOpen] = useState(false);
+  const forecastAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const q = weatherQuery.trim();
+    if (!q) {
+      setWeatherSuggestions([]);
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => {
+      void searchPlacesDongNai(q, ctrl.signal).then((items) => {
+        if (!ctrl.signal.aborted) setWeatherSuggestions(items);
+      });
+    }, 220);
+    return () => {
+      ctrl.abort();
+      window.clearTimeout(timer);
+    };
+  }, [weatherQuery]);
+
+  const handlePickWeatherPlace = async (item: PlaceSuggestion): Promise<void> => {
+    setWeatherSearchOpen(false);
+    setWeatherQuery(item.label);
+    const resolved = await resolvePlaceSuggestion(item);
+    if (!resolved) return;
+    setWeatherLoc({
+      label: item.label,
+      detailAddress: item.sublabel ? `${item.label} · ${item.sublabel}` : item.label,
+      lat: resolved.lat,
+      lng: resolved.lng,
+      wardCode: resolved.wardCode,
+    });
+  };
 
   const loadForecast = useCallback(async () => {
+    forecastAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    forecastAbortRef.current = ctrl;
     setForecastLoading(true);
-    const data = await fetchDongNaiWeather(forecastCoords.lat, forecastCoords.lng, lang);
-    setForecast(data);
-    setForecastLoading(false);
+    setForecastError(null);
+    try {
+      const data = await fetchDongNaiWeather(forecastCoords.lat, forecastCoords.lng, lang, ctrl.signal);
+      if (!ctrl.signal.aborted) {
+        setForecast(data);
+        setForecastError(null);
+      }
+    } catch (err) {
+      if (!ctrl.signal.aborted) {
+        setForecastError(err instanceof Error ? err.message : 'Không kết nối được máy chủ khí tượng.');
+      }
+    } finally {
+      if (!ctrl.signal.aborted) {
+        setForecastLoading(false);
+      }
+    }
   }, [forecastCoords.lat, forecastCoords.lng, lang]);
 
   useEffect(() => {
     void loadForecast();
+    return () => {
+      forecastAbortRef.current?.abort();
+    };
   }, [loadForecast]);
 
   const role = session?.user ? normalizeRole(session.user.role) : null;
@@ -626,22 +704,24 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      {/* ── Giao diện Dự báo Thời tiết chi tiết (Weather App + Điểm đo Open-Meteo Đồng Nai) ── */}
+      {/* ── Giao diện Dự báo Thời tiết chi tiết (Dữ liệu thật theo đúng tọa độ vị trí) ── */}
       {(() => {
-        const allTemps = forecast.daily.flatMap((d) => [d.tempMin, d.tempMax]);
-        const weekMin = Math.min(...allTemps, 20);
-        const weekMax = Math.max(...allTemps, 36);
+        const allTemps = forecast ? forecast.daily.flatMap((d) => [d.tempMin, d.tempMax]) : [20, 36];
+        const weekMin = Math.min(...allTemps);
+        const weekMax = Math.max(...allTemps);
         const tempSpan = Math.max(1, weekMax - weekMin);
-        const uvLabel =
-          forecast.uvIndex >= 8
+        const uvLabel = !forecast
+          ? ''
+          : forecast.uvIndex >= 8
             ? 'Rất cao'
             : forecast.uvIndex >= 6
               ? 'Cao'
               : forecast.uvIndex >= 3
                 ? 'Trung bình'
                 : 'Thấp';
-        const floodRisk =
-          forecast.rainNow >= 5 || forecast.rainProbNow >= 70 || alerts.filter((a) => a.category === 'disaster').length >= 2
+        const floodRisk = !forecast
+          ? 'Đang kiểm tra'
+          : forecast.rainNow >= 5 || forecast.rainProbNow >= 70 || alerts.filter((a) => a.category === 'disaster').length >= 2
             ? 'Cao — Đề phòng ngập'
             : forecast.rainProbNow >= 45 || alerts.some((a) => a.category === 'disaster')
               ? 'Trung bình'
@@ -649,7 +729,7 @@ export default function AlertsPage() {
 
         return (
           <div className="space-y-4">
-            {/* Thanh chọn vị trí thời tiết chi tiết (GPS / 95 Phường-Xã / 5 Vùng khí hậu) */}
+            {/* Thanh chọn vị trí thời tiết chi tiết (Tìm bất kỳ nơi đâu / GPS / 95 Phường-Xã / 5 Vùng) */}
             <div className="card flex flex-col gap-2.5 p-3 sm:p-3.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-brand">
@@ -672,6 +752,7 @@ export default function AlertsPage() {
                     onChange={(e) => {
                       const w = WARD_BY_CODE[e.target.value];
                       if (!w) return;
+                      setWeatherQuery('');
                       setWeatherLoc({
                         label: w.name,
                         lat: w.centerLat,
@@ -690,6 +771,55 @@ export default function AlertsPage() {
                   </select>
                 </div>
               </div>
+
+              {/* Ô tìm kiếm bất kỳ địa điểm / thành phố / phường xã nào */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden />
+                <input
+                  type="search"
+                  value={weatherQuery}
+                  onFocus={() => setWeatherSearchOpen(true)}
+                  onBlur={() => window.setTimeout(() => setWeatherSearchOpen(false), 180)}
+                  onChange={(e) => setWeatherQuery(e.target.value)}
+                  placeholder="Tìm địa điểm bất kỳ để xem thời tiết (VD: Long Thành, Hà Nội, TP.HCM, Đà Lạt…)"
+                  aria-label="Tìm địa điểm xem dự báo thời tiết"
+                  className="field !min-h-9 !rounded-xl !pl-8 !pr-8 !text-xs"
+                />
+                {weatherQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setWeatherQuery('')}
+                    className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-muted hover:bg-surface-2"
+                    aria-label="Xóa tìm kiếm"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                {weatherSearchOpen && weatherSuggestions.length > 0 && (
+                  <ul
+                    role="listbox"
+                    className="absolute inset-x-0 top-full z-[60] mt-1 max-h-56 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-lift"
+                  >
+                    {weatherSuggestions.map((s) => (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => void handlePickWeatherPlace(s)}
+                          className="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs hover:bg-surface-2"
+                        >
+                          <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" aria-hidden />
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-bold text-ink">{s.label}</span>
+                            {s.sublabel && <span className="block truncate text-[11px] text-muted">{s.sublabel}</span>}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               <div className="flex flex-wrap items-center gap-1.5">
                 {QUICK_JUMP_REGIONS.map((reg) => {
                   const active = !weatherLoc.isGps && !weatherLoc.wardCode && weatherLoc.label === reg.labelVi;
@@ -698,13 +828,14 @@ export default function AlertsPage() {
                       key={reg.id}
                       type="button"
                       aria-pressed={active}
-                      onClick={() =>
+                      onClick={() => {
+                        setWeatherQuery('');
                         setWeatherLoc({
                           label: reg.labelVi,
                           lat: reg.center[0],
                           lng: reg.center[1],
-                        })
-                      }
+                        });
+                      }}
                       className="chip !min-h-7 !px-2.5 !text-[11px]"
                     >
                       {reg.labelVi}
@@ -714,166 +845,209 @@ export default function AlertsPage() {
               </div>
             </div>
 
-            <section
-              aria-label="Dự báo thời tiết hiện tại theo vị trí"
-              className={`relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br ${heroSkyGradient(forecast)} p-5 text-white shadow-lift sm:p-6`}
-            >
-              <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden />
-              <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
-                      <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      <span>{weatherLoc.detailAddress ?? forecastAreaName}</span>
-                    </span>
-                    <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/20 px-2.5 py-1 text-[10.5px] font-medium text-white/85">
-                      {forecastCoords.lat.toFixed(4)}°N, {forecastCoords.lng.toFixed(4)}°E
-                      {weatherLoc.accuracyM ? ` · ±${weatherLoc.accuracyM}m` : ''}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
-                      <span className={`h-2 w-2 rounded-full ${forecast.source === 'live' ? 'bg-emerald-400' : 'bg-amber-300'}`} aria-hidden />
-                      <span>{forecast.providerLabel}</span>
-                    </span>
+            {!forecast ? (
+              <section
+                aria-label="Đang tải dự báo thời tiết"
+                className="rounded-[1.75rem] bg-gradient-to-br from-blue-600 via-sky-600 to-cyan-600 p-6 text-white shadow-lift"
+              >
+                {forecastError ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold">Chưa lấy được dữ liệu dự báo thời tiết thực tế cho {forecastAreaName}</p>
+                      <p className="mt-1 text-xs text-white/80">{forecastError}</p>
+                    </div>
                     <button
                       type="button"
                       onClick={() => void loadForecast()}
-                      disabled={forecastLoading}
-                      className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/20"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/25 bg-white/15 px-3.5 py-2 text-xs font-bold hover:bg-white/25"
                     >
-                      <RefreshCw className={`h-3 w-3 ${forecastLoading ? 'animate-spin' : ''}`} aria-hidden />
-                      Làm mới
+                      <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Thử lại
                     </button>
                   </div>
-
-                  <div className="mt-4 flex items-center gap-4">
-                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl border border-white/20 bg-white/15 backdrop-blur-md sm:h-20 sm:w-20">
-                      <WeatherGlyph kind={forecast.kind} className="h-10 w-10 sm:h-12 sm:w-12" />
-                    </div>
+                ) : (
+                  <div className="flex items-center gap-3 text-sm font-semibold">
+                    <Spinner className="text-white" />
+                    <span>
+                      Đang tải nhiệt độ & dự báo thời tiết trực tiếp cho <strong>{weatherLoc.detailAddress ?? forecastAreaName}</strong>…
+                    </span>
+                  </div>
+                )}
+              </section>
+            ) : (
+              <>
+                <section
+                  aria-label="Dự báo thời tiết hiện tại theo vị trí"
+                  className={`relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br ${heroSkyGradient(forecast)} p-5 text-white shadow-lift sm:p-6`}
+                >
+                  <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden />
+                  <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <div className="flex items-baseline gap-2.5">
-                        <span className={`mono text-4xl font-extrabold tracking-tight sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
-                          {forecast.temp.toFixed(1)}°C
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
+                          <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                          <span>{weatherLoc.detailAddress ?? forecastAreaName}</span>
                         </span>
-                        <span className="text-sm font-semibold text-white/85">
-                          C: {forecast.tempHigh.toFixed(1)}° · T: {forecast.tempLow.toFixed(1)}°
+                        <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/20 px-2.5 py-1 text-[10.5px] font-medium text-white/85">
+                          {forecastCoords.lat.toFixed(4)}°N, {forecastCoords.lng.toFixed(4)}°E
+                          {weatherLoc.accuracyM ? ` · ±${weatherLoc.accuracyM}m` : ''}
                         </span>
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
+                          <span className="h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
+                          <span>{forecast.providerLabel}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void loadForecast()}
+                          disabled={forecastLoading}
+                          className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/20"
+                        >
+                          <RefreshCw className={`h-3 w-3 ${forecastLoading ? 'animate-spin' : ''}`} aria-hidden />
+                          Làm mới
+                        </button>
                       </div>
-                      <p className="mt-0.5 text-base font-bold text-white sm:text-lg">
-                        {lang === 'vi' ? forecast.conditionVi : forecast.conditionEn}
-                      </p>
-                      <p className="text-xs text-white/80">
-                        Cảm giác như {forecast.feelsLike}°C · Cập nhật {fmtDate(forecast.fetchedAt, true)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[27rem]">
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
-                    </p>
-                    <p className="mono mt-1 text-lg font-extrabold">{forecast.humidity}%</p>
-                  </div>
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <Umbrella className="h-3.5 w-3.5 text-cyan-200" aria-hidden /> Xác suất mưa
-                    </p>
-                    <p className="mono mt-1 text-lg font-extrabold">
-                      {forecast.rainProbNow}% <span className="text-xs font-medium text-white/75">({forecast.rainNow}mm)</span>
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Sức gió
-                    </p>
-                    <p className="mono mt-1 text-lg font-extrabold">{forecast.windSpeed} km/h</p>
-                  </div>
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
-                    </p>
-                    <p className="mono mt-1 text-lg font-extrabold">
-                      {forecast.uvIndex} <span className="text-xs font-semibold text-white/85">{uvLabel}</span>
-                    </p>
-                  </div>
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <Cloud className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Mây che phủ
-                    </p>
-                    <p className="mono mt-1 text-lg font-extrabold">{forecast.cloudCover}%</p>
-                  </div>
-                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
-                      <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
-                    </p>
-                    <p className="mt-1 text-xs font-extrabold sm:text-sm">{floodRisk}</p>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Dự báo theo giờ (12h) & Dự báo 5 ngày */}
-            <div className="grid gap-4 lg:grid-cols-12">
-              <section className="card p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
-                    <Compass className="h-4 w-4 text-brand" aria-hidden /> Dự báo theo giờ (12 giờ tới)
-                  </h2>
-                  <span className="text-[11px] font-semibold text-muted">{forecastAreaName}</span>
-                </div>
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {forecast.hourly.map((pt, idx) => (
-                    <div
-                      key={pt.timeIso}
-                      className={`flex min-w-[4.5rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2.5 text-center ${
-                        idx === 0 ? 'border-brand/35 bg-brand-soft/75' : 'border-line/70 bg-surface-2/60'
-                      }`}
-                    >
-                      <span className="mono text-[11px] font-bold text-muted">{pt.hourLabel}</span>
-                      <WeatherGlyphInk kind={pt.kind} className="h-6 w-6" />
-                      <span className="mono text-sm font-extrabold text-ink">{pt.temp}°</span>
-                      <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
-                        <Droplets className="h-3 w-3" aria-hidden />
-                        {pt.rainProb}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="card p-4 lg:col-span-5" aria-label="Dự báo 5 ngày tới">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
-                    <Thermometer className="h-4 w-4 text-brand" aria-hidden /> Dự báo 5 ngày tới
-                  </h2>
-                  <span className="text-[11px] font-semibold text-muted">Nhiệt độ & Mưa</span>
-                </div>
-                <div className="divide-y divide-line/60">
-                  {forecast.daily.map((d) => {
-                    const leftPct = ((d.tempMin - weekMin) / tempSpan) * 100;
-                    const widthPct = Math.max(10, ((d.tempMax - d.tempMin) / tempSpan) * 100);
-                    return (
-                      <div key={d.dateIso} className="flex items-center gap-2.5 py-2 first:pt-0 last:pb-0">
-                        <span className="w-20 shrink-0 text-xs font-bold text-ink">{d.dayLabel}</span>
-                        <WeatherGlyphInk kind={d.kind} className="h-5 w-5 shrink-0" />
-                        <span className="mono w-9 shrink-0 text-right text-[11px] font-semibold text-sky-700 dark:text-sky-300">
-                          {d.rainProbMax}%
-                        </span>
-                        <span className="mono w-7 shrink-0 text-right text-xs font-semibold text-muted">{d.tempMin}°</span>
-                        <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-                          <div
-                            className="absolute inset-y-0 rounded-full bg-gradient-to-r from-sky-400 via-amber-400 to-orange-500"
-                            style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                          />
+                      <div className="mt-4 flex items-center gap-4">
+                        <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl border border-white/20 bg-white/15 backdrop-blur-md sm:h-20 sm:w-20">
+                          <WeatherGlyph kind={forecast.kind} isDay={forecast.isDay} className="h-10 w-10 sm:h-12 sm:w-12" />
                         </div>
-                        <span className="mono w-7 shrink-0 text-xs font-extrabold text-ink">{d.tempMax}°</span>
+                        <div>
+                          <div className="flex items-baseline gap-2.5">
+                            <span className={`mono text-4xl font-extrabold tracking-tight sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
+                              {forecast.temp.toFixed(1)}°C
+                            </span>
+                            <span className="text-sm font-semibold text-white/85">
+                              C: {forecast.tempHigh.toFixed(1)}° · T: {forecast.tempLow.toFixed(1)}°
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-base font-bold text-white sm:text-lg">
+                            {lang === 'vi' ? forecast.conditionVi : forecast.conditionEn}
+                          </p>
+                          <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-white/80">
+                            <span>Cảm giác như {forecast.feelsLike.toFixed(1)}°C</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Sunrise className="h-3.5 w-3.5 text-amber-200" aria-hidden /> {forecast.sunrise}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Sunset className="h-3.5 w-3.5 text-orange-200" aria-hidden /> {forecast.sunset}
+                            </span>
+                            <span>Cập nhật {fmtDate(forecast.fetchedAt, true)}</span>
+                          </p>
+                        </div>
                       </div>
-                    );
-                  })}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[27rem]">
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
+                        </p>
+                        <p className="mono mt-1 text-lg font-extrabold">{forecast.humidity}%</p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <Umbrella className="h-3.5 w-3.5 text-cyan-200" aria-hidden /> Xác suất mưa
+                        </p>
+                        <p className="mono mt-1 text-lg font-extrabold">
+                          {forecast.rainProbNow}% <span className="text-xs font-medium text-white/75">({forecast.rainNow}mm)</span>
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Gió & Giật
+                        </p>
+                        <p className="mono mt-1 text-base font-extrabold sm:text-lg">
+                          {forecast.windSpeed} <span className="text-xs font-medium text-white/75">/ {forecast.windGusts} km/h</span>
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
+                        </p>
+                        <p className="mono mt-1 text-lg font-extrabold">
+                          {forecast.uvIndex} <span className="text-xs font-semibold text-white/85">{uvLabel}</span>
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <Gauge className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Áp suất & Mây
+                        </p>
+                        <p className="mono mt-1 text-sm font-extrabold sm:text-base">
+                          {forecast.pressureHpa} hPa · {forecast.cloudCover}%
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                          <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
+                        </p>
+                        <p className="mt-1 text-xs font-extrabold sm:text-sm">{floodRisk}</p>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Dự báo theo giờ (24h) & Dự báo 7 ngày */}
+                <div className="grid gap-4 lg:grid-cols-12">
+                  <section className="card p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
+                        <Compass className="h-4 w-4 text-brand" aria-hidden /> Dự báo theo giờ (24 giờ tới)
+                      </h2>
+                      <span className="text-[11px] font-semibold text-muted">{forecastAreaName}</span>
+                    </div>
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {forecast.hourly.map((pt, idx) => (
+                        <div
+                          key={pt.timeIso}
+                          className={`flex min-w-[4.5rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2.5 text-center ${
+                            idx === 0 ? 'border-brand/35 bg-brand-soft/75' : 'border-line/70 bg-surface-2/60'
+                          }`}
+                        >
+                          <span className="mono text-[11px] font-bold text-muted">{pt.hourLabel}</span>
+                          <WeatherGlyphInk kind={pt.kind} isDay={pt.isDay} className="h-6 w-6" />
+                          <span className="mono text-sm font-extrabold text-ink">{pt.temp.toFixed(1)}°</span>
+                          <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                            <Droplets className="h-3 w-3" aria-hidden />
+                            {pt.rainProb}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="card p-4 lg:col-span-5" aria-label="Dự báo 7 ngày tới">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
+                        <Thermometer className="h-4 w-4 text-brand" aria-hidden /> Dự báo 7 ngày tới
+                      </h2>
+                      <span className="text-[11px] font-semibold text-muted">Nhiệt độ & Mưa</span>
+                    </div>
+                    <div className="divide-y divide-line/60">
+                      {forecast.daily.map((d) => {
+                        const leftPct = ((d.tempMin - weekMin) / tempSpan) * 100;
+                        const widthPct = Math.max(10, ((d.tempMax - d.tempMin) / tempSpan) * 100);
+                        return (
+                          <div key={d.dateIso} className="flex items-center gap-2.5 py-2 first:pt-0 last:pb-0">
+                            <span className="w-20 shrink-0 text-xs font-bold text-ink">{d.dayLabel}</span>
+                            <WeatherGlyphInk kind={d.kind} className="h-5 w-5 shrink-0" />
+                            <span className="mono w-9 shrink-0 text-right text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+                              {d.rainProbMax}%
+                            </span>
+                            <span className="mono w-9 shrink-0 text-right text-xs font-semibold text-muted">{d.tempMin.toFixed(0)}°</span>
+                            <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                              <div
+                                className="absolute inset-y-0 rounded-full bg-gradient-to-r from-sky-400 via-amber-400 to-orange-500"
+                                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              />
+                            </div>
+                            <span className="mono w-9 shrink-0 text-xs font-extrabold text-ink">{d.tempMax.toFixed(0)}°</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
                 </div>
-              </section>
-            </div>
+              </>
+            )}
 
             {/* Thanh Thời tiết các khu vực trọng điểm Đồng Nai */}
             {weather.length > 0 && (
@@ -891,6 +1065,7 @@ export default function AlertsPage() {
                   {weather.map((w) => {
                     const targetWard = WARD_BY_CODE[w.wardCode];
                     const isSelected = weatherLoc.wardCode === w.wardCode && !weatherLoc.isGps;
+                    const displayTemp = isSelected && forecast ? forecast.temp : w.temperatureC;
                     return (
                       <div
                         key={w.regionKey}
@@ -905,20 +1080,19 @@ export default function AlertsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (targetWard) {
-                              setWeatherLoc({
-                                label: `${w.regionName} (${targetWard.shortName})`,
-                                lat: targetWard.centerLat,
-                                lng: targetWard.centerLng,
-                                wardCode: targetWard.wardCode,
-                              });
-                            }
+                            setWeatherQuery('');
+                            setWeatherLoc({
+                              label: targetWard ? `${w.regionName} (${targetWard.shortName})` : w.regionName,
+                              lat: w.lat,
+                              lng: w.lng,
+                              wardCode: w.wardCode,
+                            });
                           }}
                           className="w-full text-left"
                         >
                           <div className="flex items-center justify-between gap-1">
                             <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
-                            <span className="mono text-xs font-extrabold text-brand">{w.temperatureC}°C</span>
+                            <span className="mono text-xs font-extrabold text-brand">{displayTemp.toFixed(1)}°C</span>
                           </div>
                           <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
                           <div className="mt-1.5 flex items-center justify-between text-[11px]">
