@@ -12,23 +12,44 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { normalizeRole } from '@shared/constants';
 import { ScopePicker } from '../../components/Header';
 import { Logo, LogoMark } from '../../components/Logo';
-import { CityIncidentMap, type MapMode } from '../../components/map';
+import type { MapMode } from '../../components/map';
 import { OfflineBanner } from '../../components/OfflineBanner';
-import { ReportDetail } from '../../components/ReportDetail';
 import { WARD_BY_CODE } from '../../data/dongNaiWards';
 import { inScope, useAllReports, useOnline } from '../../db/hooks';
 import { useI18n, type I18nKey } from '../../i18n';
 import { authStore, useSession } from '../../lib/authStore';
 import { useSettings } from '../../state/settings';
-import { AuditView } from './AuditView';
-import { OverviewView } from './OverviewView';
-import { QueueView } from './QueueView';
-import { SystemAdminView } from './SystemAdminView';
+import { lazyWithRetry } from '../../utils/lazyWithRetry';
+
+const OverviewView = lazyWithRetry(
+  () => import('./OverviewView').then((m) => ({ default: m.OverviewView })),
+  'OverviewView',
+);
+const QueueView = lazyWithRetry(
+  () => import('./QueueView').then((m) => ({ default: m.QueueView })),
+  'QueueView',
+);
+const AuditView = lazyWithRetry(
+  () => import('./AuditView').then((m) => ({ default: m.AuditView })),
+  'AuditView',
+);
+const SystemAdminView = lazyWithRetry(
+  () => import('./SystemAdminView').then((m) => ({ default: m.SystemAdminView })),
+  'SystemAdminView',
+);
+const CityIncidentMap = lazyWithRetry(
+  () => import('../../components/map').then((m) => ({ default: m.CityIncidentMap })),
+  'CityIncidentMap',
+);
+const ReportDetail = lazyWithRetry(
+  () => import('../../components/ReportDetail').then((m) => ({ default: m.ReportDetail })),
+  'ReportDetail',
+);
 
 type View = 'overview' | 'queue' | 'map' | 'audit' | 'sysadmin';
 
@@ -218,47 +239,49 @@ export default function AdminPage() {
             {t('ioc.scopeNow')}: <span className="font-semibold text-ioc-text">{scopeName}</span>
           </p>
 
-          {view === 'overview' && <OverviewView scope={scope} reports={all} isCity={canPickCityScope && scope === 'city'} />}
-          {view === 'queue' && <QueueView scope={scope} isCity={canPickCityScope && scope === 'city'} online={online} />}
-          {view === 'map' && (
-            <div className="space-y-2">
-              <div className="flex gap-2" role="group" aria-label={t('map.mode')}>
-                <button
-                  type="button"
-                  aria-pressed={mapMode === 'pins'}
-                  className={`ioc-btn ${mapMode === 'pins' ? 'ioc-btn-cyan' : ''}`}
-                  onClick={() => setMapMode('pins')}
-                >
-                  {t('map.pins')}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={mapMode === 'heat'}
-                  className={`ioc-btn ${mapMode === 'heat' ? 'ioc-btn-cyan' : ''}`}
-                  onClick={() => setMapMode('heat')}
-                >
-                  {t('map.heat')}
-                </button>
+          <Suspense fallback={<div className="ioc-skeleton h-64 w-full rounded-xl" />}>
+            {view === 'overview' && <OverviewView scope={scope} reports={all} isCity={canPickCityScope && scope === 'city'} />}
+            {view === 'queue' && <QueueView scope={scope} isCity={canPickCityScope && scope === 'city'} online={online} />}
+            {view === 'map' && (
+              <div className="space-y-2">
+                <div className="flex gap-2" role="group" aria-label={t('map.mode')}>
+                  <button
+                    type="button"
+                    aria-pressed={mapMode === 'pins'}
+                    className={`ioc-btn ${mapMode === 'pins' ? 'ioc-btn-cyan' : ''}`}
+                    onClick={() => setMapMode('pins')}
+                  >
+                    {t('map.pins')}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={mapMode === 'heat'}
+                    className={`ioc-btn ${mapMode === 'heat' ? 'ioc-btn-cyan' : ''}`}
+                    onClick={() => setMapMode('heat')}
+                  >
+                    {t('map.heat')}
+                  </button>
+                </div>
+                {scoped ? (
+                  <CityIncidentMap
+                    key={`${scope}-${mapMode}`}
+                    embedded
+                    externalReports={scoped}
+                    defaultMode={mapMode}
+                    tone="ioc"
+                    fitPointsOnMount
+                    onSelectPoint={(r) => setSelectedId(r.id)}
+                    className="h-[72dvh]"
+                  />
+                ) : (
+                  <div className="ioc-skeleton h-[72dvh]" />
+                )}
+                {selectedId && <ReportDetail id={selectedId} onClose={() => setSelectedId(null)} variant="drawer" />}
               </div>
-              {scoped ? (
-                <CityIncidentMap
-                  key={`${scope}-${mapMode}`}
-                  embedded
-                  externalReports={scoped}
-                  defaultMode={mapMode}
-                  tone="ioc"
-                  fitPointsOnMount
-                  onSelectPoint={(r) => setSelectedId(r.id)}
-                  className="h-[72dvh]"
-                />
-              ) : (
-                <div className="ioc-skeleton h-[72dvh]" />
-              )}
-              <ReportDetail id={selectedId} onClose={() => setSelectedId(null)} variant="drawer" />
-            </div>
-          )}
-          {view === 'audit' && <AuditView scope={scope} isCity={isAdmin} />}
-          {view === 'sysadmin' && isAdmin && <SystemAdminView />}
+            )}
+            {view === 'audit' && <AuditView scope={scope} isCity={isAdmin} />}
+            {view === 'sysadmin' && isAdmin && <SystemAdminView />}
+          </Suspense>
           <p className="mt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </main>
       </div>

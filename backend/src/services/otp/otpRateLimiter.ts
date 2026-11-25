@@ -1,8 +1,10 @@
 import { tooMany } from '../../utils/errors';
 
 export const OTP_COOLDOWN_MS = 60 * 1000;
-export const OTP_HOURLY_WINDOW_MS = 60 * 60 * 1000;
-export const OTP_MAX_SENDS_PER_HOUR = 5;
+export const OTP_SEND_WINDOW_MS = 10 * 60 * 1000;
+export const OTP_MAX_SENDS_PER_WINDOW = 3;
+export const OTP_HOURLY_WINDOW_MS = OTP_SEND_WINDOW_MS;
+export const OTP_MAX_SENDS_PER_HOUR = OTP_MAX_SENDS_PER_WINDOW;
 export const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
 interface TargetQuotaBucket {
@@ -11,9 +13,9 @@ interface TargetQuotaBucket {
 }
 
 /**
- * Bộ giới hạn tần suất gửi OTP chống đốt tiền SMS (SMS Pumping / Bombing Protection):
+ * Bộ giới hạn tần suất gửi OTP chống spam (SMS Pumping / Bombing Protection):
  * - Cooldown cứng 60 giây giữa 2 lần gửi liên tiếp cho cùng 1 SĐT / Email.
- * - Tối đa 5 lần gửi / 1 giờ (cửa sổ trượt 3600s) trên mỗi SĐT / Email.
+ * - Tối đa 3 lần gửi / 10 phút (cửa sổ trượt 600s) trên mỗi SĐT / Email.
  * - Hỗ trợ truyền `now` tùy chỉnh để kiểm thử đơn vị (deterministic unit test) chính xác từng mili-giây.
  */
 export class OtpSendRateLimiter {
@@ -21,8 +23,8 @@ export class OtpSendRateLimiter {
 
   constructor(
     private readonly cooldownMs = OTP_COOLDOWN_MS,
-    private readonly maxPerHour = OTP_MAX_SENDS_PER_HOUR,
-    private readonly windowMs = OTP_HOURLY_WINDOW_MS,
+    private readonly maxPerWindow = OTP_MAX_SENDS_PER_WINDOW,
+    private readonly windowMs = OTP_SEND_WINDOW_MS,
   ) {}
 
   /** Kiểm tra hạn mức trước khi gọi nhà mạng SMS (không ghi nhận nếu gửi thất bại). */
@@ -44,18 +46,18 @@ export class OtpSendRateLimiter {
       );
     }
 
-    if (recent.length >= this.maxPerHour) {
+    if (recent.length >= this.maxPerWindow) {
       const oldestInWindow = recent[0] ?? now;
       const waitMin = Math.max(1, Math.ceil((oldestInWindow + this.windowMs - now) / 60_000));
       throw tooMany(
-        `Số điện thoại này đã nhận tối đa ${this.maxPerHour} mã OTP trong 1 giờ. Vui lòng thử lại sau khoảng ${waitMin} phút.`,
-        'otp_hourly_limit',
+        `Số điện thoại này đã nhận tối đa ${this.maxPerWindow} mã OTP trong 10 phút. Vui lòng thử lại sau khoảng ${waitMin} phút.`,
+        'otp_rate_limit_10m',
       );
     }
   }
 
   /** Ghi nhận 1 lần phát SMS thành công vào cửa sổ hạn mức của SĐT. */
-  recordSent(target: string, now = Date.now()): { remainingInHour: number; resendInSec: number } {
+  recordSent(target: string, now = Date.now()): { remainingInWindow: number; resendInSec: number } {
     const key = target.trim().toLowerCase();
     const cutoff = now - this.windowMs;
     const existing = this.buckets.get(key);
@@ -68,7 +70,7 @@ export class OtpSendRateLimiter {
     });
 
     return {
-      remainingInHour: Math.max(0, this.maxPerHour - recent.length),
+      remainingInWindow: Math.max(0, this.maxPerWindow - recent.length),
       resendInSec: Math.round(this.cooldownMs / 1000),
     };
   }

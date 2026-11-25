@@ -126,9 +126,9 @@ export function BeforeAfterSlider({ before, after, labelBefore, labelAfter }: { 
       onPointerUp={() => { dragging.current = false; }}
       onPointerCancel={() => { dragging.current = false; }}
     >
-      <img src={after} alt={labelAfter} className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+      <img src={after} alt={labelAfter} width={800} height={500} decoding="async" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
       <div className="absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }}>
-        <img src={before} alt={labelBefore} className="h-full w-full object-cover" draggable={false} />
+        <img src={before} alt={labelBefore} width={800} height={500} decoding="async" className="h-full w-full object-cover" draggable={false} />
       </div>
       <span className="absolute left-2 top-2 rounded-full bg-slate-900/80 px-2.5 py-1 text-xs font-bold text-white">{labelBefore}</span>
       <span className="absolute right-2 top-2 rounded-full bg-ok px-2.5 py-1 text-xs font-bold text-white">{labelAfter}</span>

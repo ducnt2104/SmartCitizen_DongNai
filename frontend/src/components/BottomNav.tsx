@@ -1,6 +1,7 @@
 import { Bot, Camera, ClipboardList, Home, Map as MapIcon } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useI18n } from '../i18n';
+import { onIntentPrefetch } from '../lib/prefetch';
 import { useSettings } from '../state/settings';
 
 export function BottomNav() {
@@ -27,6 +28,8 @@ export function BottomNav() {
               to={to}
               end={end}
               data-tour={tour}
+              onMouseEnter={() => onIntentPrefetch(to)}
+              onFocus={() => onIntentPrefetch(to)}
               onClick={() => {
                 if (assistantOpen) setAssistantOpen(false);
               }}
@@ -92,6 +95,8 @@ export function TopNav() {
             key={l.to}
             to={l.to}
             end={l.end}
+            onMouseEnter={() => onIntentPrefetch(l.to)}
+            onFocus={() => onIntentPrefetch(l.to)}
             onClick={() => {
               if (assistantOpen) setAssistantOpen(false);
             }}

@@ -39,6 +39,7 @@ reportSchema.index({ location: '2dsphere' });
 reportSchema.index({ status: 1, createdAt: -1 });
 reportSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 reportSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
+reportSchema.index({ wardCode: 1, category: 1, status: 1, createdAt: -1 });
 reportSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });
@@ -122,16 +123,28 @@ const otpSchema = mk({
   expiresAt: { type: Number, required: true },
   expiresAtDate: { type: Date, default: () => new Date(Date.now() + 5 * 60 * 1000) },
 });
-otpSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 3600 });
+otpSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 0 });
 
 const sessionSchema = mk({
   id: { type: String, required: true, unique: true },
   userId: { type: String, required: true, index: true },
   refreshHash: { type: String, required: true, unique: true },
+  tokenHash: { type: String, default: null, index: true },
+  deviceFingerprint: { type: String, default: '' },
+  ip: { type: String, default: '' },
+  userAgent: { type: String, default: '' },
+  tokenVersion: { type: Number, default: 0 },
+  createdAt: { type: Number, required: true },
+  lastActiveAt: { type: Number, default: () => Date.now() },
   expiresAt: { type: Number, required: true },
+  isRevoked: { type: Boolean, default: false, index: true },
+  revokedAt: { type: Number, default: null },
+  revokedReason: { type: String, default: null },
+  replacedBySessionId: { type: String, default: null },
   expiresAtDate: { type: Date, default: () => new Date(Date.now() + 7 * 24 * 3600 * 1000) },
 });
 sessionSchema.index({ expiresAtDate: 1 }, { expireAfterSeconds: 0 });
+sessionSchema.index({ userId: 1, isRevoked: 1, lastActiveAt: -1 });
 
 const auditSchema = mk({
   id: { type: String, required: true, unique: true },

@@ -392,32 +392,109 @@ class JsonOtpRepo implements OtpRepository {
   }
 }
 
+function normJsonSession(s: SessionRecord): SessionRecord {
+  return {
+    ...s,
+    tokenHash: s.tokenHash ?? s.refreshHash,
+    deviceFingerprint: s.deviceFingerprint ?? '',
+    ip: s.ip ?? '',
+    tokenVersion: s.tokenVersion ?? 0,
+    lastActiveAt: s.lastActiveAt ?? s.createdAt,
+    isRevoked: Boolean(s.isRevoked || s.revokedAt !== null),
+    revokedReason: s.revokedReason ?? null,
+  };
+}
+
 class JsonSessionRepo implements SessionRepository {
   constructor(private readonly s: JsonStore) {}
+  async get(id: string): Promise<SessionRecord | null> {
+    const found = this.s.data.sessions.find((x) => x.id === id);
+    return found ? normJsonSession(found) : null;
+  }
   async getByRefreshHash(refreshHash: string): Promise<SessionRecord | null> {
     const found = this.s.data.sessions.find((x) => x.refreshHash === refreshHash);
-    return found ? { ...found } : null;
+    return found ? normJsonSession(found) : null;
+  }
+  async listActive(filter?: { userId?: string; includeRevoked?: boolean; limit?: number }): Promise<SessionRecord[]> {
+    const now = Date.now();
+    const limit = Math.min(Math.max(filter?.limit ?? 200, 1), 1000);
+    return this.s.data.sessions
+      .filter((s) => {
+        if (filter?.userId && s.userId !== filter.userId) return false;
+        if (!filter?.includeRevoked && (s.isRevoked || s.revokedAt !== null || s.expiresAt <= now)) return false;
+        return true;
+      })
+      .map(normJsonSession)
+      .sort((a, b) => (b.lastActiveAt ?? b.createdAt) - (a.lastActiveAt ?? a.createdAt))
+      .slice(0, limit);
   }
   async save(rec: SessionRecord): Promise<void> {
+    const normalized = normJsonSession(rec);
     const i = this.s.data.sessions.findIndex((x) => x.id === rec.id);
-    if (i >= 0) this.s.data.sessions[i] = { ...rec };
-    else this.s.data.sessions.push({ ...rec });
+    if (i >= 0) this.s.data.sessions[i] = normalized;
+    else this.s.data.sessions.push(normalized);
     this.s.touch();
   }
-  async revoke(id: string, replacedBySessionId: string | null = null): Promise<void> {
+  async touch(id: string, lastActiveAt: number, ip?: string): Promise<void> {
     const found = this.s.data.sessions.find((x) => x.id === id);
     if (found) {
-      found.revokedAt = Date.now();
-      if (replacedBySessionId) found.replacedBySessionId = replacedBySessionId;
+      found.lastActiveAt = lastActiveAt;
+      if (ip) found.ip = ip;
       this.s.touch();
     }
   }
-  async revokeAllForUser(userId: string): Promise<void> {
-    const now = Date.now();
-    for (const s of this.s.data.sessions) {
-      if (s.userId === userId && !s.revokedAt) s.revokedAt = now;
+  async revoke(id: string, replacedBySessionId: string | null = null, reason: string | null = null): Promise<void> {
+    const found = this.s.data.sessions.find((x) => x.id === id);
+    if (found) {
+      found.isRevoked = true;
+      found.revokedAt = Date.now();
+      if (replacedBySessionId) found.replacedBySessionId = replacedBySessionId;
+      if (reason) found.revokedReason = reason;
+      this.s.touch();
     }
-    this.s.touch();
+  }
+  async revokeAllForUser(userId: string, reason: string | null = null): Promise<number> {
+    const now = Date.now();
+    let count = 0;
+    for (const s of this.s.data.sessions) {
+      if (s.userId === userId && !s.revokedAt) {
+        s.isRevoked = true;
+        s.revokedAt = now;
+        if (reason) s.revokedReason = reason;
+        count += 1;
+      }
+    }
+    if (count > 0) this.s.touch();
+    return count;
+  }
+  async revokeAllExcept(userId: string, exceptSessionId: string, reason: string | null = null): Promise<number> {
+    const now = Date.now();
+    let count = 0;
+    for (const s of this.s.data.sessions) {
+      if (s.userId === userId && s.id !== exceptSessionId && !s.revokedAt) {
+        s.isRevoked = true;
+        s.revokedAt = now;
+        if (reason) s.revokedReason = reason;
+        count += 1;
+      }
+    }
+    if (count > 0) this.s.touch();
+    return count;
+  }
+  async revokeAllSystem(exceptSessionId: string | null = null, reason: string | null = null): Promise<number> {
+    const now = Date.now();
+    let count = 0;
+    for (const s of this.s.data.sessions) {
+      if (exceptSessionId && s.id === exceptSessionId) continue;
+      if (!s.revokedAt) {
+        s.isRevoked = true;
+        s.revokedAt = now;
+        if (reason) s.revokedReason = reason;
+        count += 1;
+      }
+    }
+    if (count > 0) this.s.touch();
+    return count;
   }
 }
 

@@ -12,6 +12,14 @@ import {
   type ImageProcessorRequest,
   type ImageProcessorResponse,
 } from '../workers/imageProcessor.worker';
+import {
+  computeColorHistogram24,
+  computeDHashFromGrayRegion,
+  computeEdgeStatsAndScreenshot,
+  computePHashFromGray,
+  computeSubGridHashesFromGray,
+  rgbaToGray,
+} from './localCvMath';
 
 export type { EdgeStatsMsg, ExifGpsCoords, ExtractedExifMetadata };
 
@@ -23,6 +31,9 @@ export interface ProcessedImageResult {
   /** Preview URL tạo bằng URL.createObjectURL (hoặc fallback), không giữ base64 trong React state */
   previewUrl: string;
   dHash: string;
+  pHash: string;
+  subGridHashes: string[];
+  colorHistogram: number[];
   width: number;
   height: number;
   originalBytes: number;
@@ -110,83 +121,34 @@ function loadHtmlImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-function computeFallbackDHashAndStats(aiCanvas: HTMLCanvasElement, aspect: number): { dHash: string; stats: EdgeStatsMsg } {
-  const hashCanvas = document.createElement('canvas');
-  hashCanvas.width = 9;
-  hashCanvas.height = 8;
-  const hg = hashCanvas.getContext('2d', { willReadFrequently: true });
-  if (!hg) throw new Error('Không tạo được Canvas 2D fallback');
-  hg.drawImage(aiCanvas, 0, 0, 9, 8);
-  const hData = hg.getImageData(0, 0, 9, 8).data;
-  const gray9x8 = new Float32Array(72);
-  for (let i = 0, p = 0; i < 72; i++, p += 4) {
-    gray9x8[i] = 0.299 * hData[p] + 0.587 * hData[p + 1] + 0.114 * hData[p + 2];
-  }
-  const nibbles: number[] = [];
-  let cur = 0;
-  let bits = 0;
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 8; x++) {
-      cur = (cur << 1) | (gray9x8[y * 9 + x] > gray9x8[y * 9 + x + 1] ? 1 : 0);
-      bits += 1;
-      if (bits === 4) {
-        nibbles.push(cur);
-        cur = 0;
-        bits = 0;
-      }
-    }
-  }
-  const dHash = nibbles.map((n) => n.toString(16)).join('');
-
+function computeFallbackDHashAndStats(
+  aiCanvas: HTMLCanvasElement,
+  aspect: number,
+  hasCameraExif: boolean,
+): {
+  dHash: string;
+  pHash: string;
+  subGridHashes: string[];
+  colorHistogram: number[];
+  stats: EdgeStatsMsg;
+} {
   const W = 128;
-  const H = Math.max(16, Math.round(W / Math.max(0.1, aspect)));
+  const H = Math.max(32, Math.min(256, Math.round(W / Math.max(0.25, aspect))));
   const statCanvas = document.createElement('canvas');
   statCanvas.width = W;
   statCanvas.height = H;
   const sg = statCanvas.getContext('2d', { willReadFrequently: true });
   if (!sg) throw new Error('Không tạo được Canvas 2D fallback');
   sg.drawImage(aiCanvas, 0, 0, W, H);
-  const sData = sg.getImageData(0, 0, W, H).data;
-  const g = new Float32Array(W * H);
-  let sum = 0;
-  for (let i = 0, p = 0; i < g.length; i++, p += 4) {
-    const lum = 0.299 * sData[p] + 0.587 * sData[p + 1] + 0.114 * sData[p + 2];
-    g[i] = lum;
-    sum += lum;
-  }
-  const brightness = sum / g.length;
-  let lapSum = 0;
-  let lapSq = 0;
-  let n = 0;
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x;
-      const lap = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - W] - g[i + W];
-      lapSum += lap;
-      lapSq += lap * lap;
-      n += 1;
-    }
-  }
-  const mean = lapSum / Math.max(1, n);
-  const blurScore = lapSq / Math.max(1, n) - mean * mean;
-  let flat = 0;
-  let blocks = 0;
-  for (let by = 0; by + 8 <= H; by += 8) {
-    for (let bx = 0; bx + 8 <= W; bx += 8) {
-      let s = 0;
-      let sq = 0;
-      for (let y = 0; y < 8; y++) {
-        for (let x = 0; x < 8; x++) {
-          const v = g[(by + y) * W + bx + x];
-          s += v;
-          sq += v * v;
-        }
-      }
-      if (sq / 64 - (s / 64) ** 2 < 12) flat += 1;
-      blocks += 1;
-    }
-  }
-  return { dHash, stats: { blurScore, brightness, flatRatio: blocks ? flat / blocks : 0, aspect } };
+  const { data } = sg.getImageData(0, 0, W, H);
+  const gray = rgbaToGray(data, W, H);
+  return {
+    dHash: computeDHashFromGrayRegion(gray, W, 0, 0, W, H),
+    pHash: computePHashFromGray(gray, W, H),
+    subGridHashes: computeSubGridHashesFromGray(gray, W, H),
+    colorHistogram: computeColorHistogram24(data),
+    stats: computeEdgeStatsAndScreenshot(gray, W, H, aspect, hasCameraExif),
+  };
 }
 
 async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Promise<ProcessedImageResult> {
@@ -220,7 +182,11 @@ async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Prom
       encodeCanvasFallback(ai.canvas, 0.72),
     ]);
     const t1 = performance.now();
-    const { dHash, stats } = computeFallbackDHashAndStats(ai.canvas, natW / natH);
+    const cv = computeFallbackDHashAndStats(
+      ai.canvas,
+      natW / natH,
+      Boolean(exif.cameraMake || exif.cameraModel),
+    );
     const hashMs = performance.now() - t1;
     return {
       aiBlob: aiEnc.blob,
@@ -228,14 +194,17 @@ async function processImageCanvasFallback(blob: Blob, rawBuf: ArrayBuffer): Prom
       displayBlob: dispEnc.blob,
       displayMimeType: dispEnc.mimeType,
       previewUrl: URL.createObjectURL(dispEnc.blob),
-      dHash,
+      dHash: cv.dHash,
+      pHash: cv.pHash,
+      subGridHashes: cv.subGridHashes,
+      colorHistogram: cv.colorHistogram,
       width: disp.width,
       height: disp.height,
       originalBytes: blob.size,
       aiBytes: aiEnc.blob.size,
       displayBytes: dispEnc.blob.size,
       bytes: dispEnc.blob.size,
-      stats,
+      stats: cv.stats,
       exif,
       exifGps: exif.gps,
       timings: { totalMs: performance.now() - t0, hashMs },
@@ -280,6 +249,9 @@ export async function processImageInWorker(blob: Blob): Promise<ProcessedImageRe
       displayMimeType: res.displayMimeType,
       previewUrl: URL.createObjectURL(displayBlob),
       dHash: res.dHash,
+      pHash: res.pHash,
+      subGridHashes: res.subGridHashes,
+      colorHistogram: res.colorHistogram,
       width: res.width,
       height: res.height,
       originalBytes: res.originalBytes,

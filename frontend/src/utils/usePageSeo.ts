@@ -43,6 +43,13 @@ const PUBLIC_SEO_VI: Record<string, RouteSeoEntry> = {
     robots: INDEX_ROBOTS,
     canonicalPath: '/mine',
   },
+  '/gioi-thieu': {
+    title: 'Giới Thiệu SmartCitizen Đồng Nai & Team Victer — Đô Thị Thông Minh',
+    description:
+      'Tìm hiểu SmartCitizen Đồng Nai do Team Victer phát triển: nền tảng phản ánh hiện trường Đồng Nai 95 phường/xã với Local AI, bản đồ trực tuyến và SMS OTP.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/gioi-thieu',
+  },
 };
 
 const PUBLIC_SEO_EN: Record<string, RouteSeoEntry> = {
@@ -73,6 +80,13 @@ const PUBLIC_SEO_EN: Record<string, RouteSeoEntry> = {
       'Look up incident tracking codes, follow real-time dispatch progress, and compare Before and After resolution photos in Dong Nai.',
     robots: INDEX_ROBOTS,
     canonicalPath: '/mine',
+  },
+  '/gioi-thieu': {
+    title: 'About SmartCitizen Dong Nai & Team Victer — Smart Urban Portal',
+    description:
+      'Learn about SmartCitizen Dong Nai built by Team Victer: AI-powered civic incident reporting across 95 wards and communes of Dong Nai.',
+    robots: INDEX_ROBOTS,
+    canonicalPath: '/gioi-thieu',
   },
 };
 
@@ -131,6 +145,23 @@ export function resolveRouteSeo(pathname: string, lang: 'vi' | 'en' = 'vi'): Rou
   const publicMap = lang === 'en' ? PUBLIC_SEO_EN : PUBLIC_SEO_VI;
   if (path in publicMap) {
     return publicMap[path];
+  }
+  const caseMatch = /^\/phan-anh\/([A-Za-z0-9-]+)$/i.exec(path);
+  if (caseMatch) {
+    const code = caseMatch[1].toUpperCase();
+    return lang === 'en'
+      ? {
+          title: `Incident ${code} — SmartCitizen Dong Nai`,
+          description: `Live processing status and field photo verification for incident ${code} on SmartCitizen Dong Nai (Team Victer).`,
+          robots: INDEX_ROBOTS,
+          canonicalPath: `/phan-anh/${caseMatch[1]}`,
+        }
+      : {
+          title: `Hồ Sơ Phản Ánh ${code} — SmartCitizen Đồng Nai`,
+          description: `Chi tiết hiện trường và tiến độ xử lý hồ sơ phản ánh ${code} trên Cổng Đô thị thông minh SmartCitizen Đồng Nai (Team Victer).`,
+          robots: INDEX_ROBOTS,
+          canonicalPath: `/phan-anh/${caseMatch[1]}`,
+        };
   }
   if (path in PRIVATE_SEO) {
     return {

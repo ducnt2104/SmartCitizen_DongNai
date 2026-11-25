@@ -33,7 +33,7 @@ export function localVision(category: Category | null, text: string, edge?: Edge
   let auth = 82;
   if (edge) {
     if (edge.blurScore < 25) { flags.push('blurry'); auth -= 30; }
-    if (edge.flatRatio > 0.62) { flags.push('possible_screen_recapture'); auth -= 38; }
+    if (edge.likelyScreenshot || edge.flatRatio > 0.62) { flags.push('possible_screen_recapture'); auth -= 38; }
     if (edge.brightness < 18 || edge.brightness > 245) { flags.push('bad_exposure'); auth -= 12; }
   }
   const emergency = EMERGENCY.test(text);

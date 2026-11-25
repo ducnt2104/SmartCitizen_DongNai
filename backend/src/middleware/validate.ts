@@ -43,7 +43,9 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
       console.error(`[http-error ${err.status}] code=${err.code} msg=${err.message}`, err.details ?? '');
     }
     const safeMsg =
-      err.code === 'otp_provider_not_configured' || err.code === 'sms_provider_not_configured'
+      err.code === 'otp_provider_not_configured' ||
+      err.code === 'sms_provider_not_configured' ||
+      err.code === 'SMS_PROVIDER_NOT_CONFIGURED'
         ? err.message
         : sanitizeClientErrorMessage(err.message, err.status);
     const safeDetails = err.status >= 500 ? undefined : err.details;

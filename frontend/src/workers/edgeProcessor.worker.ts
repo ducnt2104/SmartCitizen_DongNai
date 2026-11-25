@@ -11,6 +11,17 @@ import { DUPLICATE_SCAN_RADIUS_M } from '@shared/constants';
 import { normalizeCoordinates } from '@shared/coordinates';
 import { hammingDistance } from '@shared/dhash';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '@shared/geo';
+import {
+  computeDHashFromGrayRegion,
+  computeEdgeStatsAndScreenshot,
+  computeSsimAndEdgeDiff,
+  matchDuplicateSignature,
+  rgbaToGray,
+  type BeforeAfterSsimResult,
+  type DuplicateMatchResult,
+  type DuplicateSignatureInput,
+  type LocalEdgeStats,
+} from '../lib/localCvMath';
 
 interface WorkerScope {
   postMessage(message: unknown): void;
@@ -23,6 +34,9 @@ export interface EdgeStatsMsg {
   brightness: number;
   flatRatio: number;
   aspect: number;
+  sharpEdgeDensity?: number;
+  likelyScreenshot?: boolean;
+  screenshotConfidence?: number;
 }
 
 export interface ExifGpsCoords {
@@ -42,7 +56,21 @@ export type EdgeRequest =
       radiusM?: number;
       candidates: Array<{ id: string; lat: number; lng: number; category: string; status: string; clusterCount: number }>;
     }
-  | { id: number; type: 'hamming'; hash: string; known: Array<{ id: string; hash: string }> };
+  | { id: number; type: 'hamming'; hash: string; known: Array<{ id: string; hash: string }> }
+  | {
+      id: number;
+      type: 'duplicate_match';
+      target: { dHash: string; pHash?: string; subGridHashes?: string[]; colorHistogram?: number[] };
+      candidates: DuplicateSignatureInput[];
+    }
+  | {
+      id: number;
+      type: 'compare_before_after';
+      beforeBlob: Blob;
+      afterBlob: Blob;
+      sceneMatchThreshold?: number;
+      resolutionThreshold?: number;
+    };
 
 export type EdgeResponse =
   | {
@@ -68,6 +96,8 @@ export type EdgeResponse =
       nearby: Array<{ id: string; distanceM: number; clusterCount: number }>;
     }
   | { id: number; type: 'hamming'; matches: Array<{ id: string; distance: number }> }
+  | { id: number; type: 'duplicate_match'; matches: DuplicateMatchResult[] }
+  | { id: number; type: 'compare_before_after'; result: BeforeAfterSsimResult }
   | { id: number; type: 'error'; message: string; unsupported?: boolean };
 
 const MAX_SIDE = 1280;
@@ -162,79 +192,20 @@ function extractExifGps(buf: ArrayBuffer): ExifGpsCoords | null {
   return null;
 }
 
-function grayscaleOf(source: ImageBitmap | OffscreenCanvas, w: number, h: number): Float32Array {
-  const c = new OffscreenCanvas(w, h);
+function extractWorkerStatsAndHash(source: ImageBitmap | OffscreenCanvas, aspect: number): { dHash: string; stats: LocalEdgeStats } {
+  const W = 128;
+  const H = Math.max(32, Math.min(256, Math.round(W / Math.max(0.25, aspect))));
+  const c = new OffscreenCanvas(W, H);
   const g = c.getContext('2d', { willReadFrequently: true });
   if (!g) throw new Error('Không tạo được ngữ cảnh 2D trong Worker');
   g.imageSmoothingEnabled = true;
   g.imageSmoothingQuality = 'high';
-  g.drawImage(source, 0, 0, w, h);
-  const { data } = g.getImageData(0, 0, w, h);
-  const out = new Float32Array(w * h);
-  for (let i = 0, p = 0; i < out.length; i++, p += 4) out[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
-  return out;
-}
-
-/** dHash 64-bit: so sánh pixel liền kề trên lưới 9×8 → 64 bit → 16 ký tự hex. */
-function dHash64(source: ImageBitmap | OffscreenCanvas): string {
-  const gray = grayscaleOf(source, 9, 8);
-  const nibbles: number[] = [];
-  let cur = 0;
-  let bits = 0;
-  for (let y = 0; y < 8; y++) {
-    for (let x = 0; x < 8; x++) {
-      cur = (cur << 1) | (gray[y * 9 + x] > gray[y * 9 + x + 1] ? 1 : 0);
-      bits++;
-      if (bits === 4) {
-        nibbles.push(cur);
-        cur = 0;
-        bits = 0;
-      }
-    }
-  }
-  return nibbles.map((n) => n.toString(16)).join('');
-}
-
-function edgeStats(source: ImageBitmap | OffscreenCanvas, aspect: number): EdgeStatsMsg {
-  const W = 128;
-  const H = Math.max(16, Math.round(W / aspect));
-  const g = grayscaleOf(source, W, H);
-  let sum = 0;
-  for (let i = 0; i < g.length; i++) sum += g[i];
-  const brightness = sum / g.length;
-  let lapSum = 0;
-  let lapSq = 0;
-  let n = 0;
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x;
-      const lap = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - W] - g[i + W];
-      lapSum += lap;
-      lapSq += lap * lap;
-      n++;
-    }
-  }
-  const mean = lapSum / n;
-  const blurScore = lapSq / n - mean * mean;
-  let flat = 0;
-  let blocks = 0;
-  for (let by = 0; by + 8 <= H; by += 8) {
-    for (let bx = 0; bx + 8 <= W; bx += 8) {
-      let s = 0;
-      let sq = 0;
-      for (let y = 0; y < 8; y++) {
-        for (let x = 0; x < 8; x++) {
-          const v = g[(by + y) * W + bx + x];
-          s += v;
-          sq += v * v;
-        }
-      }
-      const variance = sq / 64 - (s / 64) ** 2;
-      if (variance < 12) flat++;
-      blocks++;
-    }
-  }
-  return { blurScore, brightness, flatRatio: blocks ? flat / blocks : 0, aspect };
+  g.drawImage(source, 0, 0, W, H);
+  const gray = rgbaToGray(g.getImageData(0, 0, W, H).data, W, H);
+  return {
+    dHash: computeDHashFromGrayRegion(gray, W, 0, 0, W, H),
+    stats: computeEdgeStatsAndScreenshot(gray, W, H, aspect, false),
+  };
 }
 
 async function encodeCompressed(canvas: OffscreenCanvas): Promise<{ blob: Blob; mimeType: string }> {
@@ -268,9 +239,8 @@ async function processImage(id: number, blob: Blob): Promise<EdgeResponse> {
   const { blob: out, mimeType } = await encodeCompressed(canvas);
   const bytes = new Uint8Array(await out.arrayBuffer());
   const t1 = performance.now();
-  const dHash = dHash64(canvas);
+  const { dHash, stats } = extractWorkerStatsAndHash(canvas, bmp.width / Math.max(1, bmp.height));
   const hashMs = performance.now() - t1;
-  const stats = edgeStats(canvas, bmp.width / bmp.height);
   bmp.close();
   return {
     id,
@@ -306,6 +276,46 @@ function geoScan(req: Extract<EdgeRequest, { type: 'geo' }>): EdgeResponse {
   };
 }
 
+async function compareBeforeAfterInWorker(
+  req: Extract<EdgeRequest, { type: 'compare_before_after' }>,
+): Promise<EdgeResponse> {
+  if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') {
+    return {
+      id: req.id,
+      type: 'error',
+      unsupported: true,
+      message: 'Trình duyệt chưa hỗ trợ OffscreenCanvas để đối chiếu SSIM.',
+    };
+  }
+  const SIZE = 128;
+  const [bBmp, aBmp] = await Promise.all([
+    createImageBitmap(req.beforeBlob, { imageOrientation: 'from-image' }),
+    createImageBitmap(req.afterBlob, { imageOrientation: 'from-image' }),
+  ]);
+  try {
+    const extractGray = (bmp: ImageBitmap): Uint8Array => {
+      const c = new OffscreenCanvas(SIZE, SIZE);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      if (!g) throw new Error('Không tạo được ngữ cảnh 2D');
+      g.drawImage(bmp, 0, 0, SIZE, SIZE);
+      return rgbaToGray(g.getImageData(0, 0, SIZE, SIZE).data, SIZE, SIZE);
+    };
+    const bGray = extractGray(bBmp);
+    const aGray = extractGray(aBmp);
+    return {
+      id: req.id,
+      type: 'compare_before_after',
+      result: computeSsimAndEdgeDiff(bGray, aGray, SIZE, SIZE, {
+        sceneMatchThreshold: req.sceneMatchThreshold,
+        resolutionThreshold: req.resolutionThreshold,
+      }),
+    };
+  } finally {
+    bBmp.close();
+    aBmp.close();
+  }
+}
+
 ctx.onmessage = (ev: MessageEvent<EdgeRequest>) => {
   const req = ev.data;
   const reply = (r: EdgeResponse): void => ctx.postMessage(r);
@@ -316,6 +326,13 @@ ctx.onmessage = (ev: MessageEvent<EdgeRequest>) => {
       processImage(req.id, req.blob).then(reply).catch(fail);
     } else if (req.type === 'geo') {
       reply(geoScan(req));
+    } else if (req.type === 'duplicate_match') {
+      const matches = req.candidates
+        .map((c) => matchDuplicateSignature(req.target, c))
+        .sort((a, b) => a.dHashDist - b.dHashDist);
+      reply({ id: req.id, type: 'duplicate_match', matches });
+    } else if (req.type === 'compare_before_after') {
+      compareBeforeAfterInWorker(req).then(reply).catch(fail);
     } else {
       reply({
         id: req.id,

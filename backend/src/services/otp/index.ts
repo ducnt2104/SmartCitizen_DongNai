@@ -11,6 +11,8 @@ export {
 
 export {
   OTP_COOLDOWN_MS,
+  OTP_SEND_WINDOW_MS,
+  OTP_MAX_SENDS_PER_WINDOW,
   OTP_HOURLY_WINDOW_MS,
   OTP_MAX_SENDS_PER_HOUR,
   OTP_MAX_VERIFY_ATTEMPTS,
@@ -24,7 +26,7 @@ export {
   EsmsSmsOtpProvider,
   SpeedSmsOtpProvider,
   TwilioSmsOtpProvider,
-  DemoSmsOtpProvider,
+  VonageSmsOtpProvider,
   MultiSmsOtpDispatcher,
   type SmsProviderMode,
   type ConcreteSmsProviderName,
@@ -43,8 +45,10 @@ export {
 export {
   PHONE_OTP_TTL_MS,
   generateSixDigitOtp,
+  generateOtpSalt,
   hashOtpCodeSha256,
   PhoneOtpService,
+  SmsOtpService,
   type StoredPhoneOtpChallenge,
   type SendPhoneOtpResponse,
 } from './phoneOtpService';

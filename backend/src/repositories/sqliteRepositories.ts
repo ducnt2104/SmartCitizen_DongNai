@@ -601,34 +601,109 @@ export function createLocalPersistentRepositories(
     },
   };
 
+  const normalizeSession = (s: SessionRecord): SessionRecord => ({
+    ...s,
+    tokenHash: s.tokenHash ?? s.refreshHash,
+    deviceFingerprint: s.deviceFingerprint ?? '',
+    ip: s.ip ?? '',
+    tokenVersion: s.tokenVersion ?? 0,
+    lastActiveAt: s.lastActiveAt ?? s.createdAt,
+    isRevoked: Boolean(s.isRevoked || s.revokedAt !== null),
+    revokedReason: s.revokedReason ?? null,
+  });
+
   const sessions: SessionRepository = {
+    async get(id: string): Promise<SessionRecord | null> {
+      const found = engine.sessions.get(id);
+      return found ? normalizeSession(found) : null;
+    },
     async getByRefreshHash(refreshHash: string): Promise<SessionRecord | null> {
       for (const s of engine.sessions.values()) {
-        if (s.refreshHash === refreshHash) return { ...s };
+        if (s.refreshHash === refreshHash) return normalizeSession(s);
       }
       return null;
     },
-    async save(rec: SessionRecord): Promise<void> {
-      engine.put('sessions', rec.id, rec, writeDirtyFlag);
+    async listActive(filter?: { userId?: string; includeRevoked?: boolean; limit?: number }): Promise<SessionRecord[]> {
+      const now = Date.now();
+      const limit = Math.min(Math.max(filter?.limit ?? 200, 1), 1000);
+      const out: SessionRecord[] = [];
+      for (const s of engine.sessions.values()) {
+        if (filter?.userId && s.userId !== filter.userId) continue;
+        if (!filter?.includeRevoked && (s.isRevoked || s.revokedAt !== null || s.expiresAt <= now)) continue;
+        out.push(normalizeSession(s));
+      }
+      return out.sort((a, b) => (b.lastActiveAt ?? b.createdAt) - (a.lastActiveAt ?? a.createdAt)).slice(0, limit);
     },
-    async revoke(id: string, replacedBySessionId: string | null = null): Promise<void> {
+    async save(rec: SessionRecord): Promise<void> {
+      engine.put('sessions', rec.id, normalizeSession(rec), writeDirtyFlag);
+    },
+    async touch(id: string, lastActiveAt: number, ip?: string): Promise<void> {
+      const found = engine.sessions.get(id);
+      if (found) {
+        engine.put('sessions', id, { ...found, lastActiveAt, ...(ip ? { ip } : {}) }, writeDirtyFlag);
+      }
+    },
+    async revoke(id: string, replacedBySessionId: string | null = null, reason: string | null = null): Promise<void> {
       const found = engine.sessions.get(id);
       if (found) {
         const next: SessionRecord = {
           ...found,
+          isRevoked: true,
           revokedAt: Date.now(),
           ...(replacedBySessionId ? { replacedBySessionId } : {}),
+          ...(reason ? { revokedReason: reason } : {}),
         };
         engine.put('sessions', id, next, writeDirtyFlag);
       }
     },
-    async revokeAllForUser(userId: string): Promise<void> {
+    async revokeAllForUser(userId: string, reason: string | null = null): Promise<number> {
       const now = Date.now();
+      let count = 0;
       for (const s of engine.sessions.values()) {
         if (s.userId === userId && !s.revokedAt) {
-          engine.put('sessions', s.id, { ...s, revokedAt: now }, writeDirtyFlag);
+          engine.put(
+            'sessions',
+            s.id,
+            { ...s, isRevoked: true, revokedAt: now, ...(reason ? { revokedReason: reason } : {}) },
+            writeDirtyFlag,
+          );
+          count += 1;
         }
       }
+      return count;
+    },
+    async revokeAllExcept(userId: string, exceptSessionId: string, reason: string | null = null): Promise<number> {
+      const now = Date.now();
+      let count = 0;
+      for (const s of engine.sessions.values()) {
+        if (s.userId === userId && s.id !== exceptSessionId && !s.revokedAt) {
+          engine.put(
+            'sessions',
+            s.id,
+            { ...s, isRevoked: true, revokedAt: now, ...(reason ? { revokedReason: reason } : {}) },
+            writeDirtyFlag,
+          );
+          count += 1;
+        }
+      }
+      return count;
+    },
+    async revokeAllSystem(exceptSessionId: string | null = null, reason: string | null = null): Promise<number> {
+      const now = Date.now();
+      let count = 0;
+      for (const s of engine.sessions.values()) {
+        if (exceptSessionId && s.id === exceptSessionId) continue;
+        if (!s.revokedAt) {
+          engine.put(
+            'sessions',
+            s.id,
+            { ...s, isRevoked: true, revokedAt: now, ...(reason ? { revokedReason: reason } : {}) },
+            writeDirtyFlag,
+          );
+          count += 1;
+        }
+      }
+      return count;
     },
   };
 

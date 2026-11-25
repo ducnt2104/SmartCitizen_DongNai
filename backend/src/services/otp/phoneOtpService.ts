@@ -23,6 +23,7 @@ export interface StoredPhoneOtpChallenge {
   channel: 'phone';
   purpose: 'login' | 'reset_password' | 'verify_phone';
   otpHash: string;
+  otpSalt?: string;
   attempts: number;
   resendAt: number;
   expiresAt: number;
@@ -38,9 +39,6 @@ export interface SendPhoneOtpResponse {
   expiresInSec: number;
   provider: ConcreteSmsProviderName | string;
   clientSideFirebase?: boolean;
-  fallbackChannel?: 'telegram' | 'email';
-  fallbackTargetMasked?: string;
-  devOtpPreview?: string;
 }
 
 /** Sinh mã OTP 6 chữ số ngẫu nhiên mật mã học (`100000`–`999999`). */
@@ -48,9 +46,17 @@ export function generateSixDigitOtp(): string {
   return String(crypto.randomInt(100_000, 1_000_000));
 }
 
-/** Băm mã OTP bằng SHA-256 trước khi lưu xuống MongoDB. */
-export function hashOtpCodeSha256(otp: string): string {
-  return sha256(otp.trim());
+/** Sinh salt ngẫu nhiên 128-bit cho mỗi mã OTP trước khi băm SHA-256. */
+export function generateOtpSalt(): string {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+/**
+ * Băm mã OTP bằng SHA-256 (+ salt nếu có) trước khi lưu xuống MongoDB.
+ */
+export function hashOtpCodeSha256(otp: string, salt?: string): string {
+  const clean = otp.trim();
+  return salt ? sha256(`${salt}:${clean}`) : sha256(clean);
 }
 
 function isMongoReady(): boolean {
@@ -58,11 +64,11 @@ function isMongoReady(): boolean {
 }
 
 /**
- * Dịch vụ quản lý vòng đời SMS OTP cho Số điện thoại Việt Nam (`+84`):
- * - Chuẩn hóa E.164 nghiêm ngặt (`03`, `05`, `07`, `08`, `09`, đủ 10 số).
- * - Chống spam: Cooldown 60s + tối đa 5 tin SMS / giờ / SĐT.
- * - Lưu SHA-256 vào `OtpToken` (MongoDB TTL 5 phút) + bộ nhớ đồng bộ khi chạy JSON/test.
- * - Chống brute-force: Nhập sai đến lần thứ 5 (hoặc quá 5 lần) lập tức hủy/khóa mã OTP đó.
+ * Dịch vụ quản lý vòng đời SMS OTP (`SmsOtpService` / `PhoneOtpService`):
+ * - Chuẩn hóa E.164 nghiêm ngặt (`03`, `05`, `07`, `08`, `09`, đủ 10 số -> `+84...`).
+ * - Chống spam: Cooldown 60s + tối đa 3 lần gửi / 10 phút / SĐT.
+ * - Lưu SHA-256 + salt vào `OtpToken` (MongoDB TTL 300 giây) + bộ nhớ/SQLite đồng bộ.
+ * - Chống brute-force: Nhập sai quá 5 lần lập tức hủy/khóa mã OTP đó.
  */
 export class PhoneOtpService {
   readonly rateLimiter: OtpSendRateLimiter;
@@ -93,6 +99,7 @@ export class PhoneOtpService {
             channel: 'phone',
             purpose: doc.purpose,
             otpHash: doc.otpHash,
+            otpSalt: doc.otpSalt,
             attempts: doc.attempts ?? 0,
             resendAt: doc.resendAt ? new Date(doc.resendAt).getTime() : 0,
             expiresAt: new Date(doc.expiresAt).getTime(),
@@ -101,7 +108,7 @@ export class PhoneOtpService {
           };
         }
       } catch {
-        /* fallback mượt xuống bộ nhớ / SQLite local */
+        /* fallback xuống bộ nhớ / SQLite local */
       }
     }
     const mem = this.memoryStore.get(phoneE164);
@@ -112,8 +119,14 @@ export class PhoneOtpService {
         return {
           target: phoneE164,
           channel: 'phone',
-          purpose: localRec.purpose,
+          purpose:
+            localRec.purpose === 'reset_password'
+              ? 'reset_password'
+              : localRec.purpose === 'change_phone'
+                ? 'verify_phone'
+                : 'login',
           otpHash: localRec.codeHash,
+          otpSalt: localRec.otpSalt,
           attempts: localRec.failedAttempts ?? 0,
           resendAt: localRec.resendAt ?? 0,
           expiresAt: localRec.expiresAt,
@@ -134,6 +147,7 @@ export class PhoneOtpService {
           channel: 'sms',
           purpose: rec.purpose === 'reset_password' ? 'reset_password' : 'login',
           codeHash: rec.otpHash,
+          otpSalt: rec.otpSalt,
           expiresAt: rec.expiresAt,
           resendAt: rec.resendAt,
           failedAttempts: 0,
@@ -151,6 +165,7 @@ export class PhoneOtpService {
           channel: 'phone',
           purpose: rec.purpose,
           otpHash: rec.otpHash,
+          otpSalt: rec.otpSalt,
           codeHash: rec.otpHash,
           attempts: 0,
           failedAttempts: 0,
@@ -161,7 +176,7 @@ export class PhoneOtpService {
           lockedUntil: null,
         });
       } catch {
-        /* đã lưu an toàn ở memoryStore + SQLite local */
+        /* đã lưu ở memoryStore + SQLite local */
       }
     }
   }
@@ -175,6 +190,7 @@ export class PhoneOtpService {
           channel: 'sms',
           purpose: rec.purpose === 'reset_password' ? 'reset_password' : 'login',
           codeHash: rec.otpHash,
+          otpSalt: rec.otpSalt,
           expiresAt: rec.expiresAt,
           resendAt: rec.resendAt,
           failedAttempts: rec.attempts,
@@ -218,21 +234,22 @@ export class PhoneOtpService {
     const purpose = opts?.purpose ?? 'login';
     const envSource = opts?.envSource ?? process.env;
 
-    // 1. Kiểm tra Cooldown 60s & Giới hạn 5 lần/giờ/SĐT
+    // 1. Kiểm tra Cooldown 60s & Giới hạn 3 lần / 10 phút / SĐT
     this.rateLimiter.assertCanSend(parsed.e164, now);
 
-    // Kiểm tra thêm resendAt lưu trong DB (phòng trường hợp đa tiến trình / vừa restart server)
+    // Kiểm tra thêm resendAt lưu trong DB (phòng trường hợp vừa restart server)
     const existing = await this.loadLatestChallenge(parsed.e164);
     if (existing && existing.resendAt > now) {
       const waitSec = Math.max(1, Math.ceil((existing.resendAt - now) / 1000));
       throw tooMany(`Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`, 'otp_cooldown');
     }
 
-    // 2. Sinh mã 6 số CSPRNG & băm SHA-256
+    // 2. Sinh mã 6 số CSPRNG + salt ngẫu nhiên 128-bit & băm SHA-256
     const otp = generateSixDigitOtp();
-    const otpHash = hashOtpCodeSha256(otp);
+    const otpSalt = generateOtpSalt();
+    const otpHash = hashOtpCodeSha256(otp, otpSalt);
 
-    // 3. Gửi qua Multi-Provider SMS Dispatcher (8s timeout)
+    // 3. Gửi qua Multi-Provider SMS Dispatcher (tự chọn kênh khả dụng hoặc ném SMS_PROVIDER_NOT_CONFIGURED)
     const sendResult = await this.smsDispatcher.sendOtp(
       {
         phoneE164: parsed.e164,
@@ -244,13 +261,14 @@ export class PhoneOtpService {
       envSource,
     );
 
-    // 4. Chỉ lưu bản ghi OTP và tính lượt gửi sau khi nhà mạng xác nhận gửi thành công
+    // 4. Lưu challenge & ghi nhận rate limit sau khi cổng SMS xác nhận
     if (!sendResult.clientSideFirebase) {
       await this.persistNewChallenge({
         target: parsed.e164,
         channel: 'phone',
         purpose,
         otpHash,
+        otpSalt,
         attempts: 0,
         resendAt: now + OTP_COOLDOWN_MS,
         expiresAt: now + PHONE_OTP_TTL_MS,
@@ -268,65 +286,12 @@ export class PhoneOtpService {
       expiresInSec: PHONE_OTP_TTL_MS / 1000,
       provider: sendResult.provider,
       ...(sendResult.clientSideFirebase ? { clientSideFirebase: true } : {}),
-      ...(sendResult.fallbackChannel ? { fallbackChannel: sendResult.fallbackChannel } : {}),
-      ...(sendResult.devOtpPreview ? { devOtpPreview: sendResult.devOtpPreview } : {}),
-    };
-  }
-
-  /**
-   * Phát hành mã OTP 6 số cho SĐT nhưng gửi qua kênh dự phòng (Email liên kết) khi cổng SMS chưa cấu hình.
-   */
-  async issueChallengeForExternalChannel(
-    rawPhone: string,
-    purpose: 'login' | 'reset_password' | 'verify_phone' = 'login',
-    deliverFn: (otp: string, parsed: ParsedVnPhone, ttlMinutes: number) => Promise<{
-      provider: string;
-      fallbackChannel: 'email' | 'telegram';
-      fallbackTargetMasked?: string;
-    }>,
-    now = Date.now(),
-  ): Promise<SendPhoneOtpResponse> {
-    const parsed = requireVnPhone(rawPhone);
-    this.rateLimiter.assertCanSend(parsed.e164, now);
-
-    const existing = await this.loadLatestChallenge(parsed.e164);
-    if (existing && existing.resendAt > now) {
-      const waitSec = Math.max(1, Math.ceil((existing.resendAt - now) / 1000));
-      throw tooMany(`Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`, 'otp_cooldown');
-    }
-
-    const otp = generateSixDigitOtp();
-    const otpHash = hashOtpCodeSha256(otp);
-    const delivered = await deliverFn(otp, parsed, PHONE_OTP_TTL_MS / 60_000);
-
-    await this.persistNewChallenge({
-      target: parsed.e164,
-      channel: 'phone',
-      purpose,
-      otpHash,
-      attempts: 0,
-      resendAt: now + OTP_COOLDOWN_MS,
-      expiresAt: now + PHONE_OTP_TTL_MS,
-      consumedAt: null,
-      invalidatedAt: null,
-    });
-    this.rateLimiter.recordSent(parsed.e164, now);
-
-    return {
-      channel: 'phone',
-      target: parsed.e164,
-      targetMasked: parsed.masked,
-      resendInSec: OTP_COOLDOWN_MS / 1000,
-      expiresInSec: PHONE_OTP_TTL_MS / 1000,
-      provider: delivered.provider,
-      fallbackChannel: delivered.fallbackChannel,
-      ...(delivered.fallbackTargetMasked ? { fallbackTargetMasked: delivered.fallbackTargetMasked } : {}),
     };
   }
 
   /**
    * Xác thực mã OTP 6 số cho SĐT Việt Nam:
-   * - Kiểm tra hạn 5 phút, chống dùng lại (`consumedAt`), và hủy mã ngay khi sai đủ/quá 5 lần.
+   * - Kiểm tra hạn 300 giây (5 phút), chống dùng lại (`consumedAt`), và khóa ngay khi sai >= 5 lần.
    */
   async verifyPhoneOtp(
     rawPhone: string,
@@ -348,7 +313,7 @@ export class PhoneOtpService {
     }
     if (rec.invalidatedAt !== null || rec.attempts >= OTP_MAX_VERIFY_ATTEMPTS) {
       throw tooMany(
-        `Mã OTP đã bị hủy do nhập sai quá ${OTP_MAX_VERIFY_ATTEMPTS} lần. Vui lòng yêu cầu gửi mã mới.`,
+        `Mã OTP đã bị khóa do nhập sai quá ${OTP_MAX_VERIFY_ATTEMPTS} lần. Vui lòng yêu cầu gửi mã mới.`,
         'otp_locked',
       );
     }
@@ -360,14 +325,14 @@ export class PhoneOtpService {
       throw badRequest('Mã OTP đã hết hạn (5 phút). Vui lòng yêu cầu gửi mã mới.', 'otp_expired');
     }
 
-    const candidateHash = hashOtpCodeSha256(otpCode);
+    const candidateHash = hashOtpCodeSha256(otpCode, rec.otpSalt);
     if (!safeEqualHex(rec.otpHash, candidateHash)) {
       rec.attempts += 1;
       if (rec.attempts >= OTP_MAX_VERIFY_ATTEMPTS) {
         rec.invalidatedAt = now;
         await this.updateChallengeState(rec);
         throw tooMany(
-          `Nhập sai ${OTP_MAX_VERIFY_ATTEMPTS} lần — mã OTP này đã bị hủy ngay lập tức để bảo vệ tài khoản. Vui lòng yêu cầu mã mới.`,
+          `Nhập sai ${OTP_MAX_VERIFY_ATTEMPTS} lần — mã OTP này đã bị khóa để bảo vệ tài khoản. Vui lòng yêu cầu mã mới.`,
           'otp_locked',
         );
       }
@@ -383,7 +348,7 @@ export class PhoneOtpService {
     return parsed;
   }
 
-  /** Kiểm tra trạng thái bản ghi OTP trong bộ nhớ/DB (hỗ trợ kiểm thử). */
+  /** Kiểm tra trạng thái bản ghi OTP trong bộ nhớ/DB. */
   async peekChallenge(rawPhone: string): Promise<StoredPhoneOtpChallenge | null> {
     const parsed = requireVnPhone(rawPhone);
     return this.loadLatestChallenge(parsed.e164);
@@ -394,3 +359,5 @@ export class PhoneOtpService {
     this.rateLimiter.reset();
   }
 }
+
+export class SmsOtpService extends PhoneOtpService {}

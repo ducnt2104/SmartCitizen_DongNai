@@ -102,7 +102,6 @@ export function OverviewView({ scope, reports, isCity }: { scope: string; report
                   <YAxis stroke="#94A3B8" tick={{ fontSize: 11 }} unit="d" />
                   <Tooltip contentStyle={{ background: '#0F172A', border: '1px solid #1E293B', color: '#E2E8F0', fontSize: 12 }} />
                   <ReferenceLine y={ov.data.targetDays} stroke="#4ADE80" strokeDasharray="5 4" label={{ value: `${t('ioc.target')} ${ov.data.targetDays}d`, fill: '#4ADE80', fontSize: 11, position: 'insideTopRight' }} />
-                  <ReferenceLine y={3.2} stroke="#FBBF24" strokeDasharray="2 4" label={{ value: `${t('ioc.baseline')} 3.2d`, fill: '#FBBF24', fontSize: 11, position: 'insideBottomRight' }} />
                   <Line type="monotone" dataKey="avgDays" stroke="#22D3EE" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
                 </LineChart>
               </ResponsiveContainer>

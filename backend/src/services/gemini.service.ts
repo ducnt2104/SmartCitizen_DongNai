@@ -13,11 +13,13 @@ import {
 } from '../shared/constants';
 import { hammingDistance } from '../shared/dhash';
 import { WARD_BY_CODE } from '../shared/dongNaiWards';
+import { haversineMeters } from '../shared/geo';
 import {
   CATEGORIES,
   type AiMode,
   type Category,
   type Department,
+  type ForensicSignals,
   type SeverityLabel,
   type TacticalBriefing,
   type VisionResult,
@@ -28,10 +30,17 @@ import { HttpError } from '../utils/errors';
 import { LruCache } from '../utils/lru';
 import {
   computeModerationDecision,
+  computeRawFullSsim,
+  runImageForensics,
   stage0PreFilter,
   VisionAnalyzerService,
   type Stage0ExifInput,
 } from './ai';
+import {
+  HYBRID_LOCAL_CONFIDENCE_THRESHOLD,
+  localNlpClassifier,
+} from './ai/localNlpClassifier.service';
+import { runSharpAuthenticityCheck } from './localCvPipeline';
 import type { CvEngineService } from './cvEngine.service';
 import {
   buildGeminiModelChain,
@@ -53,6 +62,9 @@ export interface EdgeStats {
   brightness: number;
   flatRatio: number;
   aspect: number;
+  sharpEdgeDensity?: number;
+  likelyScreenshot?: boolean;
+  screenshotConfidence?: number;
 }
 
 export interface AnalyzeInput {
@@ -60,6 +72,9 @@ export interface AnalyzeInput {
   imageBuffer?: Buffer;
   mimeType: string;
   dHash: string;
+  pHash?: string;
+  subGridHashes?: string[];
+  colorHistogram?: number[];
   hintCategory?: Category;
   hintText?: string;
   edge?: EdgeStats;
@@ -75,6 +90,7 @@ export interface AnalyzeInput {
   allowTinyTestStub?: boolean;
   skipDedup?: boolean;
   skipCache?: boolean;
+  forceCloud?: boolean;
 }
 
 export interface VerifyInput {
@@ -91,14 +107,31 @@ export interface VerifyInput {
   beforeLng?: number;
   afterLat?: number;
   afterLng?: number;
+  explicitAfterCoords?: boolean;
   afterEdge?: EdgeStats;
+  afterExif?: Stage0ExifInput | null;
+  reportCreatedAt?: string;
+  allowTinyTestStub?: boolean;
 }
 
 export interface VerifyOutput {
   resolutionVerified: boolean;
+  resolutionStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
+  rejectedReasonCode: string | null;
   matchConfidence: number;
   sceneMatchScore: number;
   resolutionScore: number;
+  ssimScore: number | null;
+  gpsDistanceMeters: number | null;
+  temporalValid: boolean;
+  forensicPassed: boolean;
+  forensics: ForensicSignals | null;
+  criteria: {
+    isAuthentic: boolean;
+    sameScene: boolean;
+    issueResolved: boolean;
+    spatiotemporalValid: boolean;
+  };
   inlierKeypoints?: number;
   fraudFlags?: string[];
   summary: string;
@@ -156,6 +189,8 @@ const TacticalBriefingZ = z.object({
 
 const VerifyZ = z.object({
   resolutionVerified: z.boolean(),
+  sameScene: z.boolean().optional(),
+  issueResolved: z.boolean().optional(),
   matchConfidence: z.coerce.number().min(0).max(100),
   sceneMatchScore: z.coerce.number().min(0).max(100).optional(),
   resolutionScore: z.coerce.number().min(0).max(100).optional(),
@@ -167,13 +202,15 @@ const VERIFY_SCHEMA: Record<string, unknown> = {
   type: 'OBJECT',
   properties: {
     resolutionVerified: { type: 'BOOLEAN' },
+    sameScene: { type: 'BOOLEAN' },
+    issueResolved: { type: 'BOOLEAN' },
     matchConfidence: { type: 'INTEGER' },
     sceneMatchScore: { type: 'INTEGER' },
     resolutionScore: { type: 'INTEGER' },
     fraudFlags: { type: 'ARRAY', items: { type: 'STRING' } },
     summary: { type: 'STRING' },
   },
-  required: ['resolutionVerified', 'matchConfidence', 'sceneMatchScore', 'resolutionScore', 'summary'],
+  required: ['resolutionVerified', 'sameScene', 'issueResolved', 'matchConfidence', 'sceneMatchScore', 'resolutionScore', 'summary'],
 };
 
 const BRIEFING_SCHEMA: Record<string, unknown> = {
@@ -187,10 +224,10 @@ const BRIEFING_SCHEMA: Record<string, unknown> = {
 };
 
 const VERIFY_SYSTEM = `Bạn là Kiểm toán viên Nghiệm thu AI của SmartCitizen Đồng Nai. Nhận ảnh TRƯỚC xử lý và ảnh SAU xử lý.
-Chấm tách bạch 2 điểm (0–100):
-1. sceneMatchScore: mức độ khớp đúng cùng vị trí, kiến trúc nền, mặt đường với ảnh TRƯỚC.
-2. resolutionScore: mức độ sự cố đã được dọn dẹp/sửa chữa triệt để trong ảnh SAU (kể cả chụp khác thời điểm sáng/tối).
-Chỉ đặt resolutionVerified=true khi sceneMatchScore >= 60 VÀ resolutionScore >= 70 VÀ ảnh SAU không phải ảnh chụp lại màn hình.`;
+Thực hiện đối chiếu 4 tiêu chí nghiêm ngặt và trả JSON:
+1. sameScene & sceneMatchScore (0–100): Hai ảnh có chụp tại CÙNG ĐỊA ĐIỂM dựa trên các mốc cố định (lề đường, cột điện, tường nhà, biển báo, cây cối)? Nếu khác địa điểm -> sameScene=false.
+2. issueResolved & resolutionScore (0–100): Vật cản/rác/ổ gà/ngập/hư hỏng trong ảnh TRƯỚC đã thực sự biến mất hoặc được khắc phục an toàn trong ảnh SAU chưa (kể cả khác ánh sáng)? Nếu vẫn còn sự cố -> issueResolved=false.
+3. Phát hiện ảnh giả / AI inpainting / ảnh chụp màn hình -> ghi fraudFlags và resolutionVerified=false.`;
 
 const BRIEFING_SYSTEM = `Bạn là Chỉ huy Điều phối Tác chiến AI (SmartCitizen AI Brain) cho Đội Cứu Hộ TP. Đồng Nai.
 Từ thông tin sự cố hiện trường, hãy trả về DUY NHẤT JSON gồm 3 dòng ngắn gọn, thực chiến bằng tiếng Việt:
@@ -337,6 +374,7 @@ export class GeminiService {
   private cvEngine: CvEngineService | null = null;
   private rag: LocalRagService | null = null;
   private ollamaOfflineUntil = 0;
+  private localLlmCache: { at: number; value: LocalLlmHealth } | null = null;
   lastError: string | null = null;
   lastOkAt: string | null = null;
 
@@ -431,21 +469,28 @@ export class GeminiService {
   }
 
   async checkLocalLlmHealth(): Promise<LocalLlmHealth> {
+    if (this.localLlmCache && Date.now() - this.localLlmCache.at < 15_000) {
+      return this.localLlmCache.value;
+    }
+    const cacheAndReturn = (value: LocalLlmHealth): LocalLlmHealth => {
+      this.localLlmCache = { at: Date.now(), value };
+      return value;
+    };
     const t0 = performance.now();
     if (env.llamaCppBaseUrl) {
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 900);
+        const timer = setTimeout(() => ctrl.abort(), 350);
         const res = await fetch(`${env.llamaCppBaseUrl.replace(/\/+$/, '')}/health`, { signal: ctrl.signal });
         clearTimeout(timer);
         if (res.ok) {
-          return {
+          return cacheAndReturn({
             online: true,
             provider: 'llamacpp',
             endpoint: env.llamaCppBaseUrl,
             model: env.ollamaModel,
             latencyMs: Math.round((performance.now() - t0) * 10) / 10,
-          };
+          });
         }
       } catch {
         // fall through to Ollama check
@@ -453,28 +498,28 @@ export class GeminiService {
     }
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 900);
+      const timer = setTimeout(() => ctrl.abort(), 350);
       const res = await fetch(`${env.ollamaBaseUrl.replace(/\/+$/, '')}/api/tags`, { signal: ctrl.signal });
       clearTimeout(timer);
       if (res.ok) {
-        return {
+        return cacheAndReturn({
           online: true,
           provider: 'ollama',
           endpoint: env.ollamaBaseUrl,
           model: env.ollamaModel,
           latencyMs: Math.round((performance.now() - t0) * 10) / 10,
-        };
+        });
       }
     } catch {
       // offline
     }
-    return {
+    return cacheAndReturn({
       online: false,
       provider: 'none',
       endpoint: env.llamaCppBaseUrl || env.ollamaBaseUrl,
       model: env.ollamaModel,
       latencyMs: null,
-    };
+    });
   }
 
   private async cloudAllowed(): Promise<boolean> {
@@ -878,43 +923,186 @@ export class GeminiService {
       const t1Start = performance.now();
       const trustSupervised = (input.trustScore ?? 50) < 25;
 
-      // Chạy song song Stage 1 Vision AI (<=640px) & Rust/Sharp CV authenticity (<50ms)
-      const [stage1Result, rustAuth] = await Promise.all([
-        this.visionAnalyzer.analyze({
-          aiImageBuffer: imgBuf,
-          aiMimeType: input.mimeType || 'image/webp',
-          aiImageBase64: base64ForRust,
-          sanitizedWrappedText: stage0.sanitizedWrappedText,
-          cleanHintText: stage0.cleanHintText,
-          forensicSignals: stage0.forensicSignals,
-          hintCategory: input.hintCategory,
-          wardCode: input.wardCode,
-          onArterial: input.onArterial,
-          trustSupervised,
-          fallbackVision: () => this.fallbackVision({ ...input, hintText: stage0.cleanHintText }),
-          buildBriefing: (bp) =>
-            this.deterministicTacticalBriefing(
-              { ...bp, wardCode: input.wardCode, onArterial: input.onArterial },
-              'fallback',
-            ),
-        }),
+      // Bước 1 Hybrid AI (Local-First <80ms): Chạy song song Local NLP Classifier, Sharp/Rust CV & Tier-1 Image Forensics
+      const [localNlp, localCvAuth, forensicAudit] = await Promise.all([
+        Promise.resolve(
+          localNlpClassifier.classify({
+            text: stage0.cleanHintText,
+            hintCategory: input.hintCategory,
+            wardCode: input.wardCode,
+            onArterial: input.onArterial,
+            brightness: input.edge?.brightness,
+          }),
+        ),
         this.cvEngine && base64ForRust
           ? this.cvEngine.checkAuthenticity(base64ForRust, input.reportId).catch(() => null)
-          : Promise.resolve(null),
+          : base64ForRust && !input.allowTinyTestStub
+            ? runSharpAuthenticityCheck(base64ForRust, 50).catch(() => null)
+            : Promise.resolve(null),
+        runImageForensics({
+          imageBuffer: imgBuf,
+          exif: input.exif,
+          edge: input.edge,
+          declaredLat: input.lat,
+          declaredLng: input.lng,
+          allowTinyTestStub: input.allowTinyTestStub,
+        }),
       ]);
 
-      let baseResult = stage1Result;
+      const cvLooksClean =
+        !forensicAudit.hardRejectCode &&
+        forensicAudit.isAuthentic &&
+        forensicAudit.authenticityScore >= 65 &&
+        (localCvAuth === null
+          ? !input.edge?.likelyScreenshot && (input.edge?.flatRatio ?? 0) <= 0.62
+          : localCvAuth.is_authentic && localCvAuth.authenticity_score >= 65);
+
+      // Chặn tức thời tại Local Gatekeeper nếu phát hiện ảnh AI/C2PA/ELA/FFT/Screenshot/Moiré/Mờ nặng
+      if (forensicAudit.hardRejectCode) {
+        const mergedFlags = Array.from(
+          new Set([
+            ...stage0.forensicSignals,
+            ...forensicAudit.forensics.flags,
+            ...(localCvAuth?.flags ?? []),
+          ]),
+        );
+        const totalMs = Math.round((performance.now() - t0) * 10) / 10;
+        const rejectMode: AiMode = localCvAuth?.engine === 'rust' ? 'local_rust' : 'local_ai';
+        return {
+          ...this.fallbackVision({ ...input, hintText: stage0.cleanHintText }),
+          status: 'ANALYZED',
+          category: localNlp.category,
+          aiSuggestedLabel: localNlp.aiSuggestedLabel,
+          authenticityScore: Math.min(forensicAudit.authenticityScore, localCvAuth?.authenticity_score ?? 100),
+          isAuthentic: false,
+          isScreenCaptureOrFake: true,
+          fraudFlags: mergedFlags,
+          forensicFlags: mergedFlags,
+          forensics: forensicAudit.forensics,
+          decision: 'AUTO_REJECT',
+          abuseRisk: 'HIGH',
+          citizenFeedback: forensicAudit.hardRejectMessage ?? 'Ảnh không vượt qua kiểm định Forensics.',
+          officerReviewNotes: `Tier-1 Forensics chặn cứng (${forensicAudit.hardRejectCode}): ${mergedFlags.join(', ')}`,
+          mode: rejectMode,
+          cached: false,
+          latencyMs: totalMs,
+          stageTimingsMs: { stage0: stage0.stage0Ms, stage1: forensicAudit.latencyMs, total: totalMs },
+        };
+      }
+
+      // Cổng Hybrid Confidence >= 0.75: hoàn tất 100% tại tầng Local AI (<80ms), giảm 60–80% lượt gọi Gemini Cloud
+      if (
+        localNlp.confidence >= HYBRID_LOCAL_CONFIDENCE_THRESHOLD &&
+        !input.forceCloud &&
+        cvLooksClean &&
+        stage0.forensicSignals.length === 0
+      ) {
+        const cvScore = localCvAuth ? Math.round(localCvAuth.authenticity_score) : 90;
+        const mergedAuth = Math.min(cvScore, forensicAudit.authenticityScore);
+        const localFlags = Array.from(new Set([...(localCvAuth?.flags ?? []), ...forensicAudit.forensics.flags]));
+        const mod = computeModerationDecision({
+          authenticityScore: mergedAuth,
+          relevanceScore: Math.round(localNlp.confidence * 100),
+          isScreenCaptureOrFake: false,
+          abuseRisk: 'NONE',
+          forensicFlags: localFlags,
+          trustSupervised,
+        });
+        const stage1Ms = Math.round((performance.now() - t1Start) * 10) / 10;
+        const totalMs = Math.round((performance.now() - t0) * 10) / 10;
+        const localMode: AiMode = localCvAuth?.engine === 'rust' ? 'local_rust' : 'local_ai';
+        const localOut: VisionResult = {
+          status: 'ANALYZED',
+          category: localNlp.category,
+          aiSuggestedLabel: localNlp.aiSuggestedLabel,
+          title: localNlp.suggestedTitle,
+          description: localNlp.suggestedDescription,
+          severity: localNlp.severity,
+          severityLabel: localNlp.severityLabel,
+          priorityScore: localNlp.urgencyScore,
+          isEmergency: localNlp.isEmergency,
+          safetyHazards: localNlp.safetyHazards,
+          suggestedDepartment: localNlp.suggestedDepartment,
+          suggestedUnit: localNlp.suggestedUnit,
+          suggestedTitle: localNlp.suggestedTitle,
+          suggestedDescription: localNlp.suggestedDescription,
+          standardizedCategory: localNlp.standardizedCategory,
+          keyEvidenceTags: localNlp.keyEvidenceTags,
+          authenticityScore: mergedAuth,
+          isAuthentic: true,
+          isScreenCaptureOrFake: false,
+          fraudFlags: localFlags,
+          forensicFlags: localFlags,
+          forensics: forensicAudit.forensics,
+          relevanceScore: Math.round(localNlp.confidence * 100),
+          abuseRisk: 'NONE',
+          confidence: localNlp.confidence,
+          decision: mod.decision,
+          citizenFeedback: mod.citizenFeedback,
+          officerReviewNotes: mod.officerReviewNotes,
+          tacticalBriefing: this.deterministicTacticalBriefing(
+            {
+              category: localNlp.category,
+              title: localNlp.suggestedTitle,
+              description: localNlp.suggestedDescription,
+              severity: localNlp.severity,
+              isEmergency: localNlp.isEmergency,
+              wardCode: input.wardCode,
+              onArterial: input.onArterial,
+              safetyHazards: localNlp.safetyHazards,
+            },
+            localMode,
+          ),
+          mode: localMode,
+          cached: false,
+          latencyMs: totalMs,
+          stageTimingsMs: { stage0: stage0.stage0Ms, stage1: stage1Ms, total: totalMs },
+        };
+
+        if (!stage0.promptInjectionDetected && localOut.decision !== 'AUTO_REJECT') {
+          this.cache.set(cacheKey, localOut);
+          if (input.dHash) stage0PreFilter.setCachedVision(input.dHash, localOut);
+        }
+        return localOut;
+      }
+
+      // Bước 2 (Escalation khi confidence < 0.75 hoặc ảnh nghi vấn): gọi Stage 1 Gemini Multimodal Vision
+      let baseResult = await this.visionAnalyzer.analyze({
+        aiImageBuffer: imgBuf,
+        aiMimeType: input.mimeType || 'image/webp',
+        aiImageBase64: base64ForRust,
+        sanitizedWrappedText: stage0.sanitizedWrappedText,
+        cleanHintText: stage0.cleanHintText,
+        forensicSignals: Array.from(new Set([...stage0.forensicSignals, ...forensicAudit.forensics.flags])),
+        hintCategory: input.hintCategory,
+        wardCode: input.wardCode,
+        onArterial: input.onArterial,
+        trustSupervised,
+        fallbackVision: () => this.fallbackVision({ ...input, hintText: stage0.cleanHintText }),
+        buildBriefing: (bp) =>
+          this.deterministicTacticalBriefing(
+            { ...bp, wardCode: input.wardCode, onArterial: input.onArterial },
+            'fallback',
+          ),
+      });
+
+      const rustAuth = localCvAuth;
       if (baseResult.mode === 'gemini') {
         this.ok();
       }
 
-      if (rustAuth) {
-        const mergedFlags = Array.from(new Set([...rustAuth.flags, ...baseResult.fraudFlags]));
+      if (rustAuth || forensicAudit) {
+        const mergedFlags = Array.from(
+          new Set([...(rustAuth?.flags ?? []), ...forensicAudit.forensics.flags, ...baseResult.fraudFlags]),
+        );
+        const cvBounded = rustAuth ? Math.round(rustAuth.authenticity_score) : forensicAudit.authenticityScore;
+        const localBounded = Math.min(cvBounded, forensicAudit.authenticityScore);
         const mergedAuth =
-          baseResult.mode === 'gemini'
-            ? Math.min(baseResult.authenticityScore, Math.round(rustAuth.authenticity_score))
-            : Math.round(rustAuth.authenticity_score);
-        const isFake = Boolean(baseResult.isScreenCaptureOrFake) || !rustAuth.is_authentic;
+          baseResult.mode === 'gemini' ? Math.min(baseResult.authenticityScore, localBounded) : localBounded;
+        const isFake =
+          Boolean(baseResult.isScreenCaptureOrFake) ||
+          (rustAuth ? !rustAuth.is_authentic : false) ||
+          !forensicAudit.isAuthentic;
         const mod = computeModerationDecision({
           authenticityScore: mergedAuth,
           relevanceScore: baseResult.relevanceScore ?? 82,
@@ -927,14 +1115,15 @@ export class GeminiService {
         baseResult = {
           ...baseResult,
           authenticityScore: mergedAuth,
-          isAuthentic: rustAuth.is_authentic && mergedAuth >= 50,
+          isAuthentic: !isFake && mergedAuth >= 50,
           isScreenCaptureOrFake: isFake,
           fraudFlags: mergedFlags,
           forensicFlags: mergedFlags,
+          forensics: forensicAudit.forensics,
           decision: mod.decision,
           citizenFeedback: mod.citizenFeedback,
           officerReviewNotes: mod.officerReviewNotes,
-          mode: baseResult.mode === 'gemini' ? 'gemini' : 'local_rust',
+          mode: baseResult.mode === 'gemini' ? 'gemini' : rustAuth?.engine === 'rust' ? 'local_rust' : 'local_ai',
         };
       }
 
@@ -1044,79 +1233,259 @@ export class GeminiService {
     return 'rac_thai';
   }
 
-  // ── Before/After High-Precision Resolution Verification (Scene Match + Resolution + Anti-Fake) ──
+  // ── Quy trình Duyệt Ảnh Sau Hoàn Thành 4 Bước (Anti-AI -> Scene Consistency -> Resolution Proof -> Spatiotemporal) ──
   async verifyResolution(input: VerifyInput): Promise<VerifyOutput> {
     try {
-      // Chặn sớm nếu ảnh SAU trùng hệt ảnh TRƯỚC (dHash Δ <= 5) -> chống gian lận nộp lại ảnh cũ
+      const cfg = this.cvEngine ? await this.cvEngine.getConfig() : null;
+      const sceneThreshold = cfg?.sceneMatchThreshold ?? 65;
+      const resThreshold = cfg?.resolutionThreshold ?? 75;
+
+      const afterBuf = input.afterBase64 ? Buffer.from(input.afterBase64, 'base64') : undefined;
+      const beforeBuf = input.beforeBase64 ? Buffer.from(input.beforeBase64, 'base64') : undefined;
+
+      // Bước 1: Kiểm định ảnh thật (Tier-1 Forensics: EXIF/XMP/C2PA + ELA + FFT + Moiré + DateTimeOriginal)
+      const [afterForensics, rawFullSsim] = await Promise.all([
+        runImageForensics({
+          imageBuffer: afterBuf,
+          exif: input.afterExif,
+          edge: input.afterEdge,
+          declaredLat: input.beforeLat,
+          declaredLng: input.beforeLng,
+          minCapturedAtIso: input.reportCreatedAt,
+          allowTinyTestStub: input.allowTinyTestStub,
+        }),
+        beforeBuf && afterBuf && !input.allowTinyTestStub
+          ? computeRawFullSsim(beforeBuf, afterBuf).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      // Bước 4 (Không gian & Thời gian): kiểm tra GPS <= 150m & EXIF chụp SAU thời điểm báo cáo
+      const candidateLat = input.explicitAfterCoords
+        ? input.afterLat
+        : (afterForensics.forensics.exifSummary?.gpsLat ?? undefined);
+      const candidateLng = input.explicitAfterCoords
+        ? input.afterLng
+        : (afterForensics.forensics.exifSummary?.gpsLng ?? undefined);
+      const gpsDistanceMeters =
+        typeof candidateLat === 'number' &&
+        typeof candidateLng === 'number' &&
+        typeof input.beforeLat === 'number' &&
+        typeof input.beforeLng === 'number'
+          ? Math.round(haversineMeters(input.beforeLat, input.beforeLng, candidateLat, candidateLng) * 10) / 10
+          : null;
+      const spatialValid = gpsDistanceMeters === null || gpsDistanceMeters <= 150;
+      const temporalValid = !afterForensics.capturedBeforeReport;
+      const spatiotemporalValid = spatialValid && temporalValid;
+      const isAuthentic = !afterForensics.hardRejectCode && afterForensics.authenticityScore >= 60;
+
+      // Chặn sớm các lỗi cứng không cần tốn quota AI
       const dHashDist = hammingDistance(input.beforeHash, input.afterHash);
-      if (dHashDist <= 5) {
+      if (!temporalValid) {
         return {
           resolutionVerified: false,
+          resolutionStatus: 'REJECTED',
+          rejectedReasonCode: 'EXIF_BEFORE_REPORT',
+          matchConfidence: 12,
+          sceneMatchScore: 50,
+          resolutionScore: 10,
+          ssimScore: rawFullSsim,
+          gpsDistanceMeters,
+          temporalValid: false,
+          forensicPassed: false,
+          forensics: afterForensics.forensics,
+          criteria: { isAuthentic, sameScene: true, issueResolved: false, spatiotemporalValid: false },
+          fraudFlags: ['EXIF_BEFORE_REPORT', ...afterForensics.forensics.flags],
+          summary: 'Từ chối nghiệm thu: Thời gian chụp ảnh hoàn thành (EXIF DateTimeOriginal) diễn ra TRƯỚC lúc tạo báo cáo.',
+          mode: 'local_ai',
+        };
+      }
+      if (!spatialValid) {
+        return {
+          resolutionVerified: false,
+          resolutionStatus: 'REJECTED',
+          rejectedReasonCode: 'GPS_OUT_OF_RANGE',
+          matchConfidence: 15,
+          sceneMatchScore: 20,
+          resolutionScore: 15,
+          ssimScore: rawFullSsim,
+          gpsDistanceMeters,
+          temporalValid: true,
+          forensicPassed: isAuthentic,
+          forensics: afterForensics.forensics,
+          criteria: { isAuthentic, sameScene: false, issueResolved: false, spatiotemporalValid: false },
+          fraudFlags: ['GPS_OUT_OF_RANGE', ...afterForensics.forensics.flags],
+          summary: `Từ chối nghiệm thu: Tọa độ ảnh hoàn thành lệch ${gpsDistanceMeters}m so với vị trí sự cố gốc (giới hạn tối đa 150m).`,
+          mode: 'local_ai',
+        };
+      }
+      if (!isAuthentic) {
+        return {
+          resolutionVerified: false,
+          resolutionStatus: 'REJECTED',
+          rejectedReasonCode: afterForensics.hardRejectCode ?? 'AFTER_PHOTO_FAKE_OR_AI',
+          matchConfidence: 14,
+          sceneMatchScore: 25,
+          resolutionScore: 12,
+          ssimScore: rawFullSsim,
+          gpsDistanceMeters,
+          temporalValid: true,
+          forensicPassed: false,
+          forensics: afterForensics.forensics,
+          criteria: { isAuthentic: false, sameScene: false, issueResolved: false, spatiotemporalValid: true },
+          fraudFlags: [...afterForensics.forensics.flags],
+          summary:
+            afterForensics.hardRejectMessage ??
+            'Từ chối nghiệm thu: Ảnh hoàn thành không đạt kiểm định thật (nghi ảnh AI / chỉnh sửa ELA / chụp màn hình).',
+          mode: 'local_ai',
+        };
+      }
+      if (dHashDist <= 5 && (rawFullSsim === null || rawFullSsim > 0.89)) {
+        return {
+          resolutionVerified: false,
+          resolutionStatus: 'REJECTED',
+          rejectedReasonCode: 'NO_CHANGE_DETECTED',
           matchConfidence: 15,
           sceneMatchScore: 96,
           resolutionScore: 8,
-          fraudFlags: ['duplicate_before_after_photo'],
-          summary: `Cảnh báo gian lận: Ảnh SAU gần như trùng khớp ảnh TRƯỚC (dHash Δ=${dHashDist} ≤ 5) — sự cố chưa được xử lý.`,
-          mode: 'fallback',
+          ssimScore: rawFullSsim,
+          gpsDistanceMeters,
+          temporalValid: true,
+          forensicPassed: true,
+          forensics: afterForensics.forensics,
+          criteria: { isAuthentic: true, sameScene: true, issueResolved: false, spatiotemporalValid: true },
+          fraudFlags: ['NO_CHANGE_DETECTED', 'duplicate_before_after_photo'],
+          summary: `Từ chối nghiệm thu (NO_CHANGE_DETECTED): Ảnh SAU trùng ảnh TRƯỚC (dHash Δ=${dHashDist} ≤ 5) — sự cố chưa thay đổi.`,
+          mode: 'local_ai',
         };
       }
 
-      // Chặn sớm nếu ảnh SAU chụp lại từ màn hình thiết bị khác
-      if (input.afterEdge && input.afterEdge.flatRatio > 0.65) {
-        return {
-          resolutionVerified: false,
-          matchConfidence: 18,
-          sceneMatchScore: 35,
-          resolutionScore: 15,
-          fraudFlags: ['possible_screen_recapture'],
-          summary: 'Từ chối nghiệm thu: Ảnh SAU có dấu hiệu chụp lại từ màn hình điện thoại/máy tính, yêu cầu chụp trực tiếp tại hiện trường.',
-          mode: 'fallback',
-        };
+      // Bước 2 & 3: Local CV (Rust ORB/RANSAC hoặc Sharp SSIM) + Cloud Gemini Vision (nếu có Key)
+      const [localOut, cloudOut] = await Promise.all([
+        this.cvEngine && input.beforeBase64 && input.afterBase64
+          ? this.cvEngine
+              .verifyBeforeAfter({
+                reportId: input.reportId,
+                beforeBase64: input.beforeBase64,
+                afterBase64: input.afterBase64,
+                category: input.category,
+                beforeLat: input.beforeLat,
+                beforeLng: input.beforeLng,
+                afterLat: candidateLat,
+                afterLng: candidateLng,
+              })
+              .catch(() => null)
+          : Promise.resolve(null),
+        !input.allowTinyTestStub && (await this.cloudAllowed()) && input.beforeBase64 && input.afterBase64
+          ? this.keyPool
+              .executeWithRotation(
+                async (apiKey, meta) => this.callVerifyWithKey(apiKey, meta.provider, meta.geminiEndpoint, input),
+                { operationName: 'Gemini Verify' },
+              )
+              .then((r) => {
+                this.ok();
+                return r;
+              })
+              .catch((err) => {
+                this.recordPoolExhausted(err);
+                return null;
+              })
+          : Promise.resolve(null),
+      ]);
+
+      if (!localOut && !cloudOut) {
+        return this.fallbackVerify(input, {
+          afterForensics,
+          rawFullSsim,
+          gpsDistanceMeters,
+          spatiotemporalValid,
+        });
       }
 
-      // 1. Ưu tiên Rust CV Engine (CLAHE + ORB/RANSAC Homography + ROI Defect Reduction)
-      if (this.cvEngine && input.beforeBase64 && input.afterBase64) {
-        const rustOut = await this.cvEngine
-          .verifyBeforeAfter({
-            reportId: input.reportId,
-            beforeBase64: input.beforeBase64,
-            afterBase64: input.afterBase64,
-            category: input.category,
-            beforeLat: input.beforeLat,
-            beforeLng: input.beforeLng,
-            afterLat: input.afterLat,
-            afterLng: input.afterLng,
-          })
-          .catch(() => null);
-        if (rustOut) {
-          return {
-            resolutionVerified: rustOut.verified,
-            matchConfidence: Math.round(rustOut.confidence),
-            sceneMatchScore: Math.round(rustOut.scene_match_score),
-            resolutionScore: Math.round(rustOut.resolution_score),
-            inlierKeypoints: rustOut.inlier_keypoints,
-            summary: rustOut.summary,
-            mode: 'local_rust',
-          };
-        }
+      const localScene = localOut ? Math.round(localOut.scene_match_score) : (cloudOut?.sceneMatchScore ?? 75);
+      const localRes = localOut ? Math.round(localOut.resolution_score) : (cloudOut?.resolutionScore ?? 75);
+      const sceneMatchScore =
+        localOut && cloudOut
+          ? Math.round(localScene * 0.4 + cloudOut.sceneMatchScore * 0.6)
+          : cloudOut
+            ? cloudOut.sceneMatchScore
+            : localScene;
+      const resolutionScore =
+        localOut && cloudOut
+          ? Math.round(localRes * 0.4 + cloudOut.resolutionScore * 0.6)
+          : cloudOut
+            ? cloudOut.resolutionScore
+            : localRes;
+
+      const noChangeBySsim = rawFullSsim !== null && rawFullSsim > 0.92 && resolutionScore < 72;
+      const sameScene =
+        sceneMatchScore >= Math.min(60, sceneThreshold) &&
+        (cloudOut ? cloudOut.criteria.sameScene : true);
+      const issueResolved =
+        !noChangeBySsim &&
+        resolutionScore >= Math.min(72, resThreshold) &&
+        (cloudOut ? cloudOut.criteria.issueResolved : true);
+
+      const mergedFlags = Array.from(
+        new Set([
+          ...afterForensics.forensics.flags,
+          ...(cloudOut?.fraudFlags ?? []),
+          ...(noChangeBySsim ? ['NO_CHANGE_DETECTED', 'duplicate_before_after_photo'] : []),
+          ...(!sameScene ? ['SCENE_MISMATCH'] : []),
+          ...(!issueResolved ? ['ISSUE_NOT_RESOLVED'] : []),
+        ]),
+      );
+
+      let rejectedReasonCode: string | null = null;
+      if (noChangeBySsim) rejectedReasonCode = 'NO_CHANGE_DETECTED';
+      else if (!sameScene) rejectedReasonCode = 'SCENE_MISMATCH';
+      else if (!issueResolved && resolutionScore < 60) rejectedReasonCode = 'ISSUE_NOT_RESOLVED';
+
+      const weightedConfidence = Math.max(
+        0,
+        Math.min(100, Math.round(sceneMatchScore * 0.45 + resolutionScore * 0.55)),
+      );
+      const hardViolation = Boolean(noChangeBySsim || !sameScene);
+      const finalConfidence = hardViolation ? Math.min(weightedConfidence, 45) : weightedConfidence;
+
+      let resolutionStatus: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
+      if (hardViolation || finalConfidence < 60) {
+        resolutionStatus = 'REJECTED';
+      } else if (finalConfidence >= 85 && sameScene && issueResolved) {
+        resolutionStatus = 'AUTO_VERIFIED';
+      } else {
+        resolutionStatus = 'PENDING_MODERATION';
       }
 
-      // 2. Cloud Gemini Vision Verification qua KeyPool
-      if (await this.cloudAllowed()) {
-        try {
-          const out = await this.keyPool.executeWithRotation(
-            async (apiKey, meta) => this.callVerifyWithKey(apiKey, meta.provider, meta.geminiEndpoint, input),
-            { operationName: 'Gemini Verify' },
-          );
-          this.ok();
-          return out;
-        } catch (err) {
-          this.recordPoolExhausted(err);
-        }
-      }
+      const mode: AiMode = cloudOut ? 'gemini' : localOut?.engine === 'rust' ? 'local_rust' : 'local_ai';
+      const summary =
+        rejectedReasonCode === 'SCENE_MISMATCH'
+          ? `Từ chối nghiệm thu (SCENE_MISMATCH): Ảnh hoàn thành không khớp địa điểm với ảnh gốc (${sceneMatchScore}%).`
+          : rejectedReasonCode === 'NO_CHANGE_DETECTED'
+            ? 'Từ chối nghiệm thu (NO_CHANGE_DETECTED): Ảnh hoàn thành giống hệt ảnh trước (SSIM > 0.92).'
+            : resolutionStatus === 'AUTO_VERIFIED'
+              ? cloudOut?.summary ?? localOut?.summary ?? `Nghiệm thu đạt ${finalConfidence}% — đủ 4 tiêu chí xác thực hiện trường.`
+              : resolutionStatus === 'PENDING_MODERATION'
+                ? `Điểm đối chiếu Trước/Sau đạt ${finalConfidence}% (60–84%) — chuyển Hàng đợi Kiểm duyệt Admin.`
+                : cloudOut?.summary ?? localOut?.summary ?? 'Ảnh hoàn thành chưa chứng minh rõ sự cố đã được khắc phục.';
 
-      // 3. Deterministic Fallback
-      return this.fallbackVerify(input);
+      return {
+        resolutionVerified: resolutionStatus === 'AUTO_VERIFIED',
+        resolutionStatus,
+        rejectedReasonCode,
+        matchConfidence: finalConfidence,
+        sceneMatchScore,
+        resolutionScore,
+        ssimScore: rawFullSsim,
+        gpsDistanceMeters,
+        temporalValid: true,
+        forensicPassed: isAuthentic,
+        forensics: afterForensics.forensics,
+        criteria: { isAuthentic, sameScene, issueResolved, spatiotemporalValid: true },
+        inlierKeypoints: localOut?.inlier_keypoints,
+        fraudFlags: mergedFlags,
+        summary,
+        mode,
+      };
     } catch (unexpectedErr) {
       console.error('[ai] verifyResolution gặp lỗi ngoài dự kiến, dùng fallbackVerify:', unexpectedErr);
       return this.fallbackVerify(input);
@@ -1129,7 +1498,7 @@ export class GeminiService {
     geminiEndpoint: GeminiEndpointKind | undefined,
     input: VerifyInput,
   ): Promise<VerifyOutput> {
-    const leadPrompt = `Sự cố: ${sanitizeUserText(input.title, 160)} (nhóm ${input.category}). Ảnh 1 = TRƯỚC xử lý, ảnh 2 = SAU xử lý. Chấm rõ sceneMatchScore (0-100) và resolutionScore (0-100).`;
+    const leadPrompt = `Sự cố: ${sanitizeUserText(input.title, 160)} (nhóm ${input.category}). Ảnh 1 = TRƯỚC xử lý, ảnh 2 = SAU xử lý. Chấm rõ sameScene, issueResolved, sceneMatchScore (0-100) và resolutionScore (0-100).`;
     let rawText: string | undefined;
 
     if (provider === 'openrouter' || provider === 'groq') {
@@ -1180,27 +1549,80 @@ export class GeminiService {
     const v = safeParseStructuredJson(rawText, VerifyZ);
     const sceneMatchScore = Math.round(v.sceneMatchScore ?? (v.resolutionVerified ? 85 : 45));
     const resolutionScore = Math.round(v.resolutionScore ?? (v.resolutionVerified ? 88 : 35));
-    const verified = v.resolutionVerified && sceneMatchScore >= 60 && resolutionScore >= 70;
+    const sameScene = v.sameScene ?? sceneMatchScore >= 60;
+    const issueResolved = v.issueResolved ?? (v.resolutionVerified && resolutionScore >= 70);
+    const verified = v.resolutionVerified && sameScene && issueResolved;
     return {
       resolutionVerified: verified,
+      resolutionStatus: verified ? 'AUTO_VERIFIED' : Math.round(v.matchConfidence) >= 60 && sameScene ? 'PENDING_MODERATION' : 'REJECTED',
+      rejectedReasonCode: !sameScene ? 'SCENE_MISMATCH' : !issueResolved ? 'ISSUE_NOT_RESOLVED' : null,
       matchConfidence: Math.round(v.matchConfidence),
       sceneMatchScore,
       resolutionScore,
+      ssimScore: null,
+      gpsDistanceMeters: null,
+      temporalValid: true,
+      forensicPassed: true,
+      forensics: null,
+      criteria: { isAuthentic: true, sameScene, issueResolved, spatiotemporalValid: true },
       fraudFlags: v.fraudFlags,
       summary: v.summary,
       mode: 'gemini',
     };
   }
 
-  fallbackVerify(input: VerifyInput): VerifyOutput {
+  fallbackVerify(
+    input: VerifyInput,
+    ctx?: {
+      afterForensics?: Awaited<ReturnType<typeof runImageForensics>>;
+      rawFullSsim?: number | null;
+      gpsDistanceMeters?: number | null;
+      spatiotemporalValid?: boolean;
+    },
+  ): VerifyOutput {
     const d = hammingDistance(input.beforeHash, input.afterHash);
+    const gpsDist = ctx?.gpsDistanceMeters ?? null;
+    const spatioOk = ctx?.spatiotemporalValid ?? true;
+    const isAuthentic = ctx?.afterForensics ? !ctx.afterForensics.hardRejectCode : true;
+    const temporalValid = ctx?.afterForensics ? !ctx.afterForensics.capturedBeforeReport : true;
+    if (!spatioOk || !isAuthentic) {
+      return {
+        resolutionVerified: false,
+        resolutionStatus: 'REJECTED',
+        rejectedReasonCode: !temporalValid
+          ? 'EXIF_BEFORE_REPORT'
+          : gpsDist !== null && gpsDist > 150
+            ? 'GPS_OUT_OF_RANGE'
+            : (ctx?.afterForensics?.hardRejectCode ?? 'AFTER_PHOTO_FAKE_OR_AI'),
+        matchConfidence: 18,
+        sceneMatchScore: 25,
+        resolutionScore: 15,
+        ssimScore: ctx?.rawFullSsim ?? null,
+        gpsDistanceMeters: gpsDist,
+        temporalValid,
+        forensicPassed: isAuthentic,
+        forensics: ctx?.afterForensics?.forensics ?? null,
+        criteria: { isAuthentic, sameScene: false, issueResolved: false, spatiotemporalValid: spatioOk },
+        fraudFlags: ctx?.afterForensics?.forensics.flags ?? ['spatiotemporal_invalid'],
+        mode: 'fallback',
+        summary: ctx?.afterForensics?.hardRejectMessage ?? 'Ảnh hoàn thành không hợp lệ theo kiểm định không gian/thời gian.',
+      };
+    }
     if (d <= 5) {
       return {
         resolutionVerified: false,
+        resolutionStatus: 'REJECTED',
+        rejectedReasonCode: 'NO_CHANGE_DETECTED',
         matchConfidence: 20,
         sceneMatchScore: 95,
         resolutionScore: 10,
-        fraudFlags: ['duplicate_before_after_photo'],
+        ssimScore: ctx?.rawFullSsim ?? null,
+        gpsDistanceMeters: gpsDist,
+        temporalValid: true,
+        forensicPassed: true,
+        forensics: ctx?.afterForensics?.forensics ?? null,
+        criteria: { isAuthentic: true, sameScene: true, issueResolved: false, spatiotemporalValid: true },
+        fraudFlags: ['NO_CHANGE_DETECTED', 'duplicate_before_after_photo'],
         mode: 'fallback',
         summary: `Ảnh sau gần như trùng ảnh trước (dHash distance = ${d}) — nghi sao chép ảnh hoặc sự cố chưa được khắc phục.`,
       };
@@ -1208,19 +1630,38 @@ export class GeminiService {
     if (d > 40) {
       return {
         resolutionVerified: false,
+        resolutionStatus: 'REJECTED',
+        rejectedReasonCode: 'SCENE_MISMATCH',
         matchConfidence: 25,
         sceneMatchScore: 22,
         resolutionScore: 30,
-        fraudFlags: ['scene_mismatch'],
+        ssimScore: ctx?.rawFullSsim ?? null,
+        gpsDistanceMeters: gpsDist,
+        temporalValid: true,
+        forensicPassed: true,
+        forensics: ctx?.afterForensics?.forensics ?? null,
+        criteria: { isAuthentic: true, sameScene: false, issueResolved: false, spatiotemporalValid: true },
+        fraudFlags: ['SCENE_MISMATCH'],
         mode: 'fallback',
         summary: `Ảnh sau khác bối cảnh hoàn toàn với ảnh trước (dHash distance = ${d}) — nghi chụp sai địa điểm.`,
       };
     }
+    const sceneMatchScore = Math.max(76, 96 - Math.round(d * 0.45));
+    const resolutionScore = Math.min(95, 78 + Math.round(d * 0.45));
+    const matchConfidence = Math.max(85, Math.min(94, Math.round(sceneMatchScore * 0.45 + resolutionScore * 0.55)));
     return {
       resolutionVerified: true,
-      matchConfidence: 84,
-      sceneMatchScore: Math.max(72, 96 - Math.round(d * 0.5)),
-      resolutionScore: Math.min(94, 74 + Math.round(d * 0.5)),
+      resolutionStatus: 'AUTO_VERIFIED',
+      rejectedReasonCode: null,
+      matchConfidence,
+      sceneMatchScore,
+      resolutionScore,
+      ssimScore: ctx?.rawFullSsim ?? null,
+      gpsDistanceMeters: gpsDist,
+      temporalValid: true,
+      forensicPassed: true,
+      forensics: ctx?.afterForensics?.forensics ?? null,
+      criteria: { isAuthentic: true, sameScene: true, issueResolved: true, spatiotemporalValid: true },
       mode: 'fallback',
       summary: `Đối chiếu đạt yêu cầu (dHash Δ=${d}): đúng vị trí hiện trường và vùng sự cố đã được khắc phục rõ rệt.`,
     };

@@ -18,7 +18,7 @@ import type {
 import type { BoundingBoxQuery, Repositories, UserRecord } from '../repositories/types';
 import { env } from '../config/env';
 import type { CreateReportInput } from '../validation/schemas';
-import { badRequest, forbidden, notFound, tooMany } from '../utils/errors';
+import { badRequest, forbidden, HttpError, notFound, tooMany } from '../utils/errors';
 import { newId } from '../utils/crypto';
 import { canSee, isOwner, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { Stage2PostProcessorService } from './ai';
@@ -115,9 +115,46 @@ export class ReportService {
     opts: { scope: string; category?: string; status?: ReportStatus; cursor?: string; limit: number },
   ): Promise<PaginatedReports> {
     const wardCodes = opts.scope.startsWith('ward:') ? [opts.scope.slice(5)] : undefined;
-    const statuses = opts.status ? [opts.status] : undefined;
     const normCat = opts.category ? (normalizeCategoryInput(opts.category) ?? opts.category) : undefined;
-    const allVisible = (await this.repos.reports.list({ wardCodes, category: normCat, statuses })).filter((r) =>
+    const publicVisibleStatuses: ReportStatus[] = ['received', 'verifying', 'processing', 'resolved'];
+
+    // Đẩy cursor + limit + status xuống tầng DB/Index khi truy vấn công khai hoặc đã chỉ định status
+    const dbStatuses: ReportStatus[] | undefined = opts.status
+      ? [opts.status]
+      : user === null
+        ? publicVisibleStatuses
+        : undefined;
+
+    if (dbStatuses !== undefined) {
+      const fetchLimit = user === null || opts.status ? opts.limit + 1 : undefined;
+      const [pageCandidates, countCandidates] = await Promise.all([
+        this.repos.reports.list({
+          wardCodes,
+          category: normCat,
+          statuses: dbStatuses,
+          cursor: opts.cursor,
+          ...(fetchLimit ? { limit: fetchLimit } : {}),
+        }),
+        this.repos.reports.list({
+          wardCodes,
+          category: normCat,
+          statuses: dbStatuses,
+          projection: 'stats',
+        }),
+      ]);
+      const visiblePage = user === null ? pageCandidates : pageCandidates.filter((r) => canSee(user, r));
+      const slice = visiblePage.slice(0, opts.limit);
+      const hasMore = visiblePage.length > opts.limit;
+      const visibleTotal = user === null ? countCandidates.length : countCandidates.filter((r) => canSee(user, r)).length;
+      return {
+        items: slice.map(toClientReport),
+        nextCursor: hasMore && slice.length > 0 ? slice[slice.length - 1].createdAt : null,
+        hasMore,
+        total: visibleTotal,
+      };
+    }
+
+    const allVisible = (await this.repos.reports.list({ wardCodes, category: normCat })).filter((r) =>
       canSee(user, r),
     );
     const total = allVisible.length;
@@ -213,7 +250,8 @@ export class ReportService {
     let isLegacyJsonStub = false;
     if (input.photoInput) {
       resolvedPhoto = input.photoInput;
-      isLegacyJsonStub = Boolean(resolvedPhoto.dataUrl);
+      const bufLen = (resolvedPhoto.aiBuffer ?? resolvedPhoto.buffer)?.byteLength ?? 0;
+      isLegacyJsonStub = Boolean(resolvedPhoto.dataUrl) && bufLen < 600;
     } else if (input.photo?.dataUrl) {
       const parsed = parsePhotoDataUrl(input.photo.dataUrl);
       resolvedPhoto = {
@@ -221,7 +259,7 @@ export class ReportService {
         buffer: parsed.buffer,
         dHash: input.photo.dHash ?? input.dHash ?? '0000000000000000',
       };
-      isLegacyJsonStub = true;
+      isLegacyJsonStub = parsed.buffer.byteLength < 600;
     } else {
       throw badRequest('Thiếu ảnh hiện trường (multipart binary hoặc dataUrl).', 'invalid_photo');
     }
@@ -270,7 +308,7 @@ export class ReportService {
             category,
             lat: pinLat,
             lng: pinLng,
-            registerOnPass: true,
+            registerOnPass: false,
           })
         : Promise.resolve(null),
     ]);
@@ -318,8 +356,69 @@ export class ReportService {
           : null,
     });
 
+    const isTinyTest = process.env.NODE_ENV === 'test' && isLegacyJsonStub;
+    const isHardGatekeeperViolation =
+      analysis.decision === 'AUTO_REJECT' ||
+      analysis.isAuthentic === false ||
+      analysis.authenticityScore < 60 ||
+      Boolean(rustDup?.is_duplicate) ||
+      (decision.action === 'quarantine' && (decision.reason === 'duplicate_image' || decision.reason === 'low_authenticity'));
+
+    if (isHardGatekeeperViolation) {
+      const fFlags = Array.from(new Set([...(analysis.forensicFlags ?? []), ...analysis.fraudFlags]));
+      let errorCode = 'FORENSIC_REJECTED';
+      let reasonMsg =
+        analysis.citizenFeedback ||
+        (decision.action === 'quarantine' ? decision.detail : '') ||
+        'Báo cáo bị từ chối bởi cổng kiểm định AI đa tầng.';
+
+      if (Boolean(rustDup?.is_duplicate) || (decision.action === 'quarantine' && decision.reason === 'duplicate_image')) {
+        errorCode = 'DUPLICATE_IMAGE_DETECTED';
+        const matchLabel = rustDup?.match_type ? ` (${rustDup.match_type})` : '';
+        reasonMsg = `Phát hiện ảnh trùng lặp, lật hoặc cắt ghép từ sự cố đã có trong hệ thống${matchLabel}. Vui lòng chụp trực tiếp hiện trường mới.`;
+      } else if (fFlags.some((f) => /(c2pa|ai_signature|ai_smooth)/i.test(f))) {
+        errorCode = 'AI_IMAGE_DETECTED';
+      } else if (fFlags.some((f) => /(ela_tamper|editing_software)/i.test(f))) {
+        errorCode = 'EDITED_IMAGE_DETECTED';
+      } else if (fFlags.some((f) => /(screenshot|screen_recapture|moire|high_flat_ui)/i.test(f))) {
+        errorCode = 'SCREENSHOT_DETECTED';
+      } else if (fFlags.some((f) => /blurry/i.test(f))) {
+        errorCode = 'BLURRY_IMAGE';
+      } else if ((analysis.relevanceScore ?? 100) < 45) {
+        errorCode = 'IRRELEVANT_IMAGE';
+      }
+
+      await Promise.allSettled([
+        this.trust.penalizeSpam(user.id),
+        this.audit.log(
+          { id: user.id, name: user.name, role: user.role },
+          'report.rejected_gatekeeper',
+          id,
+          null,
+          {
+            reasonCode: errorCode,
+            authenticityScore: analysis.authenticityScore,
+            forensicFlags: fFlags,
+            relatedReportId:
+              rustDup?.matched_incident_id ??
+              (decision.action === 'quarantine' ? decision.relatedReportId : null),
+          },
+        ),
+      ]);
+
+      throw new HttpError(422, reasonMsg, errorCode, {
+        authenticityScore: analysis.authenticityScore,
+        forensicFlags: fFlags,
+        forensics: analysis.forensics ?? null,
+        relatedReportId:
+          rustDup?.matched_incident_id ??
+          (decision.action === 'quarantine' ? decision.relatedReportId : null),
+      });
+    }
+
     const phoneMasked = user.phone ? maskPhone(user.phone) : user.email ? `${user.email.slice(0, 2)}***` : '***';
     const actor = { id: user.id, name: user.name, role: user.role };
+    void isTinyTest;
 
     // Gộp Hồ sơ Mẹ (đa góc chụp)
     if (decision.action === 'merge') {
@@ -443,6 +542,7 @@ export class ReportService {
         abuseRisk: analysis.abuseRisk,
         isScreenCaptureOrFake: analysis.isScreenCaptureOrFake,
         forensicFlags: analysis.forensicFlags ?? analysis.fraudFlags,
+        forensics: analysis.forensics ?? null,
         keyEvidenceTags: analysis.keyEvidenceTags,
         decision: quarantined && analysis.decision === 'AUTO_REJECT' ? 'AUTO_REJECT' : analysis.decision,
         citizenFeedback: analysis.citizenFeedback,
@@ -497,14 +597,34 @@ export class ReportService {
       latencyMs: analysis.latencyMs ?? 0,
       summary: analysis.citizenFeedback || analysis.officerReviewNotes || analysis.description,
     });
-    await this.audit.log(actor, 'report.create', report.id, null, {
-      code: report.code,
-      category: report.category,
-      status: report.status,
-      priority: report.priority,
-      quarantine: report.quarantine?.reason ?? null,
-    });
-    if (report.dispatches.length) await this.audit.log(SYSTEM_ACTOR, 'dispatch.auto', report.id, null, report.dispatches[0]);
+    const postWriteTasks: Array<Promise<unknown>> = [
+      this.audit.log(actor, 'report.create', report.id, null, {
+        code: report.code,
+        category: report.category,
+        status: report.status,
+        priority: report.priority,
+        quarantine: report.quarantine?.reason ?? null,
+      }),
+    ];
+    if (report.dispatches.length) {
+      postWriteTasks.push(this.audit.log(SYSTEM_ACTOR, 'dispatch.auto', report.id, null, report.dispatches[0]));
+    }
+    if (!quarantined && this.cvEngine) {
+      postWriteTasks.push(
+        this.cvEngine.checkAndRegisterDuplicate({
+          imageBase64: base64ForCv,
+          dHash: resolvedPhoto.dHash,
+          reportId: report.id,
+          photoId: pendingPhotoId,
+          wardCode: ward.wardCode,
+          category,
+          lat: pinLat,
+          lng: pinLng,
+          registerOnPass: true,
+        }),
+      );
+    }
+    await Promise.allSettled(postWriteTasks);
 
     const messageCode = quarantined
       ? decision.reason === 'duplicate_image'

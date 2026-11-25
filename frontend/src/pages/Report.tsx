@@ -11,15 +11,19 @@ import {
   ShieldAlert,
   Sparkles,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { nearestWard } from '@shared/geo';
 import { normalizeRole } from '@shared/constants';
 import type { Category, ClientReport, VisionResult } from '@shared/types';
 import { CameraCapture } from '../components/CameraCapture';
-import { PrecisionLocationPicker, type ResolvedGeoState } from '../components/map';
+import type { ResolvedGeoState } from '../components/map';
 import { PhotoExamples } from '../components/PhotoExamples';
 import { Spinner } from '../components/ui';
+
+const PrecisionLocationPicker = lazy(() =>
+  import('../components/map').then((m) => ({ default: m.PrecisionLocationPicker })),
+);
 import { WARD_BY_CODE } from '../data/dongNaiWards';
 import { useOnline } from '../db/hooks';
 import { db } from '../db/localDb';
@@ -43,6 +47,9 @@ interface PhotoState {
   aiBlob: Blob;
   displayBlob: Blob;
   dHash: string;
+  pHash: string;
+  subGridHashes: string[];
+  colorHistogram: number[];
   bytes: number;
   aiBytes: number;
   originalBytes: number;
@@ -136,6 +143,7 @@ export default function ReportPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<ClientReport | null>(null);
   const [outcome, setOutcome] = useState<{ code: string; report: ClientReport } | null>(null);
+  const [rejectedMessage, setRejectedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -169,6 +177,9 @@ export default function ReportPage() {
           aiBlob: p.aiBlob,
           displayBlob: p.displayBlob,
           dHash: p.dHash,
+          pHash: p.pHash,
+          subGridHashes: p.subGridHashes,
+          colorHistogram: p.colorHistogram,
           bytes: p.displayBytes,
           aiBytes: p.aiBytes,
           originalBytes: p.originalBytes,
@@ -187,11 +198,28 @@ export default function ReportPage() {
           setExifApplied(true);
         }
 
-        // Tầng Edge chống spam: so với ảnh đang có trên thiết bị
-        const known = (await db.reports.toArray()).flatMap((r) => (r.photos ?? []).map((x) => ({ id: r.id, hash: x.dHash })));
-        const m = await edge.hammingMatch(p.dHash, known);
+        // Tầng Edge chống spam đa tầng: dHash + pHash + 3x3 sub-grid (crop) + Color Histogram ngay trong Web Worker
+        const known = (await db.reports.toArray()).flatMap((r) =>
+          (r.photos ?? []).map((x) => ({
+            id: r.id,
+            dHash: x.dHash,
+            ...(x.pHash ? { pHash: x.pHash } : {}),
+            ...(x.subGridHashes ? { subGridHashes: x.subGridHashes } : {}),
+            ...(x.colorHistogram ? { colorHistogram: x.colorHistogram } : {}),
+          })),
+        );
+        const dupRes = await edge.duplicateMatch(
+          {
+            dHash: p.dHash,
+            pHash: p.pHash,
+            subGridHashes: p.subGridHashes,
+            colorHistogram: p.colorHistogram,
+          },
+          known,
+        );
         if (!mountedRef.current) return;
-        setLocalDup(m.matches[0] && m.matches[0].distance <= 5 ? m.matches[0].distance : null);
+        const firstDup = dupRes.matches.find((item) => item.isDuplicate);
+        setLocalDup(firstDup ? firstDup.dHashDist : null);
 
         setAiBusy(true);
         let v: VisionResult | null = null;
@@ -206,6 +234,9 @@ export default function ReportPage() {
               'metadata',
               JSON.stringify({
                 dHash: p.dHash,
+                pHash: p.pHash,
+                subGridHashes: p.subGridHashes,
+                colorHistogram: p.colorHistogram,
                 ...(category ? { category } : {}),
                 ...(hint ? { hintText: hint } : {}),
                 ...(p.exifGps ? { lat: p.exifGps.lat, lng: p.exifGps.lng } : {}),
@@ -218,7 +249,7 @@ export default function ReportPage() {
               timeoutMs: 25_000,
               signal: ctrl.signal,
             });
-            if (v.mode === 'gemini' && v.status !== 'DUPLICATE_FOUND' && v.decision !== 'AUTO_REJECT') {
+            if ((v.mode === 'gemini' || v.mode === 'local_ai') && v.status !== 'DUPLICATE_FOUND' && v.decision !== 'AUTO_REJECT') {
               await db.aiVisionCache.put({ dHash: p.dHash, result: v, at: Date.now() });
             }
           } catch (err) {
@@ -303,7 +334,12 @@ export default function ReportPage() {
     if (!submitted) return;
     const onEv = (e: Event): void => {
       const d = (e as CustomEvent<SyncEventDetail>).detail;
-      if (d.type === 'report_result' && d.localId === submitted.id) setOutcome({ code: d.messageCode, report: d.report });
+      if (d.type === 'report_result' && d.localId === submitted.id) {
+        setRejectedMessage(null);
+        setOutcome({ code: d.messageCode, report: d.report });
+      } else if (d.type === 'item_failed' && d.item.targetId === submitted.id) {
+        setRejectedMessage(d.message);
+      }
     };
     syncBus.addEventListener('sync', onEv);
     return () => syncBus.removeEventListener('sync', onEv);
@@ -315,6 +351,7 @@ export default function ReportPage() {
       if (!(await requireAuth())) return;
     }
     setSubmitting(true);
+    setRejectedMessage(null);
     try {
       const finalWardCode = activeWardCode || nearestWard(pin.lat, pin.lng).wardCode;
       const finalWardName = WARD_BY_CODE[finalWardCode]?.name ?? nearestWard(pin.lat, pin.lng).name;
@@ -370,6 +407,7 @@ export default function ReportPage() {
     setLeftScene(false);
     setSubmitted(null);
     setOutcome(null);
+    setRejectedMessage(null);
     setLocalDup(null);
   };
 
@@ -393,6 +431,18 @@ export default function ReportPage() {
 
   // ── Màn hình kết quả ──────────────────────────────────────────────────────────
   if (submitted) {
+    if (rejectedMessage) {
+      return (
+        <div className="card space-y-4 border-2 border-danger/40 bg-danger-soft/40 p-5 text-center" role="alert">
+          <ShieldAlert className="mx-auto h-12 w-12 text-danger" aria-hidden />
+          <h1 className="text-xl font-extrabold text-danger">Báo cáo bị từ chối bởi Cổng Kiểm định AI</h1>
+          <p className="text-sm font-medium text-ink">{rejectedMessage}</p>
+          <button type="button" onClick={reset} className="btn btn-primary w-full">
+            Chụp lại ảnh hiện trường thật
+          </button>
+        </div>
+      );
+    }
     const code = outcome?.code;
     const quarantined = code?.startsWith('quarantine');
     return (
@@ -471,7 +521,7 @@ export default function ReportPage() {
 
           {photo && (
             <div className="card space-y-3 p-3">
-              <img src={photo.previewUrl} alt={t('report.photoAlt')} decoding="async" className="aspect-[4/3] w-full rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt={t('report.photoAlt')} width={640} height={480} decoding="async" className="aspect-[4/3] w-full rounded-xl object-cover" />
               <p className="text-xs text-muted">
                 Ảnh WebP tối ưu ({photo.width}×{photo.height} · {(photo.bytes / 1024).toFixed(0)} KB / AI {(photo.aiBytes / 1024).toFixed(0)} KB,{' '}
                 {t('report.saved', { p: Math.max(0, Math.round((1 - photo.bytes / photo.originalBytes) * 100)) })})
@@ -508,6 +558,12 @@ export default function ReportPage() {
                 <p role="alert" className="flex gap-2 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                   {t('report.blurWarn')}
+                </p>
+              )}
+              {photo.stats.likelyScreenshot && (
+                <p role="alert" className="flex gap-2 rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  Phát hiện dấu hiệu ảnh chụp màn hình hoặc thiếu thông số camera gốc (xác suất {Math.round((photo.stats.screenshotConfidence ?? 0.7) * 100)}%). Vui lòng chụp trực tiếp hiện trường.
                 </p>
               )}
               {aiBusy && (
@@ -626,26 +682,28 @@ export default function ReportPage() {
             {t('report.step2')}
           </h2>
 
-          <PrecisionLocationPicker
-            category={category}
-            pin={pin}
-            onPinChange={setPin}
-            address={address}
-            onAddressChange={setAddress}
-            geo={geo}
-            onGeoChange={setGeo}
-            manualWardCode={manualWardCode}
-            onManualWardChange={setManualWardCode}
-            fix={fix}
-            gpsStatus={gpsStatus}
-            gpsSamples={gpsSamples}
-            isLowAccuracy={isLowAccuracy}
-            onRequestGps={locatePrecise}
-            exifApplied={exifApplied}
-            leftScene={leftScene}
-            onLeftSceneChange={setLeftScene}
-            onUseNearby={useNearby}
-          />
+          <Suspense fallback={<div className="card flex h-72 items-center justify-center"><Spinner className="text-brand" /></div>}>
+            <PrecisionLocationPicker
+              category={category}
+              pin={pin}
+              onPinChange={setPin}
+              address={address}
+              onAddressChange={setAddress}
+              geo={geo}
+              onGeoChange={setGeo}
+              manualWardCode={manualWardCode}
+              onManualWardChange={setManualWardCode}
+              fix={fix}
+              gpsStatus={gpsStatus}
+              gpsSamples={gpsSamples}
+              isLowAccuracy={isLowAccuracy}
+              onRequestGps={locatePrecise}
+              exifApplied={exifApplied}
+              leftScene={leftScene}
+              onLeftSceneChange={setLeftScene}
+              onUseNearby={useNearby}
+            />
+          </Suspense>
 
           <div className="grid grid-cols-2 gap-2">
             <button type="button" className="btn btn-ghost !min-h-14" onClick={() => setStep(1)}>
@@ -666,7 +724,7 @@ export default function ReportPage() {
           </h2>
           <div className="card space-y-3 p-3">
             <div className="flex gap-3">
-              <img src={photo.previewUrl} alt="" decoding="async" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
+              <img src={photo.previewUrl} alt="" width={96} height={96} decoding="async" className="h-24 w-24 shrink-0 rounded-xl object-cover" />
               <div className="min-w-0">
                 <p className="break-words font-bold [overflow-wrap:anywhere]">{title}</p>
                 <p className="text-sm font-semibold" style={{ color: CATEGORY_META[category].color }}>

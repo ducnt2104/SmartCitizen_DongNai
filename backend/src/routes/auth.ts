@@ -1,10 +1,11 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { asyncHandler, setAuthCookies } from '../middleware/auth';
+import { asyncHandler, extractClientMeta, setAuthCookies } from '../middleware/auth';
 import { limits } from '../middleware/rateLimit';
 import { validateBody } from '../middleware/validate';
 import type { Services } from '../services/container';
 import { parseVnPhone } from '../services/otp';
+import type { OtpPurpose } from '../services/otpDelivery.service';
 import { badRequest, HttpError } from '../utils/errors';
 
 function maskEmailAddress(email: string): string {
@@ -24,7 +25,7 @@ export const phoneAuthSchemas = {
       email: z.string().min(5).max(120).optional(),
       target: z.string().min(3).max(120).optional(),
       identifier: z.string().min(3).max(120).optional(),
-      purpose: z.enum(['login', 'reset_password', 'verify_phone']).default('login'),
+      purpose: z.enum(['login', 'reset_password', 'verify_phone', 'change_email', 'change_phone']).default('login'),
     })
     .refine(
       (d) => Boolean(d.phone || d.email || d.target || d.identifier),
@@ -97,27 +98,26 @@ export function buildAuthRouter(s: Services): Router {
     h(async (_req: Request, res: Response) => {
       const legacy = s.otpDelivery.status;
       const sms = s.phoneOtp.smsDispatcher.getStatus();
-      const smsConfigured =
-        legacy.smsConfigured || sms.realSmsConfigured || sms.smsProviderMode === 'demo';
+      const smsConfigured = legacy.smsConfigured || sms.realSmsConfigured;
       res.json({
         ...legacy,
         smsConfigured,
-        activeSmsProvider: sms.realSmsConfigured || sms.smsProviderMode !== 'auto'
+        activeSmsProvider: sms.realSmsConfigured
           ? sms.activeSmsProvider
-          : legacy.activeSmsProvider ?? sms.activeSmsProvider,
+          : (legacy.activeSmsProvider ?? sms.activeSmsProvider),
         smsProviderMode: sms.smsProviderMode,
-        smsPhoneAuthReady: smsConfigured || sms.allowDemoOtp || sms.telegramFallbackReady || Boolean(sms.firebaseClientConfig),
+        smsPhoneAuthReady:
+          smsConfigured || sms.firebaseClientReady || Boolean(sms.firebaseClientConfig),
         firebaseClientReady: sms.firebaseClientReady,
         firebaseClientConfig: sms.firebaseClientConfig,
-        telegramFallbackReady: sms.telegramFallbackReady,
         emailFallbackAvailable: legacy.emailConfigured,
-        allowDemoOtp: sms.allowDemoOtp,
       });
     }),
   );
 
   router.post(
     '/otp/send',
+    limits.otp,
     validateBody(phoneAuthSchemas.otpSend),
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpSend>;
@@ -127,51 +127,18 @@ export function buildAuthRouter(s: Services): Router {
       }
 
       if (isEmail) {
-        const emailPurpose = b.purpose === 'reset_password' ? 'reset_password' : 'login';
+        const emailPurpose: OtpPurpose =
+          b.purpose === 'reset_password' || b.purpose === 'change_email' || b.purpose === 'change_phone'
+            ? b.purpose
+            : 'login';
         const out = await s.auth.requestOtp(rawTarget, emailPurpose);
         res.json(out);
         return;
       }
 
-      try {
-        const out = await s.phoneOtp.sendPhoneOtp(rawTarget, { purpose: b.purpose });
-        res.json(out);
-      } catch (err) {
-        if (err instanceof HttpError && err.code === 'sms_provider_not_configured') {
-          const parsedPhone = parseVnPhone(rawTarget);
-          if (parsedPhone && s.otpDelivery.status.emailConfigured) {
-            const existingUser = await s.repos.users.getByPhone(parsedPhone.local).catch(() => null);
-            if (existingUser?.email) {
-              const fallbackRes = await s.phoneOtp.issueChallengeForExternalChannel(
-                rawTarget,
-                b.purpose,
-                async (otp, _parsed, ttlMinutes) => {
-                  const sent = await s.otpDelivery.sendOtp({
-                    to: existingUser.email!,
-                    code: otp,
-                    channel: 'email',
-                    ttlMinutes,
-                    purpose: b.purpose === 'reset_password' ? 'reset_password' : 'login',
-                  });
-                  return {
-                    provider: sent.provider,
-                    fallbackChannel: 'email',
-                    fallbackTargetMasked: maskEmailAddress(existingUser.email!),
-                  };
-                },
-              );
-              res.json(fallbackRes);
-              return;
-            }
-          }
-
-          const hintMessage = s.otpDelivery.status.emailConfigured
-            ? 'Kênh gửi tin nhắn SMS đang tạm bảo trì. Vui lòng chuyển sang tab Email để nhận mã xác thực OTP ngay lập tức, hoặc đăng nhập bằng mật khẩu.'
-            : 'Hệ thống chưa kích hoạt cổng gửi tin nhắn SMS. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.';
-          throw new HttpError(503, hintMessage, 'sms_provider_not_configured');
-        }
-        throw err;
-      }
+      const phonePurpose = b.purpose === 'reset_password' || b.purpose === 'verify_phone' ? b.purpose : 'login';
+      const out = await s.phoneOtp.sendPhoneOtp(rawTarget, { purpose: phonePurpose });
+      res.json(out);
     }),
   );
 
@@ -183,11 +150,13 @@ export function buildAuthRouter(s: Services): Router {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpVerify>;
       const { isEmail, rawTarget } = detectIsEmailChannel(b);
       const otpCode = (b.code ?? b.otp ?? '').trim();
+      const meta = extractClientMeta(req);
       const sessionOpts = {
         name: b.name,
         password: b.password,
         defaultWardCode: b.defaultWardCode,
-        userAgent: req.get('user-agent') ?? '',
+        userAgent: meta.userAgent,
+        meta,
       };
 
       if (isEmail) {
@@ -232,11 +201,13 @@ export function buildAuthRouter(s: Services): Router {
       const b = req.body as z.infer<typeof phoneAuthSchemas.verifyFirebase>;
       const idToken = (b.firebaseIdToken ?? b.idToken ?? '').trim();
       const verified = await s.firebaseVerifier.verifyPhoneIdToken(idToken);
+      const meta = extractClientMeta(req);
       const issued = await s.auth.issueCitizenSessionByPhone(verified.phone, {
         name: b.name,
         password: b.password,
         defaultWardCode: b.defaultWardCode,
-        userAgent: req.get('user-agent') ?? '',
+        userAgent: meta.userAgent,
+        meta,
         firebaseUid: verified.uid,
       });
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);

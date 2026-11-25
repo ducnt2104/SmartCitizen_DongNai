@@ -32,6 +32,13 @@ export function toProfile(u: UserRecord): UserProfile {
     revoked,
     isActive: !revoked,
     trustScore: u.trustScore,
+    trustLevel: u.trustLevel ?? (u.trustScore < TRUST_SUPERVISED_BELOW ? 'watchlist' : 'normal'),
+    violationCount: u.violationCount ?? 0,
+    tokenVersion: u.tokenVersion ?? 0,
+    activeSessionId: u.activeSessionId ?? null,
+    hasPassword: Boolean(u.passwordHash),
+    lastLoginAt: u.lastLoginAt ?? null,
+    lastLoginIp: u.lastLoginIp ?? null,
     badges: u.badges,
     volunteerHours: u.volunteerHours,
     points: u.points,
@@ -47,7 +54,18 @@ export class TrustService {
 
   newUserDefaults(): Pick<
     UserRecord,
-    'trustScore' | 'badges' | 'volunteerHours' | 'points' | 'notifications' | 'defaultWardCode' | 'notificationsEnabled' | 'revoked'
+    | 'trustScore'
+    | 'badges'
+    | 'volunteerHours'
+    | 'points'
+    | 'notifications'
+    | 'defaultWardCode'
+    | 'notificationsEnabled'
+    | 'revoked'
+    | 'tokenVersion'
+    | 'activeSessionId'
+    | 'trustLevel'
+    | 'violationCount'
   > {
     return {
       trustScore: TRUST_START,
@@ -58,6 +76,10 @@ export class TrustService {
       defaultWardCode: null,
       notificationsEnabled: true,
       revoked: false,
+      tokenVersion: 0,
+      activeSessionId: null,
+      trustLevel: 'normal',
+      violationCount: 0,
     };
   }
 
@@ -86,6 +108,12 @@ export class TrustService {
     const u = await this.users.get(userId);
     if (!u) return null;
     u.trustScore = Math.max(0, u.trustScore - Math.max(1, penalty));
+    u.violationCount = (u.violationCount ?? 0) + 1;
+    if (u.violationCount >= 3 || u.trustScore < 40) {
+      u.trustLevel = 'flagged';
+    } else if (u.trustScore < TRUST_SUPERVISED_BELOW) {
+      u.trustLevel = 'watchlist';
+    }
     await this.users.save(u);
     return u;
   }

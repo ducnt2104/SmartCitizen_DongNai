@@ -1,10 +1,11 @@
+import { memo } from 'react';
 import { ChevronRight, MapPin } from 'lucide-react';
 import type { ClientReport } from '@shared/types';
 import { useI18n } from '../i18n';
 import { CATEGORY_META } from '../lib/meta';
 import { CategoryIcon, PriorityBadges, StatusBadge } from './ui';
 
-export function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientReport) => void }) {
+export const ReportCard = memo(function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientReport) => void }) {
   const { t, fmtDate } = useI18n();
   const thumb = r.photos[0]?.thumbnailUrl ?? r.photos[0]?.url;
   return (
@@ -43,4 +44,4 @@ export function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientR
       <ChevronRight className="my-auto h-5 w-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-brand" aria-hidden />
     </button>
   );
-}
+});

@@ -51,8 +51,6 @@ services:
         value: auto
       - key: SMS_PROVIDER
         value: auto
-      - key: ALLOW_DEMO_OTP
-        sync: false
       - key: TEXTBEE_DEVICE_ID
         sync: false
       - key: TEXTBEE_API_KEY
@@ -61,13 +59,15 @@ services:
         sync: false
       - key: SMS_GATEWAY_API_KEY
         sync: false
+      - key: VONAGE_API_KEY
+        sync: false
+      - key: VONAGE_API_SECRET
+        sync: false
+      - key: VONAGE_FROM
+        sync: false
       - key: FIREBASE_PROJECT_ID
         sync: false
       - key: FIREBASE_API_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
         sync: false
       - key: OTP_WEBHOOK_URL
         sync: false

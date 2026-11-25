@@ -36,12 +36,27 @@ function seoHtmlPlugin(siteUrl: string, verificationToken: string): Plugin {
       if (config.publicDir) publicDir = config.publicDir;
       outDir = path.resolve(config.root, config.build.outDir);
     },
-    transformIndexHtml(html) {
+    transformIndexHtml(html, ctx) {
       let out = siteUrl !== DEFAULT_SITE_URL ? html.split(DEFAULT_SITE_URL).join(siteUrl) : html;
       const verificationMeta = verificationToken
         ? `<meta name="google-site-verification" content="${escapeHtmlAttr(verificationToken)}" />`
         : '';
       out = out.replace(/[ \t]*<!-- google-site-verification -->\r?\n?/g, verificationMeta ? `    ${verificationMeta}\n` : '');
+
+      // Core Web Vitals (LCP/CLS): Preload font tiếng Việt chính & logo nhận diện trong bản build production
+      if (ctx?.bundle) {
+        const preloads: string[] = [];
+        for (const fileName of Object.keys(ctx.bundle)) {
+          if (/be-vietnam-pro-vietnamese-(?:400|700)-.*\.woff2$/i.test(fileName)) {
+            preloads.push(`<link rel="preload" as="font" type="font/woff2" href="/${fileName}" crossorigin />`);
+          } else if (/logo-mark-.*\.png$/i.test(fileName)) {
+            preloads.push(`<link rel="preload" as="image" href="/${fileName}" />`);
+          }
+        }
+        if (preloads.length > 0) {
+          out = out.replace(/<\/head>/i, `    ${preloads.join('\n    ')}\n  </head>`);
+        }
+      }
       return out;
     },
     closeBundle() {

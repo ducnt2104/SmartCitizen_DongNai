@@ -55,6 +55,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   useEffect(() => {
+    const onOpenChat = (): void => setAssistantOpen(true);
+    window.addEventListener('sc:open-chat', onOpenChat);
+    return () => window.removeEventListener('sc:open-chat', onOpenChat);
+  }, []);
+
+  useEffect(() => {
     const root = document.documentElement;
     root.dataset.mode = settings.mode;
     root.dataset.theme = settings.theme;
@@ -81,6 +87,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [settings, set, toggleSenior, drawerOpen, tourOpen, assistantOpen],
   );
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+}
+
+export function openAssistant(voice = false): void {
+  window.dispatchEvent(new CustomEvent('sc:open-chat', { detail: { voice } }));
 }
 
 export function useSettings(): Ctx {

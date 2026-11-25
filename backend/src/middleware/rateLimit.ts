@@ -33,13 +33,13 @@ export const limits = {
     code: 'rate_limited',
     message: 'Quá nhiều yêu cầu, vui lòng thử lại sau ít phút.',
   }),
-  /** Tối đa 5 yêu cầu gửi OTP / giờ / IP (cùng cooldown 60s/định danh ở AuthService). */
+  /** Tối đa 5 yêu cầu gửi OTP / 15 phút / IP (cùng giới hạn 3 lần / 10 phút / SĐT & cooldown 60s). */
   otp: limiter({
-    windowMs: HOUR,
+    windowMs: 15 * 60 * 1000,
     max: 5,
     key: (r) => r.ip ?? 'ip',
     code: 'otp_rate_limited',
-    message: 'IP của bạn đã yêu cầu OTP quá 5 lần trong 1 giờ. Vui lòng thử lại sau.',
+    message: 'IP của bạn đã yêu cầu OTP quá 5 lần trong 15 phút. Vui lòng thử lại sau.',
   }),
   /** Tối đa 10 lần gọi AI Vision / giờ / thiết bị */
   vision: limiter({

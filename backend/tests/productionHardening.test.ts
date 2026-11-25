@@ -24,7 +24,6 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     process.env.MONGODB_URI = '';
     process.env.GEMINI_API_KEY = '';
     process.env.GEMINI_API_KEYS = '';
-    process.env.ALLOW_DEMO_OTP = 'false';
 
     const { createNonBlockingServerRepositories } = await import('../src/repositories');
     const { createServices } = await import('../src/services/container');
@@ -151,12 +150,20 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(rescueJson.user.role).toBe('rescue');
     expect(rescueJson.user.roleCode).toBe('RESCUE');
 
-    // 2D. Gọi API dọn sạch dữ liệu mẫu -> xóa sạch toàn bộ 80 đơn seed, trả về 0 đơn rác
+    // 2D. Gọi API dọn sạch dữ liệu mẫu -> yêu cầu Re-auth khi thiếu, thực thi xóa sạch khi có X-Reauth-Password
+    const unauthPurge = await fetch(`${base}/api/admin/maintenance/purge-seed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superJson.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(unauthPurge.status).toBe(403);
+
     const purgeRes = await fetch(`${base}/api/admin/maintenance/purge-seed`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${superJson.token}`,
+        'X-Reauth-Password': INITIAL_STAFF_PASSWORD,
       },
       body: JSON.stringify({}),
     });
@@ -256,9 +263,8 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     }
   });
 
-  it('5. SMS OTP không báo gửi thành công giả khi chưa cấu hình SMS, và hỗ trợ test an toàn khi ALLOW_DEMO_OTP=true', async () => {
+  it('5. SMS OTP trả SMS_PROVIDER_NOT_CONFIGURED (503) khi chưa cấu hình và giới hạn tối đa 5 lần / 15 phút / IP', async () => {
     services.phoneOtp.resetMemory();
-    process.env.ALLOW_DEMO_OTP = 'false';
     const failRes = await fetch(`${base}/api/auth/otp/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.1' },
@@ -266,29 +272,32 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     });
     expect(failRes.status).toBe(503);
     const failBody = (await failRes.json()) as { error: { code: string; message: string } };
-    expect(failBody.error.code).toBe('sms_provider_not_configured');
+    expect(failBody.error.code).toBe('SMS_PROVIDER_NOT_CONFIGURED');
+    expect((failBody as { devOtpPreview?: unknown }).devOtpPreview).toBeUndefined();
 
-    // Khi bật ALLOW_DEMO_OTP=true -> trả devOtpPreview và xác thực thành công
-    process.env.ALLOW_DEMO_OTP = 'true';
+    services.phoneOtp.smsDispatcher.setOverrideProvider({
+      name: 'android_gateway',
+      isConfigured: () => true,
+      send: async () => ({ provider: 'android_gateway', delivered: true, messageId: 'ok' }),
+    });
     try {
-      const okRes = await fetch(`${base}/api/auth/otp/send`, {
+      const phones = ['0911000001', '0911000002', '0911000003', '0911000004', '0911000005'];
+      for (const ph of phones) {
+        const res = await fetch(`${base}/api/auth/otp/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.55' },
+          body: JSON.stringify({ channel: 'phone', phone: ph }),
+        });
+        expect(res.status).toBe(200);
+      }
+      const blockedIpRes = await fetch(`${base}/api/auth/otp/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.2' },
-        body: JSON.stringify({ channel: 'phone', phone: '0912 345 678' }),
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.55' },
+        body: JSON.stringify({ channel: 'phone', phone: '0911000006' }),
       });
-      expect(okRes.status).toBe(200);
-      const okBody = (await okRes.json()) as { target: string; devOtpPreview?: string };
-      expect(okBody.target).toBe('+84912345678');
-      expect(okBody.devOtpPreview).toMatch(/^\d{6}$/);
-
-      const verifyRes = await fetch(`${base}/api/auth/otp/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.2' },
-        body: JSON.stringify({ channel: 'phone', phone: '0912345678', code: okBody.devOtpPreview }),
-      });
-      expect(verifyRes.status).toBe(200);
+      expect(blockedIpRes.status).toBe(429);
     } finally {
-      process.env.ALLOW_DEMO_OTP = 'false';
+      services.phoneOtp.smsDispatcher.setOverrideProvider(null);
     }
   });
 

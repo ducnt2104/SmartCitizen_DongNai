@@ -5,11 +5,18 @@ import { DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { toClientReport } from '../shared/report';
 import type { ReportStatus } from '../shared/types';
 import { purgeDemoData } from '../data/seedStore';
-import { clearAuthCookies, readCookie, REFRESH_COOKIE, setAuthCookies } from '../middleware/auth';
+import {
+  clearAuthCookies,
+  extractClientMeta,
+  readCookie,
+  REFRESH_COOKIE,
+  setAuthCookies,
+} from '../middleware/auth';
 import type { BoundingBoxQuery } from '../repositories/types';
 import { isAdminRole, isRescueCapable, resolvePhotoInputFromRequest } from '../services/access';
 import type { Services } from '../services/container';
 import { isValidMediaId } from '../services/media.service';
+import { registerSessionStream } from '../services/sessionEvents';
 import { toProfile } from '../services/trust.service';
 import { sha256 } from '../utils/crypto';
 import { badRequest, forbidden } from '../utils/errors';
@@ -55,44 +62,96 @@ export function authController(s: Services) {
     otpVerify: async (req: Request, res: Response) => {
       const b = body(req, 'otpVerify');
       const target = (b.identifier ?? b.phone ?? '').trim();
+      const meta = extractClientMeta(req);
       const issued = await s.auth.verifyOtp(target, b.code, {
         name: b.name,
         password: b.password,
         defaultWardCode: b.defaultWardCode,
-        userAgent: req.get('user-agent') ?? '',
+        userAgent: meta.userAgent,
+        meta,
       });
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     passwordLogin: async (req: Request, res: Response) => {
       const b = body(req, 'passwordLogin');
-      const issued = await s.auth.passwordLogin(b.identifier, b.password, req.get('user-agent') ?? '');
+      const issued = await s.auth.passwordLogin(b.identifier, b.password, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     passwordReset: async (req: Request, res: Response) => {
       const b = body(req, 'passwordReset');
-      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, req.get('user-agent') ?? '');
+      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
+    },
+    reauth: async (req: Request, res: Response) => {
+      const b = body(req, 'reauth');
+      const meta = extractClientMeta(req);
+      res.json(
+        await s.auth.issueReauthToken(req.user!, req.sessionId!, {
+          currentPassword: b.currentPassword,
+          otpCode: b.otpCode,
+          ip: meta.ip,
+        }),
+      );
+    },
+    changePassword: async (req: Request, res: Response) => {
+      const b = body(req, 'changePassword');
+      const { issued, revokedOtherSessions } = await s.auth.changePassword(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    changeEmail: async (req: Request, res: Response) => {
+      const b = body(req, 'changeEmail');
+      const { issued, revokedOtherSessions } = await s.auth.changeEmail(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    changePhone: async (req: Request, res: Response) => {
+      const b = body(req, 'changePhone');
+      const { issued, revokedOtherSessions } = await s.auth.changePhone(
+        req.user!.id,
+        req.sessionId!,
+        b,
+        extractClientMeta(req),
+      );
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json({ ...issued.session, revokedOtherSessions });
+    },
+    sessionEvents: async (req: Request, res: Response) => {
+      registerSessionStream(req.user!.id, req.sessionId!, res);
+    },
+    mySessions: async (req: Request, res: Response) => {
+      res.json(await s.auth.listMySessions(req.user!.id, req.sessionId));
     },
     staffLogin: async (req: Request, res: Response) => {
       const b = body(req, 'staffLogin');
       const target = (b.staffCode ?? b.identifier ?? '').trim();
-      const issued = await s.auth.staffLogin(target, b.password, b.unit, req.get('user-agent') ?? '');
+      const issued = await s.auth.staffLogin(target, b.password, b.unit, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     rescueLogin: async (req: Request, res: Response) => {
       const { identifier, password } = body(req, 'rescueLogin');
-      const issued = await s.auth.rescueLogin(identifier, password, req.get('user-agent') ?? '');
+      const issued = await s.auth.rescueLogin(identifier, password, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
     refresh: async (req: Request, res: Response) => {
       const token = readCookie(req, REFRESH_COOKIE);
       try {
-        const issued = await s.auth.refreshSession(token, req.get('user-agent') ?? '');
+        const issued = await s.auth.refreshSession(token, extractClientMeta(req));
         setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
         res.json(issued.session);
       } catch (err) {
@@ -101,7 +160,7 @@ export function authController(s: Services) {
       }
     },
     logout: async (req: Request, res: Response) => {
-      await s.auth.logout(readCookie(req, REFRESH_COOKIE));
+      await s.auth.logout(readCookie(req, REFRESH_COOKIE), req.sessionId, req.user?.id);
       clearAuthCookies(res);
       res.json({ ok: true });
     },
@@ -112,7 +171,7 @@ export function authController(s: Services) {
     },
     registerVolunteer: async (req: Request, res: Response) => {
       const { wardCode, unitCode } = body(req, 'volunteerRegister');
-      const issued = await s.auth.registerVolunteer(req.user!.id, wardCode, unitCode);
+      const issued = await s.auth.registerVolunteer(req.user!.id, wardCode, unitCode, extractClientMeta(req));
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
@@ -121,8 +180,13 @@ export function authController(s: Services) {
     },
     updateProfile: async (req: Request, res: Response) => {
       const b = body(req, 'updateProfile');
-      const updated = await s.auth.updateProfile(req.user!.id, b);
-      res.json({ user: toProfile(updated) });
+      const { user, issued } = await s.auth.updateProfile(req.user!.id, b, req.sessionId, extractClientMeta(req));
+      if (issued) {
+        setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+        res.json({ user: toProfile(user), session: issued.session });
+        return;
+      }
+      res.json({ user: toProfile(user) });
     },
     readNotifications: async (req: Request, res: Response) => {
       await s.auth.markNotificationsRead(req.user!.id);
@@ -222,15 +286,50 @@ export function reportController(s: Services) {
     list: async (req: Request, res: Response) => {
       const category = typeof req.query.category === 'string' && req.query.category ? req.query.category : undefined;
       const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : undefined;
+      const scope = scopeOf(req);
       const paginated = req.query.paginated === '1' || cursor !== undefined || req.query.limit !== undefined;
       if (paginated) {
         const rawStatus = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
         const status = rawStatus && VALID_STATUSES.has(rawStatus) ? (rawStatus as ReportStatus) : undefined;
         const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 100);
-        res.json(await s.reports.listPaginated(req.user ?? null, { scope: scopeOf(req), category, status, cursor, limit }));
+        if (!req.user) {
+          const cacheKey = `list_pag:pub:${scope}:${category ?? ''}:${status ?? ''}:${cursor ?? ''}:${limit}`;
+          let entry = s.cache.getReportCached(cacheKey);
+          if (!entry) {
+            entry = s.cache.setReportCached(
+              cacheKey,
+              await s.reports.listPaginated(null, { scope, category, status, cursor, limit }),
+              20_000,
+            );
+          }
+          res.set('ETag', entry.etag);
+          res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+          if (req.headers['if-none-match'] === entry.etag) {
+            res.status(304).end();
+            return;
+          }
+          res.json(entry.body);
+          return;
+        }
+        res.json(await s.reports.listPaginated(req.user, { scope, category, status, cursor, limit }));
         return;
       }
-      res.json(await s.reports.list(req.user ?? null, scopeOf(req), category));
+      if (!req.user) {
+        const cacheKey = `list_all:pub:${scope}:${category ?? ''}`;
+        let entry = s.cache.getReportCached(cacheKey);
+        if (!entry) {
+          entry = s.cache.setReportCached(cacheKey, await s.reports.list(null, scope, category), 20_000);
+        }
+        res.set('ETag', entry.etag);
+        res.set('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+        if (req.headers['if-none-match'] === entry.etag) {
+          res.status(304).end();
+          return;
+        }
+        res.json(entry.body);
+        return;
+      }
+      res.json(await s.reports.list(req.user, scope, category));
     },
     mine: async (req: Request, res: Response) => {
       res.json(await s.reports.mine(req.user!));
@@ -345,6 +444,8 @@ export function rescueController(s: Services) {
           afterPhoto,
           b.override,
           b.edge,
+          b.exif,
+          process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl),
         ),
       );
     },
@@ -378,6 +479,8 @@ export function rescueController(s: Services) {
           b.edge,
           b.lat,
           b.lng,
+          b.exif,
+          process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl),
         ),
       );
     },
@@ -391,7 +494,19 @@ export function adminController(s: Services) {
   };
   return {
     overview: async (req: Request, res: Response) => {
-      res.json(await s.staff.overview(req.user!, scope(req)));
+      const resolvedScope = scope(req);
+      const cacheKey = `admin_overview:${resolvedScope}:${req.user?.role ?? 'staff'}`;
+      let entry = s.cache.getReportCached(cacheKey);
+      if (!entry) {
+        entry = s.cache.setReportCached(cacheKey, await s.staff.overview(req.user!, resolvedScope), 15_000);
+      }
+      res.set('ETag', entry.etag);
+      res.set('Cache-Control', 'private, max-age=10');
+      if (req.headers['if-none-match'] === entry.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json(entry.body);
     },
     queue: async (req: Request, res: Response) => {
       const tab = String(req.query.tab ?? 'open');
@@ -422,15 +537,64 @@ export function adminController(s: Services) {
     resolve: async (req: Request, res: Response) => {
       const b = body(req, 'resolve');
       const afterPhoto = await resolvePhotoInputFromRequest(req, b.afterPhoto, b.dHash);
-      res.json(await s.staff.resolve(req.user!, String(req.params.id), afterPhoto, b.note, b.override));
+      res.json(
+        await s.staff.resolve(req.user!, String(req.params.id), afterPhoto, b.note, b.override, {
+          lat: b.lat,
+          lng: b.lng,
+          edge: b.edge,
+          exif: b.exif,
+          allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.afterPhoto?.dataUrl) && (b.afterPhoto?.dataUrl?.length ?? 0) < 900,
+        }),
+      );
     },
     audit: async (req: Request, res: Response) => {
       const limit = Math.min(Number(req.query.limit) || 200, 1000);
-      const rows = await s.staff.auditList(limit);
+      const action = typeof req.query.action === 'string' && req.query.action ? req.query.action : undefined;
+      const actorId = typeof req.query.actorId === 'string' && req.query.actorId ? req.query.actorId : undefined;
+      const targetId = typeof req.query.targetId === 'string' && req.query.targetId ? req.query.targetId : undefined;
+      const q = typeof req.query.q === 'string' && req.query.q ? req.query.q : undefined;
+      const rows = await s.staff.auditListFiltered({ limit, action, actorId, targetId, q });
       res.json(isAdminRole(req.user) ? rows : rows.filter((e) => e.actorId === req.user!.id));
+    },
+    auditExport: async (req: Request, res: Response) => {
+      const format = req.query.format === 'json' ? 'json' : 'csv';
+      const action = typeof req.query.action === 'string' && req.query.action ? req.query.action : undefined;
+      const actorId = typeof req.query.actorId === 'string' && req.query.actorId ? req.query.actorId : undefined;
+      const targetId = typeof req.query.targetId === 'string' && req.query.targetId ? req.query.targetId : undefined;
+      const q = typeof req.query.q === 'string' && req.query.q ? req.query.q : undefined;
+      const out = await s.staff.auditExport(req.user!, { action, actorId, targetId, q }, format);
+      res.set({ 'Content-Type': out.contentType, 'Content-Disposition': `attachment; filename="${out.filename}"` }).send(out.body);
     },
     auditVerify: async (_req: Request, res: Response) => {
       res.json(await s.audit.verifyChain());
+    },
+    moderationQueue: async (req: Request, res: Response) => {
+      res.json(await s.staff.moderationQueue(req.user!, scope(req)));
+    },
+    moderationDecide: async (req: Request, res: Response) => {
+      const b = body(req, 'adminModerationDecision');
+      res.json(await s.staff.decideModeration(req.user!, String(req.params.id), b, req.ip));
+    },
+    listSessions: async (req: Request, res: Response) => {
+      const userId = typeof req.query.userId === 'string' && req.query.userId ? req.query.userId : undefined;
+      const includeRevoked = req.query.includeRevoked === 'true';
+      res.json(await s.staff.listSessions(req.user!, { userId, includeRevoked }));
+    },
+    revokeSession: async (req: Request, res: Response) => {
+      res.json(await s.staff.revokeSessionById(req.user!, String(req.params.sessionId), req.ip));
+    },
+    forceLogoutUser: async (req: Request, res: Response) => {
+      res.json(await s.staff.forceLogoutUser(req.user!, String(req.params.id), req.ip));
+    },
+    forceLogoutAll: async (req: Request, res: Response) => {
+      res.json(await s.staff.forceLogoutAllSystem(req.user!, req.sessionId!, req.ip));
+    },
+    userViolations: async (req: Request, res: Response) => {
+      res.json(await s.staff.getUserViolations(req.user!, String(req.params.id)));
+    },
+    flagUserTrust: async (req: Request, res: Response) => {
+      const b = body(req, 'adminTrustFlag');
+      res.json(await s.staff.flagUserTrust(req.user!, String(req.params.id), b, req.ip));
     },
     staff: async (_req: Request, res: Response) => {
       res.json(await s.staff.staffList());

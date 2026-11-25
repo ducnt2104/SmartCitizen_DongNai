@@ -546,33 +546,102 @@ class MongoOtpRepo implements OtpRepository {
   }
 }
 
+function normalizeSessionDoc(doc: Doc | null): SessionRecord | null {
+  const rec = strip<SessionRecord>(doc);
+  if (!rec) return null;
+  return {
+    ...rec,
+    tokenHash: rec.tokenHash ?? rec.refreshHash,
+    deviceFingerprint: rec.deviceFingerprint ?? '',
+    ip: rec.ip ?? '',
+    tokenVersion: rec.tokenVersion ?? 0,
+    lastActiveAt: rec.lastActiveAt ?? rec.createdAt,
+    isRevoked: Boolean(rec.isRevoked || rec.revokedAt !== null),
+    revokedReason: rec.revokedReason ?? null,
+  };
+}
+
 class MongoSessionRepo implements SessionRepository {
+  async get(id: string): Promise<SessionRecord | null> {
+    return normalizeSessionDoc((await SessionModel.findOne({ id: String(id) }).lean()) as Doc | null);
+  }
+
   async getByRefreshHash(refreshHash: string): Promise<SessionRecord | null> {
-    return strip<SessionRecord>(
+    return normalizeSessionDoc(
       (await SessionModel.findOne({ refreshHash: String(refreshHash) }).lean()) as Doc | null,
     );
+  }
+
+  async listActive(filter?: { userId?: string; includeRevoked?: boolean; limit?: number }): Promise<SessionRecord[]> {
+    const query: Record<string, unknown> = {};
+    if (filter?.userId) query.userId = String(filter.userId);
+    if (!filter?.includeRevoked) {
+      query.isRevoked = { $ne: true };
+      query.revokedAt = null;
+      query.expiresAt = { $gt: Date.now() };
+    }
+    const limit = Math.min(Math.max(filter?.limit ?? 200, 1), 1000);
+    const docs = (await SessionModel.find(query).sort({ lastActiveAt: -1, createdAt: -1 }).limit(limit).lean()) as Doc[];
+    return docs.map((d) => normalizeSessionDoc(d)!);
   }
 
   async save(rec: SessionRecord): Promise<void> {
     await SessionModel.replaceOne(
       { id: rec.id },
-      { ...rec, expiresAtDate: new Date(rec.expiresAt) },
+      {
+        ...rec,
+        isRevoked: Boolean(rec.isRevoked || rec.revokedAt !== null),
+        expiresAtDate: new Date(rec.expiresAt),
+      },
       { upsert: true },
     );
   }
 
-  async revoke(id: string, replacedBySessionId: string | null = null): Promise<void> {
+  async touch(id: string, lastActiveAt: number, ip?: string): Promise<void> {
     await SessionModel.updateOne(
       { id: String(id) },
-      { $set: { revokedAt: Date.now(), ...(replacedBySessionId ? { replacedBySessionId } : {}) } },
+      { $set: { lastActiveAt, ...(ip ? { ip } : {}) } },
     );
   }
 
-  async revokeAllForUser(userId: string): Promise<void> {
-    await SessionModel.updateMany(
-      { userId: String(userId), revokedAt: null },
-      { $set: { revokedAt: Date.now() } },
+  async revoke(id: string, replacedBySessionId: string | null = null, reason: string | null = null): Promise<void> {
+    await SessionModel.updateOne(
+      { id: String(id) },
+      {
+        $set: {
+          isRevoked: true,
+          revokedAt: Date.now(),
+          ...(replacedBySessionId ? { replacedBySessionId } : {}),
+          ...(reason ? { revokedReason: reason } : {}),
+        },
+      },
     );
+  }
+
+  async revokeAllForUser(userId: string, reason: string | null = null): Promise<number> {
+    const res = await SessionModel.updateMany(
+      { userId: String(userId), revokedAt: null },
+      { $set: { isRevoked: true, revokedAt: Date.now(), ...(reason ? { revokedReason: reason } : {}) } },
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  async revokeAllExcept(userId: string, exceptSessionId: string, reason: string | null = null): Promise<number> {
+    const res = await SessionModel.updateMany(
+      { userId: String(userId), id: { $ne: String(exceptSessionId) }, revokedAt: null },
+      { $set: { isRevoked: true, revokedAt: Date.now(), ...(reason ? { revokedReason: reason } : {}) } },
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  async revokeAllSystem(exceptSessionId: string | null = null, reason: string | null = null): Promise<number> {
+    const query: Record<string, unknown> = { revokedAt: null };
+    if (exceptSessionId) query.id = { $ne: String(exceptSessionId) };
+    const res = await SessionModel.updateMany(
+      query,
+      { $set: { isRevoked: true, revokedAt: Date.now(), ...(reason ? { revokedReason: reason } : {}) } },
+    );
+    return res.modifiedCount ?? 0;
   }
 }
 
@@ -610,11 +679,11 @@ export async function createMongoRepositories(
       return { ok: false, latencyMs, counts: { reports: 0, users: 0, fingerprints: 0, evaluations: 0, auditLogs: 0 } };
     }
     const [rCnt, uCnt, fCnt, eCnt, aCnt] = await Promise.all([
-      reports.count(),
-      users.count(),
-      fingerprints.count(),
-      evaluations.count(),
-      AuditLogModel.countDocuments(),
+      ReportModel.estimatedDocumentCount(),
+      UserModel.estimatedDocumentCount(),
+      ImageFingerprintModel.estimatedDocumentCount(),
+      AiEvaluationModel.estimatedDocumentCount(),
+      AuditLogModel.estimatedDocumentCount(),
     ]);
     return {
       ok: true,

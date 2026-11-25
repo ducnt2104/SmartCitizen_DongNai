@@ -113,12 +113,12 @@ export function ReportDetail({
       <div className="space-y-4">
         {photos.length > 0 && (
           <div>
-            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} decoding="async" className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
+            <img src={photos[Math.min(photoIdx, photos.length - 1)].url} alt={r.title} width={800} height={500} decoding="async" className="aspect-[16/10] w-full rounded-2xl border border-line object-cover" />
             {photos.length > 1 && (
               <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={t('detail.gallery')}>
                 {photos.map((p, i) => (
                   <button key={p.id} type="button" role="tab" aria-selected={i === photoIdx} onClick={() => setPhotoIdx(i)} className={`h-14 w-20 shrink-0 overflow-hidden rounded-lg border-2 ${i === photoIdx ? 'border-brand' : 'border-line'}`}>
-                    <img src={p.thumbnailUrl ?? p.url} alt={`${t('detail.angle')} ${i + 1}`} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    <img src={p.thumbnailUrl ?? p.url} alt={`${t('detail.angle')} ${i + 1}`} width={80} height={56} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                   </button>
                 ))}
               </div>
@@ -217,7 +217,11 @@ export function ReportDetail({
           {r.ai.fraudFlags.length > 0 && <p className="mt-1 break-words text-xs font-semibold text-danger">{r.ai.fraudFlags.join(' · ')}</p>}
           {r.ai.safetyHazards.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-muted">{r.ai.safetyHazards.map((h) => <li key={h}>{h}</li>)}</ul>}
           <p className="mt-1 text-[11px] font-semibold text-warn">
-            {r.ai.mode === 'fallback' ? t('ai.fallbackLabel') : t('ai.geminiLabel')}
+            {r.ai.mode === 'local_ai'
+              ? t('ai.localAiLabel')
+              : r.ai.mode === 'fallback'
+                ? t('ai.fallbackLabel')
+                : t('ai.geminiLabel')}
           </p>
           {r.quarantine && <p className="mt-2 break-words rounded-lg bg-surface-2 p-2 text-xs">{r.quarantine.detail}</p>}
         </div>

@@ -651,6 +651,7 @@ incidentSchema.index({ location: '2dsphere' });
 incidentSchema.index({ status: 1, createdAt: -1 });
 incidentSchema.index({ wardCode: 1, status: 1, priorityScore: -1 });
 incidentSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ wardCode: 1, category: 1, status: 1, createdAt: -1 });
 incidentSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
 incidentSchema.index({ reporterId: 1, createdAt: -1 });
 // 3. Compound Index tương thích ngược theo district

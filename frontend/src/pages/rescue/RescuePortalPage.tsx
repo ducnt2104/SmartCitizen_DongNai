@@ -595,6 +595,9 @@ export default function RescuePortalPage() {
                 <img
                   src={incomingMission.photos[0].url}
                   alt={incomingMission.title}
+                  width={80}
+                  height={80}
+                  decoding="async"
                   className="h-16 w-16 shrink-0 rounded-2xl border border-slate-700 object-cover sm:h-20 sm:w-20"
                 />
               )}
@@ -776,6 +779,10 @@ export default function RescuePortalPage() {
                           <img
                             src={m.photos[0].url}
                             alt={m.title}
+                            width={64}
+                            height={64}
+                            loading="lazy"
+                            decoding="async"
                             className="h-16 w-16 shrink-0 rounded-xl border border-slate-800 object-cover"
                           />
                         )}

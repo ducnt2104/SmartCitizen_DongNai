@@ -28,7 +28,7 @@ import type { LiveNavPosition } from '../../hooks/useLiveNavigationGps';
 import { useI18n } from '../../i18n';
 import { api, apiMultipart, ApiError } from '../../lib/api';
 import { edge } from '../../lib/edgeClient';
-import type { EdgeStatsMsg } from '../../lib/imageProcessor';
+import type { EdgeStatsMsg, ExifGpsCoords, ExtractedExifMetadata } from '../../lib/imageProcessor';
 import { googleMapsDirectionsUrl } from '../../lib/mapConfig';
 import { CATEGORY_META } from '../../lib/meta';
 import {
@@ -157,6 +157,8 @@ export function TacticalNavigationWorkspace({
     aiBlob: Blob;
     dHash: string;
     stats: EdgeStatsMsg;
+    exif: ExtractedExifMetadata;
+    exifGps: ExifGpsCoords | null;
   } | null>(null);
   const [completeNote, setCompleteNote] = useState('');
   const [overrideAi, setOverrideAi] = useState(false);
@@ -396,6 +398,8 @@ export function TacticalNavigationWorkspace({
         aiBlob: p.aiBlob,
         dHash: p.dHash,
         stats: p.stats,
+        exif: p.exif,
+        exifGps: p.exifGps,
       });
       setVerifyFeedback(null);
     } catch (e) {
@@ -423,11 +427,16 @@ export function TacticalNavigationWorkspace({
           note: completeNote.trim(),
           override: overrideAi,
           edge: afterPhoto.stats,
-          lat: livePos.lat,
-          lng: livePos.lng,
+          exif: afterPhoto.exif,
+          lat: afterPhoto.exifGps?.lat ?? livePos.lat,
+          lng: afterPhoto.exifGps?.lng ?? livePos.lng,
         }),
       );
-      const res = await apiMultipart<{ report: RescueMissionItem; accepted: boolean }>(
+      const res = await apiMultipart<{
+        report: RescueMissionItem;
+        accepted: boolean;
+        resolutionStatus?: 'AUTO_VERIFIED' | 'PENDING_MODERATION' | 'REJECTED';
+      }>(
         `/api/rescue/missions/${mission.id}/complete`,
         {
           method: 'POST',
@@ -445,6 +454,12 @@ export function TacticalNavigationWorkspace({
         setVerifyFeedback(null);
         setCompletionOpen(false);
         onMissionClosed?.('resolved', res.report);
+      } else if (res.resolutionStatus === 'PENDING_MODERATION') {
+        toast('info', 'Ảnh hoàn thành đã chuyển Admin kiểm duyệt', res.report.resolution?.summary);
+        setVerifyFeedback({
+          ok: true,
+          text: res.report.resolution?.summary ?? 'Ảnh đạt ngưỡng trung bình (60–84%) và đang chờ Admin duyệt.',
+        });
       } else {
         setVerifyFeedback({
           ok: false,
@@ -744,6 +759,9 @@ export function TacticalNavigationWorkspace({
               <img
                 src={mission.photos[0].url}
                 alt={mission.title}
+                width={64}
+                height={64}
+                decoding="async"
                 className="h-14 w-14 shrink-0 rounded-2xl border border-slate-700 object-cover sm:h-16 sm:w-16"
               />
             )}
@@ -860,6 +878,8 @@ export function TacticalNavigationWorkspace({
               <img
                 src={afterPhoto.previewUrl}
                 alt="Ảnh hiện trường sau xử lý"
+                width={640}
+                height={360}
                 decoding="async"
                 className="aspect-video w-full rounded-2xl border border-slate-700 object-cover"
               />

@@ -1,12 +1,16 @@
 import {
+  AlertTriangle,
   Database,
   Edit3,
   KeyRound,
+  Laptop,
   Lock,
+  LogOut,
   Plus,
   RefreshCw,
   Save,
   Search,
+  ShieldAlert,
   Sliders,
   Trash2,
   Unlock,
@@ -14,7 +18,15 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { normalizeRole, toRoleCode } from '@shared/constants';
-import type { DynamicAiConfig, Role, UserProfile } from '@shared/types';
+import type {
+  DynamicAiConfig,
+  Role,
+  SessionInfo,
+  TrustLevel,
+  UserProfile,
+  UserViolationEntry,
+} from '@shared/types';
+import { ReauthModal } from '../../components/ReauthModal';
 import { Spinner } from '../../components/ui';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { purgeLocalSeedReports } from '../../db/hydrate';
@@ -30,6 +42,13 @@ const ROLE_OPTIONS: Array<{ value: Role; code: string; label: string }> = [
   { value: 'officer', code: 'OFFICER', label: 'OFFICER — Cán bộ xử lý (Phường/Xã hoặc Toàn TP)' },
   { value: 'rescue', code: 'RESCUE', label: 'RESCUE — Đội cứu hộ hiện trường' },
   { value: 'citizen', code: 'CITIZEN', label: 'CITIZEN — Người dân' },
+];
+
+const TRUST_LEVELS: Array<{ value: TrustLevel; label: string; cls: string }> = [
+  { value: 'high', label: 'Tin cậy cao (High)', cls: 'border-emerald-400/50 bg-emerald-500/15 text-ioc-green' },
+  { value: 'normal', label: 'Bình thường (Normal)', cls: 'border-ioc-line text-ioc-dim' },
+  { value: 'watchlist', label: 'Theo dõi (Watchlist)', cls: 'border-amber-400/50 bg-amber-500/15 text-ioc-amber' },
+  { value: 'flagged', label: 'Gắn cờ Spam (Flagged)', cls: 'border-rose-400/50 bg-rose-500/15 text-ioc-red' },
 ];
 
 interface AiConfigPayload {
@@ -53,6 +72,11 @@ interface PurgeSeedResponse {
   remainingUsers: number;
 }
 
+function trustBadge(level?: TrustLevel) {
+  const found = TRUST_LEVELS.find((t) => t.value === level);
+  return found ?? TRUST_LEVELS[1];
+}
+
 export function SystemAdminView() {
   const toast = useToast();
   const session = useSession();
@@ -72,6 +96,20 @@ export function SystemAdminView() {
   const [filterWard, setFilterWard] = useState('');
   const [filterActive, setFilterActive] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  // ── Trung tâm Quản trị Phiên đăng nhập ──
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+
+  // ── Re-auth khi gặp 403 REAUTH_REQUIRED ──
+  const [pendingReauth, setPendingReauth] = useState<(() => Promise<void>) | null>(null);
+
+  // ── Vi phạm & Cờ tín nhiệm ──
+  const [violationTarget, setViolationTarget] = useState<UserProfile | null>(null);
+  const [violations, setViolations] = useState<UserViolationEntry[]>([]);
+  const [loadingViolations, setLoadingViolations] = useState(false);
+  const [flagLevel, setFlagLevel] = useState<TrustLevel>('normal');
+  const [flagReason, setFlagReason] = useState('');
 
   // Modals: Create / Edit / Reset Password
   const [createOpen, setCreateOpen] = useState(false);
@@ -104,6 +142,21 @@ export function SystemAdminView() {
     [toast],
   );
 
+  const runWithReauth = useCallback(
+    async (fn: () => Promise<void>): Promise<void> => {
+      try {
+        await fn();
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 403 && err.code === 'REAUTH_REQUIRED') {
+          setPendingReauth(() => fn);
+          return;
+        }
+        showErr(err);
+      }
+    },
+    [showErr],
+  );
+
   const loadConfig = useCallback(async () => {
     try {
       const data = await api<AiConfigPayload>('/api/admin/ai-config');
@@ -132,9 +185,22 @@ export function SystemAdminView() {
     }
   }, [filterRole, filterWard, filterActive, q, showErr]);
 
+  const loadSessions = useCallback(async () => {
+    setLoadingSessions(true);
+    try {
+      const data = await api<SessionInfo[]>('/api/admin/sessions');
+      setSessions(data);
+    } catch (e) {
+      showErr(e);
+    } finally {
+      setLoadingSessions(false);
+    }
+  }, [showErr]);
+
   useEffect(() => {
     void loadConfig();
-  }, [loadConfig]);
+    void loadSessions();
+  }, [loadConfig, loadSessions]);
 
   useEffect(() => {
     void loadUsers();
@@ -142,27 +208,27 @@ export function SystemAdminView() {
 
   const saveAiConfig = async (): Promise<void> => {
     if (!cfgDraft) return;
-    setSavingCfg(true);
-    try {
-      const saved = await api<DynamicAiConfig>('/api/admin/ai-config', {
-        method: 'PATCH',
-        body: {
-          screenshotThreshold: cfgDraft.screenshotThreshold,
-          duplicateThreshold: cfgDraft.duplicateThreshold,
-          minKeypointInliers: cfgDraft.minKeypointInliers,
-          sceneMatchThreshold: cfgDraft.sceneMatchThreshold,
-          resolutionThreshold: cfgDraft.resolutionThreshold,
-          allowCloudFallback: cfgDraft.allowCloudFallback,
-        },
-      });
-      setCfgDraft(saved);
-      toast('success', 'Đã lưu cấu hình kiểm định hình ảnh AI');
-      void loadConfig();
-    } catch (e) {
-      showErr(e);
-    } finally {
-      setSavingCfg(false);
-    }
+    await runWithReauth(async () => {
+      setSavingCfg(true);
+      try {
+        const saved = await api<DynamicAiConfig>('/api/admin/ai-config', {
+          method: 'PATCH',
+          body: {
+            screenshotThreshold: cfgDraft.screenshotThreshold,
+            duplicateThreshold: cfgDraft.duplicateThreshold,
+            minKeypointInliers: cfgDraft.minKeypointInliers,
+            sceneMatchThreshold: cfgDraft.sceneMatchThreshold,
+            resolutionThreshold: cfgDraft.resolutionThreshold,
+            allowCloudFallback: cfgDraft.allowCloudFallback,
+          },
+        });
+        setCfgDraft(saved);
+        toast('success', 'Đã lưu cấu hình kiểm định hình ảnh AI');
+        void loadConfig();
+      } finally {
+        setSavingCfg(false);
+      }
+    });
   };
 
   const handlePurgeSeedData = async (): Promise<void> => {
@@ -173,24 +239,24 @@ export function SystemAdminView() {
     ) {
       return;
     }
-    setPurging(true);
-    try {
-      const res = await api<PurgeSeedResponse>('/api/admin/maintenance/purge-seed', {
-        method: 'POST',
-        body: {},
-      });
-      await purgeLocalSeedReports();
-      toast(
-        'success',
-        `Đã làm sạch ${res.deletedReports + res.deletedIncidents} bản ghi khởi tạo`,
-        `Hiện còn ${res.remainingReports} phản ánh và ${res.remainingUsers} tài khoản trên hệ thống.`,
-      );
-      await Promise.all([loadConfig(), loadUsers()]);
-    } catch (e) {
-      showErr(e);
-    } finally {
-      setPurging(false);
-    }
+    await runWithReauth(async () => {
+      setPurging(true);
+      try {
+        const res = await api<PurgeSeedResponse>('/api/admin/maintenance/purge-seed', {
+          method: 'POST',
+          body: {},
+        });
+        await purgeLocalSeedReports();
+        toast(
+          'success',
+          `Đã làm sạch ${res.deletedReports + res.deletedIncidents} bản ghi khởi tạo`,
+          `Hiện còn ${res.remainingReports} phản ánh và ${res.remainingUsers} tài khoản trên hệ thống.`,
+        );
+        await Promise.all([loadConfig(), loadUsers()]);
+      } finally {
+        setPurging(false);
+      }
+    });
   };
 
   const submitCreate = async (e: React.FormEvent): Promise<void> => {
@@ -236,71 +302,161 @@ export function SystemAdminView() {
   const submitEdit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     if (!editTarget) return;
-    setBusyId(`edit-${editTarget.id}`);
-    try {
-      const updated = await api<UserProfile>(`/api/admin/users/${editTarget.id}`, {
-        method: 'PATCH',
-        body: {
-          name: eName.trim(),
-          role: eRole,
-          wardCode: eWard || null,
-          staffCode: eStaffCode.trim() || null,
-          email: eEmail.trim() || null,
-        },
-      });
-      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-      setEditTarget(null);
-      toast('success', `Đã cập nhật phân quyền cho ${updated.name}`);
-    } catch (err) {
-      showErr(err);
-    } finally {
-      setBusyId(null);
-    }
+    const target = editTarget;
+    await runWithReauth(async () => {
+      setBusyId(`edit-${target.id}`);
+      try {
+        const updated = await api<UserProfile>(`/api/admin/users/${target.id}`, {
+          method: 'PATCH',
+          body: {
+            name: eName.trim(),
+            role: eRole,
+            wardCode: eWard || null,
+            staffCode: eStaffCode.trim() || null,
+            email: eEmail.trim() || null,
+          },
+        });
+        setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+        setEditTarget(null);
+        toast('success', `Đã cập nhật phân quyền cho ${updated.name}`);
+      } finally {
+        setBusyId(null);
+      }
+    });
   };
 
   const toggleActive = async (u: UserProfile): Promise<void> => {
     const nextActive = Boolean(u.revoked);
-    setBusyId(`lock-${u.id}`);
-    try {
-      const updated = await api<UserProfile>(`/api/admin/users/${u.id}`, {
-        method: 'PATCH',
-        body: { isActive: nextActive },
-      });
-      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-      toast('success', nextActive ? `Đã mở khóa tài khoản ${u.name}` : `Đã khóa tài khoản & thu hồi phiên của ${u.name}`);
-    } catch (err) {
-      showErr(err);
-    } finally {
-      setBusyId(null);
-    }
+    await runWithReauth(async () => {
+      setBusyId(`lock-${u.id}`);
+      try {
+        const updated = await api<UserProfile>(`/api/admin/users/${u.id}`, {
+          method: 'PATCH',
+          body: { isActive: nextActive },
+        });
+        setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+        toast('success', nextActive ? `Đã mở khóa tài khoản ${u.name}` : `Đã khóa tài khoản & thu hồi phiên của ${u.name}`);
+        void loadSessions();
+      } finally {
+        setBusyId(null);
+      }
+    });
   };
 
   const submitResetPassword = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     if (!pwTarget) return;
-    setBusyId(`pw-${pwTarget.id}`);
+    const target = pwTarget;
+    await runWithReauth(async () => {
+      setBusyId(`pw-${target.id}`);
+      try {
+        await api(`/api/admin/users/${target.id}/reset-password`, {
+          method: 'POST',
+          body: { newPassword: newPw },
+        });
+        toast('success', `Đã đặt lại mật khẩu và đăng xuất mọi phiên cũ của ${target.name}`);
+        setPwTarget(null);
+        setNewPw('');
+        void loadSessions();
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
+
+  const removeUser = async (u: UserProfile): Promise<void> => {
+    if (!window.confirm(`Xác nhận xóa vĩnh viễn tài khoản "${u.name}" (${u.staffCode ?? u.email ?? u.id})?`)) return;
+    await runWithReauth(async () => {
+      setBusyId(`del-${u.id}`);
+      try {
+        await api(`/api/admin/users/${u.id}`, { method: 'DELETE' });
+        setUsers((prev) => prev.filter((x) => x.id !== u.id));
+        toast('success', `Đã xóa tài khoản ${u.name}`);
+        void loadSessions();
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
+
+  const forceLogoutUser = async (u: UserProfile): Promise<void> => {
+    setBusyId(`kick-${u.id}`);
     try {
-      await api(`/api/admin/users/${pwTarget.id}/reset-password`, {
+      const res = await api<{ ok: boolean; revokedCount: number }>(`/api/admin/users/${u.id}/force-logout`, {
         method: 'POST',
-        body: { newPassword: newPw },
+        body: {},
       });
-      toast('success', `Đã đặt lại mật khẩu và đăng xuất mọi phiên cũ của ${pwTarget.name}`);
-      setPwTarget(null);
-      setNewPw('');
-    } catch (err) {
-      showErr(err);
+      toast('success', `Đã đăng xuất từ xa ${u.name}`, `Thu hồi ${res.revokedCount} phiên hoạt động.`);
+      void loadSessions();
+    } catch (e) {
+      showErr(e);
     } finally {
       setBusyId(null);
     }
   };
 
-  const removeUser = async (u: UserProfile): Promise<void> => {
-    if (!window.confirm(`Xác nhận xóa vĩnh viễn tài khoản "${u.name}" (${u.staffCode ?? u.email ?? u.id})?`)) return;
-    setBusyId(`del-${u.id}`);
+  const revokeSession = async (sessionId: string): Promise<void> => {
+    setBusyId(`sess-${sessionId}`);
     try {
-      await api(`/api/admin/users/${u.id}`, { method: 'DELETE' });
-      setUsers((prev) => prev.filter((x) => x.id !== u.id));
-      toast('success', `Đã xóa tài khoản ${u.name}`);
+      await api(`/api/admin/sessions/${sessionId}/revoke`, { method: 'POST', body: {} });
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      toast('success', 'Đã thu hồi phiên đăng nhập');
+    } catch (e) {
+      showErr(e);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const forceLogoutAll = async (): Promise<void> => {
+    if (!window.confirm('Xác nhận đăng xuất toàn bộ các phiên khác trên toàn hệ thống?')) return;
+    await runWithReauth(async () => {
+      setBusyId('kick-all');
+      try {
+        const res = await api<{ ok: boolean; revokedCount: number }>('/api/admin/sessions/force-logout-all', {
+          method: 'POST',
+          body: {},
+        });
+        toast('success', 'Đã thu hồi toàn bộ phiên hệ thống', `Số phiên đã đăng xuất: ${res.revokedCount}.`);
+        void loadSessions();
+      } finally {
+        setBusyId(null);
+      }
+    });
+  };
+
+  const openViolations = async (u: UserProfile): Promise<void> => {
+    setViolationTarget(u);
+    setFlagLevel(u.trustLevel ?? 'normal');
+    setFlagReason('');
+    setLoadingViolations(true);
+    try {
+      const data = await api<{ user: UserProfile; violations: UserViolationEntry[] }>(
+        `/api/admin/users/${u.id}/violations`,
+      );
+      setViolations(data.violations);
+    } catch (e) {
+      showErr(e);
+    } finally {
+      setLoadingViolations(false);
+    }
+  };
+
+  const submitTrustFlag = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!violationTarget) return;
+    setBusyId(`flag-${violationTarget.id}`);
+    try {
+      const updated = await api<UserProfile>(`/api/admin/users/${violationTarget.id}/trust-flag`, {
+        method: 'PATCH',
+        body: {
+          trustLevel: flagLevel,
+          reason: flagReason.trim() || `Cập nhật mức tín nhiệm thành ${flagLevel}`,
+        },
+      });
+      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      setViolationTarget(null);
+      toast('success', `Đã cập nhật mức tín nhiệm của ${updated.name}`);
     } catch (err) {
       showErr(err);
     } finally {
@@ -368,13 +524,13 @@ export function SystemAdminView() {
           <div className="flex justify-center p-6"><Spinner /></div>
         ) : (
           <div className="max-h-[58dvh] overflow-auto">
-            <table className="w-full min-w-[54rem] text-xs">
+            <table className="w-full min-w-[64rem] text-xs">
               <thead className="sticky top-0 bg-ioc-panel">
                 <tr className="border-b border-ioc-line">
                   <th className="ioc-th">Họ tên / Định danh</th>
                   <th className="ioc-th">Vai trò</th>
                   <th className="ioc-th">Đơn vị / Địa bàn</th>
-                  <th className="ioc-th">Điểm uy tín</th>
+                  <th className="ioc-th">Tín nhiệm & Vi phạm</th>
                   <th className="ioc-th">Trạng thái</th>
                   <th className="ioc-th text-right">Thao tác quản trị</th>
                 </tr>
@@ -384,6 +540,7 @@ export function SystemAdminView() {
                   const isSelf = u.id === me?.id;
                   const role = normalizeRole(u.role);
                   const badgeCode = u.roleCode ?? toRoleCode(role);
+                  const tBadge = trustBadge(u.trustLevel);
                   return (
                     <tr key={u.id} className="border-b border-ioc-line/60 hover:bg-ioc-raised/60">
                       <td className="px-3 py-2">
@@ -413,7 +570,19 @@ export function SystemAdminView() {
                       <td className="px-3 py-2 text-ioc-dim">
                         {u.wardCode ? `${WARD_BY_CODE[u.wardCode]?.name ?? u.wardCode} (${u.wardCode})` : 'Toàn TP. Đồng Nai'}
                       </td>
-                      <td className="mono px-3 py-2">{u.trustScore}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="mono font-semibold text-ioc-text">{u.trustScore}đ</span>
+                          <span className={`mono rounded border px-1.5 py-0.5 text-[10px] ${tBadge.cls}`}>
+                            {u.trustLevel ?? 'normal'}
+                          </span>
+                          {(u.violationCount ?? 0) > 0 && (
+                            <span className="mono text-[10px] font-bold text-ioc-red">
+                              {u.violationCount} vi phạm
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`mono font-semibold ${u.revoked ? 'text-ioc-red' : 'text-ioc-green'}`}>
                           {u.revoked ? 'ĐÃ KHÓA' : 'HOẠT ĐỘNG'}
@@ -434,11 +603,31 @@ export function SystemAdminView() {
                             type="button"
                             className="ioc-btn !min-h-7 !px-2 !text-xs"
                             disabled={busyId !== null}
+                            onClick={() => void openViolations(u)}
+                            title="Xem vi phạm & gắn cờ tín nhiệm"
+                          >
+                            <ShieldAlert className="h-3.5 w-3.5" aria-hidden /> Vi phạm
+                          </button>
+                          <button
+                            type="button"
+                            className="ioc-btn !min-h-7 !px-2 !text-xs"
+                            disabled={busyId !== null}
                             onClick={() => { setPwTarget(u); setNewPw(''); }}
                             title="Đặt lại mật khẩu"
                           >
                             <KeyRound className="h-3.5 w-3.5" aria-hidden /> Mật khẩu
                           </button>
+                          {!isSelf && (
+                            <button
+                              type="button"
+                              className="ioc-btn !min-h-7 !px-2 !text-xs"
+                              disabled={busyId !== null}
+                              onClick={() => void forceLogoutUser(u)}
+                              title="Đăng xuất từ xa mọi thiết bị của tài khoản này"
+                            >
+                              <LogOut className="h-3.5 w-3.5" aria-hidden /> Đá phiên
+                            </button>
+                          )}
                           <button
                             type="button"
                             className={`ioc-btn !min-h-7 !px-2 !text-xs ${u.revoked ? 'ioc-btn-green' : 'ioc-btn-red'}`}
@@ -471,7 +660,75 @@ export function SystemAdminView() {
         )}
       </section>
 
-      {/* ── 2. Cấu hình Ngưỡng Kiểm định Hình ảnh AI ── */}
+      {/* ── 2. Trung tâm Quản trị Phiên đăng nhập (Single-Session Command Center) ── */}
+      <section className="ioc-panel overflow-hidden" aria-label="Quản trị Phiên đăng nhập">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ioc-line p-3.5">
+          <div>
+            <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
+              <Laptop className="h-4 w-4" aria-hidden /> Trung tâm Phiên Đăng Nhập Hoạt Động ({sessions.length})
+            </h2>
+            <p className="mt-0.5 text-xs text-ioc-dim">
+              Mỗi tài khoản chỉ duy trì tối đa 1 phiên hợp lệ tại một thời điểm (Strict Single-Session). Thu hồi ngay khi phát hiện bất thường.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="ioc-btn" disabled={loadingSessions} onClick={() => void loadSessions()}>
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Làm mới phiên
+            </button>
+            <button type="button" className="ioc-btn ioc-btn-red" disabled={busyId !== null} onClick={() => void forceLogoutAll()}>
+              <LogOut className="h-3.5 w-3.5" aria-hidden /> Đăng xuất toàn hệ thống
+            </button>
+          </div>
+        </div>
+        {loadingSessions ? (
+          <div className="flex justify-center p-4"><Spinner /></div>
+        ) : sessions.length === 0 ? (
+          <p className="p-4 text-center text-xs text-ioc-dim">Không có phiên hoạt động nào khác.</p>
+        ) : (
+          <div className="max-h-72 overflow-auto">
+            <table className="w-full min-w-[56rem] text-xs">
+              <thead className="sticky top-0 bg-ioc-panel">
+                <tr className="border-b border-ioc-line">
+                  <th className="ioc-th">Tài khoản</th>
+                  <th className="ioc-th">Địa chỉ IP</th>
+                  <th className="ioc-th">Thiết bị / Dấu vân tay</th>
+                  <th className="ioc-th">Hoạt động cuối</th>
+                  <th className="ioc-th text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((s) => (
+                  <tr key={s.id} className="border-b border-ioc-line/60 hover:bg-ioc-raised/50">
+                    <td className="px-3 py-2">
+                      <span className="font-semibold text-ioc-text">{s.userName ?? s.userId}</span>
+                      <span className="mono ml-1.5 text-[10px] text-ioc-cyan">{s.role ?? 'citizen'}</span>
+                      {s.isCurrent && <span className="mono ml-1.5 rounded border border-emerald-400/50 bg-emerald-500/15 px-1 text-[10px] text-ioc-green">HIỆN TẠI</span>}
+                    </td>
+                    <td className="mono px-3 py-2 text-ioc-dim">{s.ip}</td>
+                    <td className="max-w-[20rem] px-3 py-2 text-[11px] text-ioc-dim">
+                      <span className="block truncate">{s.userAgent || '—'}</span>
+                      <span className="mono text-[10px]">FP: {s.deviceFingerprint.slice(0, 14)}</span>
+                    </td>
+                    <td className="mono px-3 py-2 text-ioc-dim">{new Date(s.lastActiveAt).toLocaleString('vi-VN')}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        type="button"
+                        className="ioc-btn ioc-btn-red !min-h-7 !px-2 !text-xs"
+                        disabled={busyId !== null}
+                        onClick={() => void revokeSession(s.id)}
+                      >
+                        <LogOut className="h-3.5 w-3.5" aria-hidden /> Thu hồi
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* ── 3. Cấu hình Ngưỡng Kiểm định Hình ảnh AI ── */}
       {cfgDraft && (
         <section className="ioc-panel p-3.5" aria-label="Cấu hình kiểm định hình ảnh AI">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -548,7 +805,7 @@ export function SystemAdminView() {
         </section>
       )}
 
-      {/* ── 3. Bảo trì Cơ sở Dữ liệu Vận hành ── */}
+      {/* ── 4. Bảo trì Cơ sở Dữ liệu Vận hành ── */}
       <section className="ioc-panel flex flex-wrap items-center justify-between gap-3 p-3.5" aria-label="Bảo trì cơ sở dữ liệu">
         <div className="min-w-0 flex-1">
           <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ioc-cyan">
@@ -568,6 +825,55 @@ export function SystemAdminView() {
           {purging ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" aria-hidden />} Dọn dẹp hồ sơ khởi tạo
         </button>
       </section>
+
+      {/* ── Modal Lịch sử Vi phạm & Gắn cờ Tín nhiệm ── */}
+      {violationTarget && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Lịch sử vi phạm tài khoản">
+          <div className="ioc-panel w-full max-w-lg space-y-3 p-4">
+            <div className="flex items-center justify-between border-b border-ioc-line pb-2">
+              <h3 className="flex items-center gap-1.5 text-sm font-bold text-ioc-cyan">
+                <AlertTriangle className="h-4 w-4 text-ioc-amber" aria-hidden /> Tín nhiệm & Vi phạm: {violationTarget.name}
+              </h3>
+              <button type="button" className="ioc-btn !min-h-7 !px-2" onClick={() => setViolationTarget(null)}><X className="h-4 w-4" /></button>
+            </div>
+            <div className="max-h-52 space-y-1.5 overflow-auto rounded border border-ioc-line/80 bg-ioc-raised/30 p-2.5">
+              {loadingViolations ? (
+                <div className="flex justify-center p-4"><Spinner /></div>
+              ) : violations.length === 0 ? (
+                <p className="text-center text-xs text-ioc-dim">Chưa có vi phạm nào được ghi nhận cho tài khoản này.</p>
+              ) : (
+                violations.map((v) => (
+                  <div key={v.id} className="rounded border border-ioc-line/60 bg-ioc-panel px-2.5 py-1.5 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="mono font-bold text-ioc-amber">{v.action}</span>
+                      <span className="mono text-[10px] text-ioc-dim">{new Date(v.at).toLocaleString('vi-VN')}</span>
+                    </div>
+                    <p className="mt-0.5 text-ioc-dim">{v.detail}</p>
+                  </div>
+                ))
+              )}
+            </div>
+            <form onSubmit={(e) => void submitTrustFlag(e)} className="space-y-2 border-t border-ioc-line pt-2">
+              <label className="block text-xs text-ioc-dim">Điều chỉnh mức độ tin cậy (Trust Level)</label>
+              <select className="ioc-field w-full" value={flagLevel} onChange={(e) => setFlagLevel(e.target.value as TrustLevel)}>
+                {TRUST_LEVELS.map((tl) => <option key={tl.value} value={tl.value}>{tl.label}</option>)}
+              </select>
+              <input
+                className="ioc-field w-full"
+                placeholder="Lý do gắn cờ / điều chỉnh mức tín nhiệm…"
+                value={flagReason}
+                onChange={(e) => setFlagReason(e.target.value)}
+              />
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" className="ioc-btn" onClick={() => setViolationTarget(null)}>Đóng</button>
+                <button type="submit" className="ioc-btn ioc-btn-cyan" disabled={busyId !== null}>
+                  <Save className="h-3.5 w-3.5" aria-hidden /> Cập nhật cờ
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal Tạo mới Tài khoản ── */}
       {createOpen && (
@@ -616,7 +922,7 @@ export function SystemAdminView() {
               <input type="email" className="ioc-field w-full" value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="canbo@dongnai.gov.vn" />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-ioc-dim">Mật khẩu (≥ 8 ký tự)</label>
+              <label className="mb-1 block text-xs text-ioc-dim">Mật khẩu (≥ 8 ký tự, gồm hoa/thường/số/ký tự đặc biệt)</label>
               <input
                 type="password"
                 className="ioc-field w-full"
@@ -711,6 +1017,16 @@ export function SystemAdminView() {
           </form>
         </div>
       )}
+
+      <ReauthModal
+        open={pendingReauth !== null}
+        onClose={() => setPendingReauth(null)}
+        onVerified={async () => {
+          const fn = pendingReauth;
+          setPendingReauth(null);
+          if (fn) await fn();
+        }}
+      />
     </div>
   );
 }

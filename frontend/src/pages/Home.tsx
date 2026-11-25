@@ -12,17 +12,20 @@ import {
   MapPin,
   Mic,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { lazy, Suspense, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import heroPhoto from '../assets/dongnai-hero.jpg';
 import { ReportCard } from '../components/ReportCard';
-import { ReportDetail } from '../components/ReportDetail';
-import { openAssistant } from '../components/ChatWidget';
 import { EmptyState, SkeletonBlock, SkeletonList } from '../components/ui';
 import { useScopedReports, useStats } from '../db/hooks';
 import { useI18n } from '../i18n';
+import { onIntentPrefetch } from '../lib/prefetch';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
-import { useSettings } from '../state/settings';
+import { openAssistant, useSettings } from '../state/settings';
+
+const ReportDetail = lazy(() =>
+  import('../components/ReportDetail').then((m) => ({ default: m.ReportDetail })),
+);
 
 function Kpi({
   label,
@@ -98,8 +101,19 @@ export default function HomePage() {
   const reports = useScopedReports(settings.scope);
   const [openId, setOpenId] = useState<string | null>(null);
   const scopeName = settings.scope === 'city' ? t('scope.cityName') : (WARD_BY_CODE[settings.scope.replace('ward:', '')]?.name ?? settings.scope);
-  const recent = reports?.filter((r) => r.status !== 'quarantined' && r.status !== 'rejected').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
-  const emergency = reports?.filter((r) => r.emergencyLevel === 1 && r.status !== 'resolved' && r.status !== 'quarantined').length ?? 0;
+  const recent = useMemo(
+    () =>
+      reports
+        ?.filter((r) => r.status !== 'quarantined' && r.status !== 'rejected')
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 5),
+    [reports],
+  );
+  const emergency = useMemo(
+    () =>
+      reports?.filter((r) => r.emergencyLevel === 1 && r.status !== 'resolved' && r.status !== 'quarantined').length ?? 0,
+    [reports],
+  );
 
   const kpis = (
     <section aria-label={t('home.kpiTitle')}>
@@ -178,6 +192,9 @@ export default function HomePage() {
         <img
           src={heroPhoto}
           alt={t('home.heroImgAlt')}
+          width={1200}
+          height={675}
+          fetchPriority="high"
           decoding="async"
           className="absolute inset-0 h-full w-full object-cover object-[68%_42%] transition-transform duration-700 ease-out group-hover:scale-[1.02]"
         />
@@ -205,6 +222,8 @@ export default function HomePage() {
             <Link
               to="/report"
               data-tour="report"
+              onMouseEnter={() => onIntentPrefetch('/report')}
+              onFocus={() => onIntentPrefetch('/report')}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2.5 rounded-2xl bg-white px-6 py-3 text-sm font-extrabold text-slate-900 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.45)] transition-all hover:-translate-y-0.5 hover:bg-slate-50 active:scale-[0.98] sm:w-auto sm:text-base"
             >
               <Camera className="h-5 w-5 text-brand" aria-hidden />
@@ -212,6 +231,8 @@ export default function HomePage() {
             </Link>
             <Link
               to="/map"
+              onMouseEnter={() => onIntentPrefetch('/map')}
+              onFocus={() => onIntentPrefetch('/map')}
               className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-slate-900/55 px-5 py-3 text-sm font-bold text-white backdrop-blur-md transition-all hover:-translate-y-0.5 hover:border-white/45 hover:bg-slate-900/75 active:scale-[0.98] sm:w-auto sm:text-base"
             >
               <MapIcon className="h-5 w-5 text-sky-300" aria-hidden />
@@ -303,7 +324,11 @@ export default function HomePage() {
           <div className="space-y-3">{recent.map((r) => <ReportCard key={r.id} r={r} onOpen={(x) => setOpenId(x.id)} />)}</div>
         )}
       </section>
-      <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+      {openId && (
+        <Suspense fallback={null}>
+          <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -245,7 +245,9 @@ export async function seedIfEmpty(
   }
 
   const migratedRoles = await migrateLegacyRoles(repos).catch(() => 0);
-  const includeFixtures = options?.includeFixtures ?? env.autoSeedDemoReports;
+  // Zero Mock Data: tuyệt đối chỉ cho phép nạp fixture trong môi trường test (NODE_ENV=test / VITEST)
+  const isTestEnv = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+  const includeFixtures = isTestEnv && Boolean(options?.includeFixtures);
 
   if (!includeFixtures) {
     const initialAdmin = buildInitialAdminUser();
@@ -337,6 +339,16 @@ const DEMO_SEED_USER_IDS = new Set([
   'u_seed_vol2',
   'u_seed_vol3',
   'u_seed_vol4',
+  'u_staff_tb1',
+  'u_staff_lth1',
+  'u_staff_lkh1',
+  'u_staff_tla1',
+  'u_staff_bp1',
+  'u_staff_city1',
+  'u_rescue_01',
+  'u_rescue_lt01',
+  'u_rescue_bp01',
+  'u_rescue_cd01',
   userIdFromPhone('0900000001'),
   userIdFromPhone('0900000002'),
 ]);

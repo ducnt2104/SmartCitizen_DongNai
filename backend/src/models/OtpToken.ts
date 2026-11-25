@@ -20,6 +20,8 @@ export interface IOtpToken {
   purpose: OtpTokenPurpose;
   /** Bản băm SHA-256 (64 ký tự hex) của mã OTP 6 chữ số */
   otpHash: string;
+  /** Salt ngẫu nhiên 128-bit (32 ký tự hex) gắn riêng cho mỗi thử thách OTP */
+  otpSalt?: string;
   /** Alias tương thích ngược */
   codeHash?: string;
   /** Số lần nhập sai liên tiếp trên mã OTP này (quá 5 lần hủy ngay) */
@@ -69,6 +71,11 @@ const otpTokenSchema = new Schema<IOtpToken>(
       type: String,
       required: true,
       maxlength: 128,
+    },
+    otpSalt: {
+      type: String,
+      trim: true,
+      maxlength: 64,
     },
     codeHash: {
       type: String,

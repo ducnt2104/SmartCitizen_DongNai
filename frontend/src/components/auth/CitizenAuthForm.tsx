@@ -38,9 +38,6 @@ interface OtpSendResponse {
   expiresInSec: number;
   provider: string;
   clientSideFirebase?: boolean;
-  fallbackChannel?: 'telegram' | 'email';
-  fallbackTargetMasked?: string;
-  devOtpPreview?: string;
 }
 
 interface OtpStatusResponse {
@@ -53,7 +50,6 @@ interface OtpStatusResponse {
   smsPhoneAuthReady?: boolean;
   firebaseClientReady?: boolean;
   firebaseClientConfig?: FirebaseClientEnv | null;
-  telegramFallbackReady?: boolean;
   emailFallbackAvailable?: boolean;
 }
 
@@ -99,7 +95,6 @@ export function CitizenAuthForm({
   const [stage, setStage] = useState<'input' | 'code'>('input');
   const [targetMasked, setTargetMasked] = useState('');
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
-  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
@@ -114,13 +109,6 @@ export function CitizenAuthForm({
         if (!active) return;
         setRuntimeFirebaseClientConfig(res.firebaseClientConfig);
         setOtpStatus(res);
-        const smsReady =
-          res.smsConfigured ||
-          Boolean(res.telegramFallbackReady) ||
-          isFirebasePhoneClientConfigured();
-        if (!smsReady && res.emailConfigured) {
-          setChannelTab('email');
-        }
       })
       .catch(() => {
         /* giữ mặc định khi ngoại tuyến */
@@ -148,7 +136,6 @@ export function CitizenAuthForm({
     setMode(nextMode);
     setStage('input');
     setCode('');
-    setFallbackNotice(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
   };
@@ -157,7 +144,6 @@ export function CitizenAuthForm({
     setChannelTab(nextTab);
     setStage('input');
     setCode('');
-    setFallbackNotice(null);
     firebaseConfirmationRef.current = null;
     setErr(null);
   };
@@ -175,7 +161,6 @@ export function CitizenAuthForm({
   const sendOtp = async (purpose: 'login' | 'reset_password'): Promise<void> => {
     setBusy(true);
     setErr(null);
-    setFallbackNotice(null);
     firebaseConfirmationRef.current = null;
 
     try {
@@ -200,7 +185,7 @@ export function CitizenAuthForm({
           return;
         }
 
-        // Kênh 2/3/4: Cổng SMS trực tiếp hoặc kênh chuyển tiếp dự phòng
+        // Kênh 2 & 3: SpeedSMS / eSMS / Twilio / Vonage hoặc Webhook SMS Gateway (TextBee)
         const r = await api<OtpSendResponse>('/api/auth/otp/send', {
           body: { channel: 'phone', phone: phoneCheck.e164, purpose },
         });
@@ -208,7 +193,7 @@ export function CitizenAuthForm({
         if (r.clientSideFirebase && purpose === 'login') {
           if (!isFirebasePhoneClientConfigured()) {
             throw new Error(
-              'Dịch vụ xác thực SMS qua Firebase chưa hoàn tất cấu hình trình duyệt. Vui lòng chuyển sang nhận mã qua Email.',
+              'Dịch vụ xác thực SMS qua Firebase chưa hoàn tất cấu hình trình duyệt. Vui lòng chuyển sang nhận mã qua Email hoặc thử lại sau.',
             );
           }
           const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
@@ -216,21 +201,14 @@ export function CitizenAuthForm({
         }
 
         setActiveProvider(r.provider);
-        setTargetMasked(r.fallbackTargetMasked ?? r.targetMasked);
+        setTargetMasked(r.targetMasked);
         setCooldown(r.resendInSec || 60);
-        if (r.fallbackChannel === 'email') {
-          setFallbackNotice(
-            `Kênh SMS đang tạm gián đoạn — hệ thống đã gửi mã OTP tới Email liên kết ${r.fallbackTargetMasked ?? ''}.`.trim(),
-          );
-        } else if (r.fallbackChannel === 'telegram') {
-          setFallbackNotice('Mã xác thực OTP đã được chuyển qua kênh thông báo dự phòng.');
-        }
         setStage('code');
-        toast('info', t('auth.otpSentToast', { target: r.fallbackTargetMasked ?? r.targetMasked }));
+        toast('info', t('auth.otpSentToast', { target: r.targetMasked }));
         return;
       }
 
-      // Kênh Email (tương thích ngược 100% với luồng Email hiện tại)
+      // Kênh Email
       const cleanEmail = emailInput.trim().toLowerCase();
       const r = await api<OtpSendResponse>('/api/auth/otp/send', {
         body: { channel: 'email', email: cleanEmail, identifier: cleanEmail, purpose },
@@ -247,8 +225,9 @@ export function CitizenAuthForm({
     }
   };
 
-  const verifyOtpLogin = async (): Promise<void> => {
-    if (code.length !== 6) return;
+  const verifyOtpLogin = async (overrideCode?: string): Promise<void> => {
+    const otpCode = (overrideCode ?? code).replace(/\D/g, '').trim();
+    if (otpCode.length !== 6 || busy) return;
     setBusy(true);
     setErr(null);
 
@@ -261,7 +240,7 @@ export function CitizenAuthForm({
       if (channelTab === 'phone' && firebaseConfirmationRef.current) {
         const firebaseIdToken = await confirmFirebaseOtpAndGetIdToken(
           firebaseConfirmationRef.current,
-          code,
+          otpCode,
         );
         const s = await api<AuthSession>('/api/auth/otp/verify-firebase', {
           body: { firebaseIdToken, ...profileExtras },
@@ -277,14 +256,14 @@ export function CitizenAuthForm({
               channel: 'phone',
               phone: phoneCheck.e164 ?? phoneInput.trim(),
               identifier: phoneCheck.e164 ?? phoneInput.trim(),
-              code,
+              code: otpCode,
               ...profileExtras,
             }
           : {
               channel: 'email',
               email: emailInput.trim().toLowerCase(),
               identifier: emailInput.trim().toLowerCase(),
-              code,
+              code: otpCode,
               ...profileExtras,
             };
 
@@ -337,12 +316,6 @@ export function CitizenAuthForm({
 
   const emailUnconfigured =
     channelTab === 'email' && otpStatus !== null && !otpStatus.emailConfigured;
-  const smsUnconfigured =
-    channelTab === 'phone' &&
-    otpStatus !== null &&
-    !otpStatus.smsConfigured &&
-    !otpStatus.telegramFallbackReady &&
-    !shouldUseFirebaseClientFlow;
 
   const renderChannelSwitcher = (): JSX.Element => (
     <div
@@ -514,28 +487,6 @@ export function CitizenAuthForm({
             </div>
           )}
 
-          {smsUnconfigured && (
-            <div role="status" className="rounded-xl border border-warn/40 bg-warn-soft p-3 text-xs text-warn">
-              <p className="flex items-center gap-1.5 font-bold">
-                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
-                Kênh tin nhắn SMS hiện đang tạm bảo trì
-              </p>
-              <p className="mt-1 leading-relaxed">
-                Bạn có thể chuyển sang nhận mã OTP qua Email hoặc đăng nhập trực tiếp bằng mật khẩu đã thiết lập.
-              </p>
-              {otpStatus?.emailConfigured && (
-                <button
-                  type="button"
-                  onClick={() => switchChannelTab('email')}
-                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-bold text-white"
-                >
-                  <Mail className="h-3.5 w-3.5" aria-hidden />
-                  Nhận mã OTP qua Email
-                </button>
-              )}
-            </div>
-          )}
-
           {channelTab === 'phone' ? (
             <div>
               <label htmlFor="vn-phone-otp" className="label">
@@ -586,14 +537,8 @@ export function CitizenAuthForm({
           className="space-y-3.5"
         >
           <div className="rounded-xl bg-ok-soft px-3 py-2.5 text-xs font-semibold text-ok">
-            {fallbackNotice ? (
-              fallbackNotice
-            ) : (
-              <>
-                Đã gửi mã OTP 6 số tới <span className="font-mono font-bold">{targetMasked}</span> (hiệu lực 5 phút).
-                {activeProvider === 'firebase' && ' Xác thực bảo mật bởi Google Firebase.'}
-              </>
-            )}
+            Đã gửi mã OTP 6 số tới <span className="font-mono font-bold">{targetMasked}</span> (hiệu lực 5 phút).
+            {activeProvider === 'firebase' && ' Xác thực bảo mật bởi Google Firebase.'}
           </div>
 
           <div className="space-y-2">
@@ -601,7 +546,13 @@ export function CitizenAuthForm({
               <ShieldCheck className="mr-1 inline h-4 w-4" aria-hidden />
               {t('auth.otpLabel')}
             </label>
-            <OtpSixDigitInput value={code} onChange={setCode} disabled={busy} autoFocus />
+            <OtpSixDigitInput
+              value={code}
+              onChange={setCode}
+              onComplete={(completed) => void verifyOtpLogin(completed)}
+              disabled={busy}
+              autoFocus
+            />
           </div>
 
           {!compact && (
@@ -748,7 +699,19 @@ export function CitizenAuthForm({
           </div>
           <div className="space-y-2">
             <label className="label">{t('auth.otpLabel')}</label>
-            <OtpSixDigitInput value={code} onChange={setCode} disabled={busy} autoFocus />
+            <OtpSixDigitInput
+              value={code}
+              onChange={setCode}
+              onComplete={() => {
+                if (password.length >= 8) {
+                  void submitPasswordReset();
+                } else {
+                  document.getElementById('rst-pw')?.focus();
+                }
+              }}
+              disabled={busy}
+              autoFocus
+            />
           </div>
           <div>
             <label htmlFor="rst-pw" className="label">

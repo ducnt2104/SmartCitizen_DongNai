@@ -58,6 +58,16 @@ export function createServices(repos: Repositories): Services {
   const phoneOtp = new PhoneOtpService({ otpRepo: repos.otps });
   const firebaseVerifier = new FirebasePhoneVerifier();
   const geo = new GeoService();
+  const auth = new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit, phoneOtp);
+  const staff = new StaffService(
+    repos,
+    gemini,
+    trust,
+    audit,
+    cache,
+    mediaService,
+    (userId, sessionId) => auth.invalidateSessionCache(userId, sessionId),
+  );
   return {
     repos,
     audit,
@@ -73,9 +83,9 @@ export function createServices(repos: Repositories): Services {
     cvEngine,
     rag,
     gemini,
-    auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit, phoneOtp),
+    auth,
     reports: new ReportService(repos, gemini, trust, audit, cvEngine, cache, mediaService, stage2),
-    staff: new StaffService(repos, gemini, trust, audit, cache, mediaService),
+    staff,
     chat: new ChatService(repos, rag),
   };
 }

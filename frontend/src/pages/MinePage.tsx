@@ -1,10 +1,14 @@
 import { Bell, Search } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ClientReport } from '@shared/types';
 import { ReportCard } from '../components/ReportCard';
-import { ReportDetail } from '../components/ReportDetail';
+import { VirtualList } from '../components/VirtualList';
 import { EmptyState, ErrorState, SkeletonList, Spinner } from '../components/ui';
+
+const ReportDetail = lazy(() =>
+  import('../components/ReportDetail').then((m) => ({ default: m.ReportDetail })),
+);
 import { useMyReports, useOnline } from '../db/hooks';
 import { db } from '../db/localDb';
 import { useI18n } from '../i18n';
@@ -112,10 +116,21 @@ export default function MinePage() {
             <EmptyState title={t('empty.mine.title')} text={t('empty.mine.text')} action={<Link to="/report" className="btn btn-primary">{t('empty.reports.cta')}</Link>} />
           </div>
         ) : (
-          <div className="space-y-3">{mine.map((r) => <ReportCard key={r.id} r={r} onOpen={(x) => setOpenId(x.id)} />)}</div>
+          <VirtualList
+            items={mine}
+            estimateRowHeight={116}
+            maxHeightPx={760}
+            virtualizeAbove={20}
+            getKey={(r) => r.id}
+            renderItem={(r) => <ReportCard r={r} onOpen={(x) => setOpenId(x.id)} />}
+          />
         )}
       </section>
-      <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+      {openId && (
+        <Suspense fallback={null}>
+          <ReportDetail id={openId} onClose={() => setOpenId(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

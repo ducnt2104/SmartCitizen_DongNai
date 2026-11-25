@@ -35,6 +35,10 @@ export function buildRouter(
   root.get('/healthz', h(meta.liveness));
 
   const api = Router();
+  api.get('/health/ping', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ ok: true, ts: Date.now() });
+  });
   api.get('/health', h(meta.health));
   api.get('/media/:id/thumb', h(r.media));
   api.get('/media/:id', h(r.media));
@@ -43,7 +47,7 @@ export function buildRouter(
   api.get('/stats', h(r.stats));
   api.get('/incidents/map', auth.optional, h(r.summary));
 
-  // Xác thực thật & Quản lý phiên (Citizen Email + Phone SMS +84 OTP + Firebase + Password + Staff + Rescue Team JWT)
+  // Xác thực thật & Quản lý phiên (Strict Single-Session + Re-auth + Rotation + SSE Live Kick)
   api.use('/auth', buildAuthRouter(s));
   api.get('/auth/otp/status', h(a.otpStatus));
   api.post('/auth/otp/request', limits.otp, validateBody(schemas.otpRequest), h(a.otpRequest));
@@ -53,11 +57,17 @@ export function buildRouter(
   api.post('/auth/staff/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
   api.post('/auth/admin/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
   api.post('/auth/rescue/login', limits.login, validateBody(schemas.rescueLogin), h(a.rescueLogin));
+  api.post('/auth/reauth', auth.required, limits.login, validateBody(schemas.reauth), h(a.reauth));
+  api.post('/auth/change-password', auth.required, limits.login, validateBody(schemas.changePassword), h(a.changePassword));
+  api.post('/auth/change-email', auth.required, limits.login, validateBody(schemas.changeEmail), h(a.changeEmail));
+  api.post('/auth/change-phone', auth.required, limits.login, validateBody(schemas.changePhone), h(a.changePhone));
+  api.get('/auth/session-events', auth.required, h(a.sessionEvents));
   api.post('/auth/refresh', limits.login, h(a.refresh));
-  api.post('/auth/logout', h(a.logout));
+  api.post('/auth/logout', auth.optional, h(a.logout));
   api.post('/auth/logout-all', auth.required, h(a.logoutAll));
   api.post('/auth/volunteer/register', auth.required, validateBody(schemas.volunteerRegister), h(a.registerVolunteer));
   api.get('/me', auth.required, h(a.me));
+  api.get('/me/sessions', auth.required, h(a.mySessions));
   api.patch('/me/profile', auth.required, validateBody(schemas.updateProfile), h(a.updateProfile));
   api.post('/me/notifications/read', auth.required, h(a.readNotifications));
 
@@ -107,21 +117,30 @@ export function buildRouter(
   api.post('/admin/reports/:id/resolve', staff, parseMultipartOrJson, validateBody(schemas.resolve), h(ad.resolve));
   api.get('/admin/audit', staff, h(ad.audit));
   api.get('/admin/audit-logs', admins, h(ad.audit));
+  api.get('/admin/audit/export', admins, h(ad.auditExport));
   api.get('/admin/audit/verify', admins, h(ad.auditVerify));
+  api.get('/admin/moderation-queue', staff, h(ad.moderationQueue));
+  api.post('/admin/moderation-queue/:id/decide', staff, validateBody(schemas.adminModerationDecision), h(ad.moderationDecide));
   api.get('/admin/staff', admins, h(ad.staff));
   api.post('/admin/staff', admins, validateBody(schemas.createStaff), h(ad.createStaff));
-  api.patch('/admin/staff/:id/revoke', admins, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
+  api.patch('/admin/staff/:id/revoke', admins, auth.requireReauth, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
 
-  // Full RBAC User Management (4 Roles) & Dynamic Local AI Config
+  // Admin Command Center: Sessions, Trust Flagging, Violations, RBAC Users & AI Config
+  api.get('/admin/sessions', admins, h(ad.listSessions));
+  api.post('/admin/sessions/:sessionId/revoke', admins, h(ad.revokeSession));
+  api.post('/admin/sessions/force-logout-all', admins, auth.requireReauth, h(ad.forceLogoutAll));
+  api.post('/admin/users/:id/force-logout', admins, h(ad.forceLogoutUser));
+  api.get('/admin/users/:id/violations', admins, h(ad.userViolations));
+  api.patch('/admin/users/:id/trust-flag', admins, validateBody(schemas.adminTrustFlag), h(ad.flagUserTrust));
   api.get('/admin/users', admins, h(ad.listUsers));
   api.post('/admin/users', admins, validateBody(schemas.adminCreateUser), h(ad.createUser));
-  api.patch('/admin/users/:id', admins, validateBody(schemas.adminUpdateUser), h(ad.updateUser));
-  api.post('/admin/users/:id/reset-password', admins, validateBody(schemas.adminResetPassword), h(ad.resetUserPassword));
-  api.delete('/admin/users/:id', admins, h(ad.deleteUser));
+  api.patch('/admin/users/:id', admins, auth.requireReauth, validateBody(schemas.adminUpdateUser), h(ad.updateUser));
+  api.post('/admin/users/:id/reset-password', admins, auth.requireReauth, validateBody(schemas.adminResetPassword), h(ad.resetUserPassword));
+  api.delete('/admin/users/:id', admins, auth.requireReauth, h(ad.deleteUser));
   api.get('/admin/ai-config', admins, h(ad.getAiConfig));
-  api.patch('/admin/ai-config', admins, validateBody(schemas.adminUpdateAiConfig), h(ad.updateAiConfig));
-  api.post('/admin/purge-demo', admins, h(ad.purgeDemo));
-  api.post('/admin/maintenance/purge-seed', admins, h(ad.purgeDemo));
+  api.patch('/admin/ai-config', admins, auth.requireReauth, validateBody(schemas.adminUpdateAiConfig), h(ad.updateAiConfig));
+  api.post('/admin/purge-demo', admins, auth.requireReauth, h(ad.purgeDemo));
+  api.post('/admin/maintenance/purge-seed', admins, auth.requireReauth, h(ad.purgeDemo));
   api.use('/admin/api-keys', buildApiKeysRouter(s));
   api.get('/admin/export', staff, h(ad.export));
 

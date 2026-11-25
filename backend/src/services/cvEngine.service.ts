@@ -14,6 +14,7 @@ import type { Category, DynamicAiConfig } from '../shared/types';
 import { env } from '../config/env';
 import type { ImageFingerprintRecord, Repositories } from '../repositories/types';
 import { newId } from '../utils/crypto';
+import { extractServerPhotoHashes, matchSubImageFingerprints } from './ai/forensics.service';
 import {
   runSharpAuthenticityCheck,
   runSharpBeforeAfterVerify,
@@ -136,6 +137,7 @@ export class CvEngineService {
 
   setBaseUrl(url: string): void {
     this.baseUrl = url.replace(/\/+$/, '');
+    this.rustOfflineUntil = 0;
   }
 
   async getConfig(): Promise<DynamicAiConfig> {
@@ -350,7 +352,39 @@ export class CvEngineService {
     if (isSyntheticTinyFixture(params.imageBase64)) return null;
     const cfg = await this.getConfig();
     const since30d = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-    const dbCandidates = await this.repos.fingerprints.findNearbyRecent(params.lat, params.lng, 200, since30d);
+    const [dbCandidates, wideCandidates, multiHashes] = await Promise.all([
+      this.repos.fingerprints.findNearbyRecent(params.lat, params.lng, 200, since30d),
+      this.repos.fingerprints.findNearbyRecent(params.lat, params.lng, 60_000, since30d),
+      extractServerPhotoHashes(Buffer.from(params.imageBase64, 'base64')).catch(() => null),
+    ]);
+
+    if (multiHashes && wideCandidates.length > 0) {
+      const subHit = matchSubImageFingerprints(
+        multiHashes,
+        wideCandidates.filter((c) => c.reportId !== params.reportId),
+      );
+      if (subHit) {
+        return {
+          is_duplicate: true,
+          match_type: subHit.matchType,
+          matched_incident_id: subHit.reportId,
+          similarity_score: Math.round(subHit.histogramSimilarity * 1000) / 10,
+          inlier_count: 24,
+          min_hamming: subHit.distance,
+          grid_matches: 1,
+          fingerprint: {
+            dhash_hex: multiHashes.dHash,
+            phash_hex: multiHashes.pHash,
+            center_dhash_hex: multiHashes.subGrid2x2[0] ?? multiHashes.dHash,
+            grid_dhashes_hex: multiHashes.gridHashes,
+            keypoint_count: 24,
+            descriptors_base64: '',
+          },
+          latency_ms: 12,
+          engine: 'fallback',
+        };
+      }
+    }
 
     try {
       if (Date.now() < this.rustOfflineUntil) throw new Error('rust_offline_cached');
@@ -393,9 +427,12 @@ export class CvEngineService {
           wardCode: params.wardCode,
           category: params.category,
           dHash: out.fingerprint.dhash_hex || params.dHash,
-          pHash: out.fingerprint.phash_hex,
+          flippedDHash: multiHashes?.flippedDHash,
+          pHash: out.fingerprint.phash_hex || multiHashes?.pHash || '',
           centerHash: out.fingerprint.center_dhash_hex,
           gridHashes: out.fingerprint.grid_dhashes_hex,
+          subGrid2x2: multiHashes?.subGrid2x2,
+          colorHistogram: multiHashes?.colorHistogram,
           keypointCount: out.fingerprint.keypoint_count,
           descriptorsBase64: out.fingerprint.descriptors_base64,
           lat: params.lat,
@@ -447,9 +484,12 @@ export class CvEngineService {
               wardCode: params.wardCode,
               category: params.category,
               dHash: localDup.fingerprint.dhash_hex || params.dHash,
-              pHash: localDup.fingerprint.phash_hex,
+              flippedDHash: multiHashes?.flippedDHash,
+              pHash: localDup.fingerprint.phash_hex || multiHashes?.pHash || '',
               centerHash: localDup.fingerprint.center_dhash_hex,
               gridHashes: localDup.fingerprint.grid_dhashes_hex,
+              subGrid2x2: multiHashes?.subGrid2x2,
+              colorHistogram: multiHashes?.colorHistogram,
               keypointCount: localDup.fingerprint.keypoint_count,
               descriptorsBase64: localDup.fingerprint.descriptors_base64,
               lat: params.lat,

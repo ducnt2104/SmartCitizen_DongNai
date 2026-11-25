@@ -3,11 +3,11 @@ import { HttpError } from '../../utils/errors';
 export const SMS_PROVIDER_MODES = [
   'auto',
   'firebase',
-  'android_gateway',
-  'esms',
   'speedsms',
+  'esms',
   'twilio',
-  'demo',
+  'vonage',
+  'android_gateway',
 ] as const;
 
 export type SmsProviderMode = (typeof SMS_PROVIDER_MODES)[number];
@@ -31,10 +31,6 @@ export interface SmsOtpSendResult {
   /** Cờ báo cho Frontend kích hoạt luồng `signInWithPhoneNumber` của Firebase Auth */
   clientSideFirebase?: boolean;
   messageId?: string;
-  /** Kênh dự phòng thực tế được kích hoạt khi chưa cấu hình cổng SMS nhà mạng */
-  fallbackChannel?: 'telegram' | 'email';
-  /** CHỈ xuất hiện khi đang ở chế độ thử nghiệm VÀ `ALLOW_DEMO_OTP=true` */
-  devOtpPreview?: string;
 }
 
 export interface RuntimeFirebaseClientConfig {
@@ -60,10 +56,6 @@ function readEnv(envSource: NodeJS.ProcessEnv, key: string): string {
 
 function isTruthyEnv(envSource: NodeJS.ProcessEnv, key: string): boolean {
   return ['1', 'true', 'yes'].includes(readEnv(envSource, key).toLowerCase());
-}
-
-export function hasTelegramOtpFallback(envSource: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(readEnv(envSource, 'TELEGRAM_BOT_TOKEN') && readEnv(envSource, 'TELEGRAM_CHAT_ID'));
 }
 
 function buildSmsText(otp: string, ttlMinutes: number): string {
@@ -100,8 +92,8 @@ async function fetchWithTimeout(
 
 /**
  * 1. Strategy `firebase`:
- * Google Firebase Phone Auth gửi SMS thật trực tiếp từ hạ tầng Google tới điện thoại người dân
- * thông qua `RecaptchaVerifier` ẩn + `signInWithPhoneNumber`, sau đó server xác thực `firebaseIdToken`.
+ * Google Firebase Phone Auth gửi SMS trực tiếp từ hạ tầng Google tới điện thoại người dân
+ * thông qua `RecaptchaVerifier` ẩn + `signInWithPhoneNumber`, sau đó server xác thực `idToken` qua Firebase Admin SDK.
  */
 export class FirebaseSmsOtpProvider implements SmsOtpProvider {
   readonly name = 'firebase' as const;
@@ -118,6 +110,10 @@ export class FirebaseSmsOtpProvider implements SmsOtpProvider {
     return { apiKey, authDomain, projectId, appId };
   }
 
+  isAutoFlowReady(envSource: NodeJS.ProcessEnv = process.env): boolean {
+    return this.getClientConfig(envSource) !== null;
+  }
+
   isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
     return Boolean(
       readEnv(envSource, 'FIREBASE_PROJECT_ID') ||
@@ -130,8 +126,8 @@ export class FirebaseSmsOtpProvider implements SmsOtpProvider {
     if (!this.isConfigured(envSource)) {
       throw new HttpError(
         503,
-        'Kênh xác thực Firebase Phone Auth chưa được cấu hình đầy đủ.',
-        'sms_provider_not_configured',
+        'Kênh xác thực Firebase Phone Auth chưa được cấu hình đầy đủ (cần FIREBASE_PROJECT_ID và FIREBASE_API_KEY).',
+        'SMS_PROVIDER_NOT_CONFIGURED',
       );
     }
     return {
@@ -143,115 +139,70 @@ export class FirebaseSmsOtpProvider implements SmsOtpProvider {
 }
 
 /**
- * 2. Strategy `android_gateway`:
- * Bắn tin nhắn SMS thật trực tiếp từ SIM vật lý trên máy Android của đội thi (TextBee.dev hoặc SMS Gateway Webhook tùy chỉnh)
- * tới máy Ban Giám Khảo chỉ trong ~2 giây mà không cần chờ duyệt Brandname nhà mạng.
+ * 2A. Strategy `speedsms` (SpeedSMS.vn REST API — timeout 8 giây).
  */
-export class AndroidGatewaySmsOtpProvider implements SmsOtpProvider {
-  readonly name = 'android_gateway' as const;
+export class SpeedSmsOtpProvider implements SmsOtpProvider {
+  readonly name = 'speedsms' as const;
 
   constructor(private readonly fetchImpl: FetchLike = fetch) {}
 
-  private resolveEndpoint(envSource: NodeJS.ProcessEnv): { url: string; apiKey: string; isTextBee: boolean } | null {
-    const customUrl = readEnv(envSource, 'SMS_GATEWAY_URL');
-    const textbeeDeviceId = readEnv(envSource, 'TEXTBEE_DEVICE_ID');
-    const textbeeKey = readEnv(envSource, 'TEXTBEE_API_KEY');
-    const genericKey = readEnv(envSource, 'SMS_GATEWAY_API_KEY') || textbeeKey;
-
-    if (customUrl) {
-      return {
-        url: customUrl,
-        apiKey: genericKey,
-        isTextBee: /textbee\.dev/i.test(customUrl),
-      };
-    }
-    if (textbeeDeviceId && textbeeKey) {
-      return {
-        url: `https://api.textbee.dev/api/v1/gateway/devices/${encodeURIComponent(textbeeDeviceId)}/send-sms`,
-        apiKey: textbeeKey,
-        isTextBee: true,
-      };
-    }
-    return null;
-  }
-
   isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
-    return this.resolveEndpoint(envSource) !== null;
+    return Boolean(readEnv(envSource, 'SPEEDSMS_ACCESS_TOKEN'));
   }
 
   async send(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
-    const cfg = this.resolveEndpoint(envSource);
-    if (!cfg) {
-      throw new HttpError(
-        503,
-        'Chưa cấu hình Android SMS Gateway (cần TEXTBEE_DEVICE_ID + TEXTBEE_API_KEY hoặc SMS_GATEWAY_URL).',
-        'sms_provider_not_configured',
-      );
+    const accessToken = readEnv(envSource, 'SPEEDSMS_ACCESS_TOKEN');
+    const sender = readEnv(envSource, 'SPEEDSMS_SENDER');
+    const smsType = Number(readEnv(envSource, 'SPEEDSMS_TYPE') || '2') || 2;
+
+    if (!accessToken) {
+      throw new HttpError(503, 'Chưa cấu hình SPEEDSMS_ACCESS_TOKEN.', 'SMS_PROVIDER_NOT_CONFIGURED');
     }
 
-    const message = buildSmsText(input.otp, input.ttlMinutes);
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (cfg.apiKey) {
-      headers['x-api-key'] = cfg.apiKey;
-      if (!cfg.isTextBee) {
-        headers.Authorization = `Bearer ${cfg.apiKey}`;
-      }
-    }
-
-    const bodyPayload = cfg.isTextBee
-      ? {
-          recipients: [input.phoneE164],
-          message,
-        }
-      : {
-          recipients: [input.phoneE164],
-          phone: input.phoneE164,
-          phoneLocal: input.phoneLocal,
-          message,
-          otp: input.otp,
-        };
-
-    const res = await fetchWithTimeout(this.fetchImpl, cfg.url, {
+    const basicAuth = Buffer.from(`${accessToken}:x`).toString('base64');
+    const res = await fetchWithTimeout(this.fetchImpl, 'https://api.speedsms.vn/index.php/sms/send', {
       method: 'POST',
-      headers,
-      body: JSON.stringify(bodyPayload),
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: [input.phoneLocal],
+        content: buildSmsText(input.otp, input.ttlMinutes),
+        sms_type: smsType,
+        ...(sender ? { sender } : {}),
+      }),
     });
 
     if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 180);
+      const detail = (await res.text().catch(() => '')).slice(0, 160);
+      throw new HttpError(502, `Gửi SMS OTP qua SpeedSMS thất bại (HTTP ${res.status}). ${detail}`.trim(), 'sms_delivery_failed');
+    }
+
+    const data = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      code?: string;
+      message?: string;
+      data?: { tranId?: number | string };
+    };
+    if (data.status && data.status !== 'success') {
       throw new HttpError(
         502,
-        `Android SMS Gateway gửi tin thất bại (HTTP ${res.status}). ${detail}`.trim(),
+        `SpeedSMS từ chối gửi tin (${data.code ?? data.status}): ${data.message ?? 'Lỗi cổng nhà mạng'}`,
         'sms_delivery_failed',
       );
     }
 
-    let messageId: string | undefined;
-    const raw = await res.text().catch(() => '');
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as { data?: { _id?: string; id?: string }; id?: string; success?: boolean; error?: string };
-        if (parsed.success === false) {
-          throw new HttpError(502, `Android SMS Gateway từ chối gửi: ${parsed.error ?? 'unknown'}`, 'sms_delivery_failed');
-        }
-        messageId = parsed.data?._id ?? parsed.data?.id ?? parsed.id;
-      } catch (err) {
-        if (err instanceof HttpError) throw err;
-      }
-    }
-
     return {
-      provider: 'android_gateway',
+      provider: 'speedsms',
       delivered: true,
-      messageId,
+      messageId: data.data?.tranId !== undefined ? String(data.data.tranId) : undefined,
     };
   }
 }
 
 /**
- * 3A. Strategy `esms` (eSMS.vn REST API V4 — timeout 8 giây).
+ * 2B. Strategy `esms` (eSMS.vn REST API V4 — timeout 8 giây).
  */
 export class EsmsSmsOtpProvider implements SmsOtpProvider {
   readonly name = 'esms' as const;
@@ -269,7 +220,7 @@ export class EsmsSmsOtpProvider implements SmsOtpProvider {
     const sandbox = isTruthyEnv(envSource, 'ESMS_SANDBOX') ? '1' : '0';
 
     if (!apiKey || !secretKey) {
-      throw new HttpError(503, 'Chưa cấu hình ESMS_API_KEY và ESMS_SECRET_KEY.', 'sms_provider_not_configured');
+      throw new HttpError(503, 'Chưa cấu hình ESMS_API_KEY và ESMS_SECRET_KEY.', 'SMS_PROVIDER_NOT_CONFIGURED');
     }
 
     const res = await fetchWithTimeout(
@@ -318,70 +269,7 @@ export class EsmsSmsOtpProvider implements SmsOtpProvider {
 }
 
 /**
- * 3B. Strategy `speedsms` (SpeedSMS.vn REST API — timeout 8 giây).
- */
-export class SpeedSmsOtpProvider implements SmsOtpProvider {
-  readonly name = 'speedsms' as const;
-
-  constructor(private readonly fetchImpl: FetchLike = fetch) {}
-
-  isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
-    return Boolean(readEnv(envSource, 'SPEEDSMS_ACCESS_TOKEN'));
-  }
-
-  async send(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
-    const accessToken = readEnv(envSource, 'SPEEDSMS_ACCESS_TOKEN');
-    const sender = readEnv(envSource, 'SPEEDSMS_SENDER');
-    const smsType = Number(readEnv(envSource, 'SPEEDSMS_TYPE') || '2') || 2;
-
-    if (!accessToken) {
-      throw new HttpError(503, 'Chưa cấu hình SPEEDSMS_ACCESS_TOKEN.', 'sms_provider_not_configured');
-    }
-
-    const basicAuth = Buffer.from(`${accessToken}:x`).toString('base64');
-    const res = await fetchWithTimeout(this.fetchImpl, 'https://api.speedsms.vn/index.php/sms/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basicAuth}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to: [input.phoneLocal],
-        content: buildSmsText(input.otp, input.ttlMinutes),
-        sms_type: smsType,
-        ...(sender ? { sender } : {}),
-      }),
-    });
-
-    if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 160);
-      throw new HttpError(502, `Gửi SMS OTP qua SpeedSMS thất bại (HTTP ${res.status}). ${detail}`.trim(), 'sms_delivery_failed');
-    }
-
-    const data = (await res.json().catch(() => ({}))) as {
-      status?: string;
-      code?: string;
-      message?: string;
-      data?: { tranId?: number | string };
-    };
-    if (data.status && data.status !== 'success') {
-      throw new HttpError(
-        502,
-        `SpeedSMS từ chối gửi tin (${data.code ?? data.status}): ${data.message ?? 'Lỗi cổng nhà mạng'}`,
-        'sms_delivery_failed',
-      );
-    }
-
-    return {
-      provider: 'speedsms',
-      delivered: true,
-      messageId: data.data?.tranId !== undefined ? String(data.data.tranId) : undefined,
-    };
-  }
-}
-
-/**
- * 3C. Strategy `twilio` (Twilio Programmable SMS REST API — timeout 8 giây).
+ * 2C. Strategy `twilio` (Twilio Programmable SMS REST API — timeout 8 giây).
  */
 export class TwilioSmsOtpProvider implements SmsOtpProvider {
   readonly name = 'twilio' as const;
@@ -405,7 +293,7 @@ export class TwilioSmsOtpProvider implements SmsOtpProvider {
       throw new HttpError(
         503,
         'Chưa cấu hình đầy đủ TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN và TWILIO_FROM_NUMBER.',
-        'sms_provider_not_configured',
+        'SMS_PROVIDER_NOT_CONFIGURED',
       );
     }
 
@@ -444,59 +332,183 @@ export class TwilioSmsOtpProvider implements SmsOtpProvider {
 }
 
 /**
- * 4. Strategy `demo` (Fallback an toàn khi test offline / chưa cấu hình cổng SMS thật):
- * - In rõ mã OTP ra terminal server để kỹ sư / giám khảo quan sát khi chạy offline.
- * - Đồng thời đẩy qua Telegram Bot nếu có `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
- * - CHỈ trả `devOtpPreview` trong response khi biến `ALLOW_DEMO_OTP=true`.
+ * 2D. Strategy `vonage` (Vonage / Nexmo REST SMS API — timeout 8 giây).
  */
-export class DemoSmsOtpProvider implements SmsOtpProvider {
-  readonly name = 'demo' as const;
+export class VonageSmsOtpProvider implements SmsOtpProvider {
+  readonly name = 'vonage' as const;
 
   constructor(private readonly fetchImpl: FetchLike = fetch) {}
 
-  isConfigured(_envSource: NodeJS.ProcessEnv = process.env): boolean {
-    return true;
+  isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
+    return Boolean(readEnv(envSource, 'VONAGE_API_KEY') && readEnv(envSource, 'VONAGE_API_SECRET'));
   }
 
   async send(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
-    const allowPreview = isTruthyEnv(envSource, 'ALLOW_DEMO_OTP');
-    const telegramToken = readEnv(envSource, 'TELEGRAM_BOT_TOKEN');
-    const telegramChatId = readEnv(envSource, 'TELEGRAM_CHAT_ID');
+    const apiKey = readEnv(envSource, 'VONAGE_API_KEY');
+    const apiSecret = readEnv(envSource, 'VONAGE_API_SECRET');
+    const from = readEnv(envSource, 'VONAGE_FROM') || 'SmartCitizen';
 
-    console.info(
-      `[SMS_OTP_DEMO] SĐT=${input.phoneE164} | OTP=${input.otp} | Hiệu lực=${input.ttlMinutes} phút | Mục đích=${input.purpose}`,
-    );
+    if (!apiKey || !apiSecret) {
+      throw new HttpError(
+        503,
+        'Chưa cấu hình VONAGE_API_KEY và VONAGE_API_SECRET.',
+        'SMS_PROVIDER_NOT_CONFIGURED',
+      );
+    }
 
-    if (telegramToken && telegramChatId) {
-      try {
-        await fetchWithTimeout(
-          this.fetchImpl,
-          `https://api.telegram.org/bot${encodeURIComponent(telegramToken)}/sendMessage`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: telegramChatId,
-              text: `🔐 [SmartCitizen Đồng Nai - SMS OTP]\nSĐT: ${input.phoneE164}\nMã OTP: ${input.otp}\nHiệu lực: ${input.ttlMinutes} phút`,
-            }),
-          },
-          5_000,
-        );
-      } catch (err) {
-        console.warn('[SMS_OTP_DEMO] Không gửi được bản sao OTP qua Telegram Bot:', err instanceof Error ? err.message : err);
-      }
+    const res = await fetchWithTimeout(this.fetchImpl, 'https://rest.nexmo.com/sms/json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        api_secret: apiSecret,
+        to: input.phoneE164.replace(/^\+/, ''),
+        from,
+        text: buildSmsText(input.otp, input.ttlMinutes),
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => '')).slice(0, 160);
+      throw new HttpError(502, `Gửi SMS OTP qua Vonage thất bại (HTTP ${res.status}). ${detail}`.trim(), 'sms_delivery_failed');
+    }
+
+    const data = (await res.json().catch(() => ({}))) as {
+      messages?: Array<{ status?: string; 'message-id'?: string; 'error-text'?: string }>;
+    };
+    const msg = data.messages?.[0];
+    if (msg && msg.status && msg.status !== '0') {
+      throw new HttpError(
+        502,
+        `Vonage từ chối gửi tin (mã ${msg.status}): ${msg['error-text'] ?? 'Lỗi cổng SMS'}`,
+        'sms_delivery_failed',
+      );
     }
 
     return {
-      provider: 'demo',
+      provider: 'vonage',
       delivered: true,
-      ...(allowPreview ? { devOtpPreview: input.otp } : {}),
+      messageId: msg?.['message-id'],
     };
   }
 }
 
 /**
- * Bộ điều phối Multi-Provider SMS OTP theo Strategy Pattern.
+ * 3. Strategy `android_gateway`:
+ * Webhook SMS Gateway (TextBee.dev hoặc Android SMS Gateway tự host qua `SMS_GATEWAY_URL`)
+ * gửi POST `{ phone, message }` trực tiếp tới thiết bị phát SMS.
+ */
+export class AndroidGatewaySmsOtpProvider implements SmsOtpProvider {
+  readonly name = 'android_gateway' as const;
+
+  constructor(private readonly fetchImpl: FetchLike = fetch) {}
+
+  private resolveEndpoint(envSource: NodeJS.ProcessEnv): { url: string; apiKey: string; isTextBee: boolean } | null {
+    const customUrl = readEnv(envSource, 'SMS_GATEWAY_URL');
+    const textbeeDeviceId = readEnv(envSource, 'TEXTBEE_DEVICE_ID');
+    const textbeeKey = readEnv(envSource, 'TEXTBEE_API_KEY');
+    const genericKey = readEnv(envSource, 'SMS_GATEWAY_API_KEY') || textbeeKey;
+
+    if (customUrl) {
+      return {
+        url: customUrl,
+        apiKey: genericKey,
+        isTextBee: /textbee\.dev/i.test(customUrl),
+      };
+    }
+    if (textbeeDeviceId && textbeeKey) {
+      return {
+        url: `https://api.textbee.dev/api/v1/gateway/devices/${encodeURIComponent(textbeeDeviceId)}/send-sms`,
+        apiKey: textbeeKey,
+        isTextBee: true,
+      };
+    }
+    return null;
+  }
+
+  isConfigured(envSource: NodeJS.ProcessEnv = process.env): boolean {
+    return this.resolveEndpoint(envSource) !== null;
+  }
+
+  async send(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
+    const cfg = this.resolveEndpoint(envSource);
+    if (!cfg) {
+      throw new HttpError(
+        503,
+        'Chưa cấu hình SMS Gateway (cần SMS_GATEWAY_URL hoặc TEXTBEE_DEVICE_ID + TEXTBEE_API_KEY).',
+        'SMS_PROVIDER_NOT_CONFIGURED',
+      );
+    }
+
+    const message = buildSmsText(input.otp, input.ttlMinutes);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (cfg.apiKey) {
+      headers['x-api-key'] = cfg.apiKey;
+      if (!cfg.isTextBee) {
+        headers.Authorization = `Bearer ${cfg.apiKey}`;
+      }
+    }
+
+    const bodyPayload = cfg.isTextBee
+      ? {
+          recipients: [input.phoneE164],
+          message,
+        }
+      : {
+          phone: input.phoneE164,
+          message,
+          phoneLocal: input.phoneLocal,
+          recipients: [input.phoneE164],
+        };
+
+    const res = await fetchWithTimeout(this.fetchImpl, cfg.url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(bodyPayload),
+    });
+
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => '')).slice(0, 180);
+      throw new HttpError(
+        502,
+        `SMS Gateway gửi tin thất bại (HTTP ${res.status}). ${detail}`.trim(),
+        'sms_delivery_failed',
+      );
+    }
+
+    let messageId: string | undefined;
+    const raw = await res.text().catch(() => '');
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { data?: { _id?: string; id?: string }; id?: string; success?: boolean; error?: string };
+        if (parsed.success === false) {
+          throw new HttpError(502, `SMS Gateway từ chối gửi: ${parsed.error ?? 'unknown'}`, 'sms_delivery_failed');
+        }
+        messageId = parsed.data?._id ?? parsed.data?.id ?? parsed.id;
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+      }
+    }
+
+    return {
+      provider: 'android_gateway',
+      delivered: true,
+      messageId,
+    };
+  }
+}
+
+const NOT_CONFIGURED_MESSAGE =
+  'Máy chủ chưa cấu hình nhà cung cấp gửi SMS (FIREBASE_PROJECT_ID + FIREBASE_API_KEY, SPEEDSMS_ACCESS_TOKEN, ESMS_API_KEY, TWILIO_ACCOUNT_SID, VONAGE_API_KEY hoặc SMS_GATEWAY_URL). Quản trị viên cần thêm biến môi trường SMS trên Render.';
+
+/**
+ * Bộ điều phối Multi-Provider SMS OTP (Zero Mock OTP):
+ * Ưu tiên tự động khi `SMS_PROVIDER=auto`:
+ *  1) Firebase Phone Auth (khi đủ cả client config + server verifier)
+ *  2) SpeedSMS / eSMS (VN) hoặc Twilio / Vonage
+ *  3) Webhook SMS Gateway (TextBee / Android SMS Gateway `SMS_GATEWAY_URL`)
  */
 export class MultiSmsOtpDispatcher {
   private readonly providers: Record<ConcreteSmsProviderName, SmsOtpProvider>;
@@ -505,15 +517,15 @@ export class MultiSmsOtpDispatcher {
   constructor(fetchImpl: FetchLike = fetch) {
     this.providers = {
       firebase: new FirebaseSmsOtpProvider(),
-      android_gateway: new AndroidGatewaySmsOtpProvider(fetchImpl),
-      esms: new EsmsSmsOtpProvider(fetchImpl),
       speedsms: new SpeedSmsOtpProvider(fetchImpl),
+      esms: new EsmsSmsOtpProvider(fetchImpl),
       twilio: new TwilioSmsOtpProvider(fetchImpl),
-      demo: new DemoSmsOtpProvider(fetchImpl),
+      vonage: new VonageSmsOtpProvider(fetchImpl),
+      android_gateway: new AndroidGatewaySmsOtpProvider(fetchImpl),
     };
   }
 
-  /** Phục vụ mock/override trong kiểm thử tự động (`NODE_ENV=test`). */
+  /** Cho phép override transport trong kiểm thử tự động (`NODE_ENV=test`). */
   setOverrideProvider(provider: SmsOtpProvider | null): void {
     this.overrideProvider = provider;
   }
@@ -524,58 +536,67 @@ export class MultiSmsOtpDispatcher {
       return raw as SmsProviderMode;
     }
     const legacy = readEnv(envSource, 'OTP_PROVIDER').toLowerCase();
-    if (legacy === 'twilio' || legacy === 'esms') {
+    if (legacy === 'twilio' || legacy === 'esms' || legacy === 'speedsms' || legacy === 'vonage') {
       return legacy;
     }
     return 'auto';
   }
 
-  resolveActiveProvider(envSource: NodeJS.ProcessEnv = process.env): SmsOtpProvider {
+  resolveActiveProvider(envSource: NodeJS.ProcessEnv = process.env): SmsOtpProvider | null {
     if (this.overrideProvider) return this.overrideProvider;
 
     const mode = this.getConfiguredMode(envSource);
     if (mode !== 'auto') {
-      return this.providers[mode];
+      const explicit = this.providers[mode];
+      return explicit.isConfigured(envSource) ? explicit : null;
     }
 
-    // Thứ tự ưu tiên khi SMS_PROVIDER=auto: cổng SMS trực tiếp -> Firebase -> Demo an toàn
-    const priority: ConcreteSmsProviderName[] = [
-      'android_gateway',
-      'esms',
+    // 1. Firebase Phone Auth (nếu cấu hình đủ client API key + Project ID)
+    const fb = this.providers.firebase as FirebaseSmsOtpProvider;
+    if (fb.isAutoFlowReady(envSource)) {
+      return fb;
+    }
+
+    // 2. SpeedSMS / eSMS (VN) -> Twilio / Vonage
+    const directServerProviders: ConcreteSmsProviderName[] = [
       'speedsms',
+      'esms',
       'twilio',
-      'firebase',
+      'vonage',
+      // 3. Webhook SMS Gateway (TextBee / SMS_GATEWAY_URL)
+      'android_gateway',
     ];
-    for (const name of priority) {
+    for (const name of directServerProviders) {
       if (this.providers[name].isConfigured(envSource)) {
         return this.providers[name];
       }
     }
-    return this.providers.demo;
+
+    // Nếu chỉ có FIREBASE_PROJECT_ID mà chưa có SMS trực tiếp nào khác
+    if (fb.isConfigured(envSource)) {
+      return fb;
+    }
+
+    return null;
   }
 
   getStatus(envSource: NodeJS.ProcessEnv = process.env): {
     smsProviderMode: SmsProviderMode;
-    activeSmsProvider: ConcreteSmsProviderName;
+    activeSmsProvider: ConcreteSmsProviderName | null;
     realSmsConfigured: boolean;
     firebaseClientReady: boolean;
     firebaseClientConfig: RuntimeFirebaseClientConfig | null;
-    telegramFallbackReady: boolean;
-    allowDemoOtp: boolean;
   } {
     const mode = this.getConfiguredMode(envSource);
     const active = this.resolveActiveProvider(envSource);
     const fbProvider = this.providers.firebase as FirebaseSmsOtpProvider;
-    const realSmsConfigured =
-      active.name !== 'demo' ? active.isConfigured(envSource) : false;
+    const realSmsConfigured = active !== null && active.isConfigured(envSource);
     return {
       smsProviderMode: mode,
-      activeSmsProvider: active.name,
+      activeSmsProvider: active?.name ?? null,
       realSmsConfigured,
       firebaseClientReady: fbProvider.isConfigured(envSource),
       firebaseClientConfig: fbProvider.getClientConfig(envSource),
-      telegramFallbackReady: hasTelegramOtpFallback(envSource),
-      allowDemoOtp: isTruthyEnv(envSource, 'ALLOW_DEMO_OTP'),
     };
   }
 
@@ -584,40 +605,11 @@ export class MultiSmsOtpDispatcher {
       return this.overrideProvider.send(input, envSource);
     }
 
-    const mode = this.getConfiguredMode(envSource);
     const active = this.resolveActiveProvider(envSource);
-    const allowDemo = isTruthyEnv(envSource, 'ALLOW_DEMO_OTP');
-    const hasTelegram = hasTelegramOtpFallback(envSource);
-
-    if (active.name === 'demo' && mode === 'auto') {
-      if (!allowDemo && !hasTelegram) {
-        throw new HttpError(
-          503,
-          'Hệ thống chưa kết nối cổng gửi tin nhắn SMS nhà mạng. Vui lòng chuyển sang nhận mã xác thực qua Email hoặc đăng nhập bằng mật khẩu.',
-          'sms_provider_not_configured',
-        );
-      }
-      const demoRes = await this.providers.demo.send(input, envSource);
-      return {
-        ...demoRes,
-        ...(hasTelegram ? { fallbackChannel: 'telegram' as const } : {}),
-      };
+    if (!active) {
+      throw new HttpError(503, NOT_CONFIGURED_MESSAGE, 'SMS_PROVIDER_NOT_CONFIGURED');
     }
 
-    try {
-      return await active.send(input, envSource);
-    } catch (err) {
-      if (mode === 'auto' && (allowDemo || hasTelegram)) {
-        console.warn(
-          `[SMS_DISPATCH] Kênh ${active.name} gặp lỗi (${err instanceof Error ? err.message : err}), tự động chuyển sang kênh dự phòng.`,
-        );
-        const demoRes = await this.providers.demo.send(input, envSource);
-        return {
-          ...demoRes,
-          ...(hasTelegram ? { fallbackChannel: 'telegram' as const } : {}),
-        };
-      }
-      throw err;
-    }
+    return active.send(input, envSource);
   }
 }

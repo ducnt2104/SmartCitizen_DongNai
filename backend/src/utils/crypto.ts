@@ -35,11 +35,34 @@ export function userIdFromEmail(email: string): string {
 }
 
 /**
- * Băm mật khẩu chuẩn Production bằng `bcryptjs` (cost factor 10).
- * Tương thích ngược hai chiều với bản băm `salt:scryptHex` đã lưu trước đó trong DB.
+ * Băm mật khẩu chuẩn Production bằng `bcryptjs` (cost factor 12).
+ * Tương thích ngược hai chiều với bản băm `salt:scryptHex` và cost 10 đã lưu trước đó trong DB.
  */
 export function hashPassword(password: string): string {
-  return bcrypt.hashSync(password, 10);
+  return bcrypt.hashSync(password, 12);
+}
+
+/**
+ * Kiểm tra chính sách mật khẩu mạnh chuẩn Production:
+ * tối thiểu 8 ký tự, gồm chữ hoa, chữ thường, chữ số và ký tự đặc biệt.
+ */
+export function validatePasswordStrength(password: string): { valid: boolean; reason?: string } {
+  if (typeof password !== 'string' || password.length < 8) {
+    return { valid: false, reason: 'Mật khẩu phải có tối thiểu 8 ký tự.' };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return { valid: false, reason: 'Mật khẩu phải chứa ít nhất 1 chữ cái viết hoa (A-Z).' };
+  }
+  if (!/[a-z]/.test(password)) {
+    return { valid: false, reason: 'Mật khẩu phải chứa ít nhất 1 chữ cái viết thường (a-z).' };
+  }
+  if (!/[0-9]/.test(password)) {
+    return { valid: false, reason: 'Mật khẩu phải chứa ít nhất 1 chữ số (0-9).' };
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return { valid: false, reason: 'Mật khẩu phải chứa ít nhất 1 ký tự đặc biệt (!@#$%^&*...).' };
+  }
+  return { valid: true };
 }
 
 export function verifyPassword(password: string, stored: string): boolean {

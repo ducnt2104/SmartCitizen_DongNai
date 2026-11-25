@@ -12,9 +12,7 @@ interface Msg {
   error?: boolean;
 }
 
-export function openAssistant(voice = false): void {
-  window.dispatchEvent(new CustomEvent('sc:open-chat', { detail: { voice } }));
-}
+export { openAssistant } from '../state/settings';
 
 /** Chatbot AI Cộng đồng: SSE streaming, micro vi-VN, đọc to câu trả lời (TTS). */
 export function ChatWidget() {

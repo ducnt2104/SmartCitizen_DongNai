@@ -9,7 +9,17 @@ import { forbidden, unauthorized } from '../utils/errors';
 declare module 'express-serve-static-core' {
   interface Request {
     user?: UserRecord;
+    sessionId?: string;
+    tokenVersion?: number;
   }
+}
+
+export function extractClientMeta(req: Request): { userAgent: string; ip: string; deviceFingerprint: string } {
+  const fp = req.headers['x-device-fp'];
+  const deviceFingerprint = typeof fp === 'string' && fp.trim() ? fp.trim().slice(0, 64) : 'web-browser';
+  const ip = (req.ip || req.socket?.remoteAddress || '').slice(0, 64);
+  const userAgent = (req.get('user-agent') ?? '').slice(0, 180);
+  return { userAgent, ip, deviceFingerprint };
 }
 
 export const ACCESS_COOKIE = 'sc_access';
@@ -40,20 +50,20 @@ export function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-/** Ghi cặp HTTP-only Cookie an toàn cho Access Token (15m) & Refresh Token (rotation). */
+/** Ghi cặp HTTP-only Cookie an toàn cho Access Token (15m) & Refresh Token (rotation, SameSite=Strict). */
 export function setAuthCookies(res: Response, accessToken: string, refreshToken: string, refreshMaxAgeMs: number): void {
   const secure = env.cookieSecure;
   res.cookie(ACCESS_COOKIE, accessToken, {
     httpOnly: true,
     secure,
-    sameSite: 'lax',
+    sameSite: 'strict',
     path: '/',
     maxAge: 15 * 60 * 1000,
   });
   res.cookie(REFRESH_COOKIE, refreshToken, {
     httpOnly: true,
     secure,
-    sameSite: 'lax',
+    sameSite: 'strict',
     path: '/api/auth',
     maxAge: refreshMaxAgeMs,
   });
@@ -61,8 +71,8 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
 
 export function clearAuthCookies(res: Response): void {
   const secure = env.cookieSecure;
-  res.clearCookie(ACCESS_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/' });
-  res.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure, sameSite: 'lax', path: '/api/auth' });
+  res.clearCookie(ACCESS_COOKIE, { httpOnly: true, secure, sameSite: 'strict', path: '/' });
+  res.clearCookie(REFRESH_COOKIE, { httpOnly: true, secure, sameSite: 'strict', path: '/api/auth' });
 }
 
 function extractAccessToken(req: Request): string | null {
@@ -74,16 +84,18 @@ function extractAccessToken(req: Request): string | null {
   return readCookie(req, ACCESS_COOKIE);
 }
 
-/** Lớp 2: JWT HMAC (Cookie HTTP-only hoặc Bearer) + nạp lại user từ DB (kiểm tra quyền/thu hồi). */
+/** Lớp 2: JWT HMAC + kiểm tra Strict Single-Session (sessionId + tokenVersion trong DB/LRU Cache). */
 export function authMiddleware(s: Services) {
   const optional: RequestHandler = asyncHandler(async (req, _res, next) => {
     const token = extractAccessToken(req);
     if (token) {
       try {
-        const claims = s.auth.verifyToken(token);
-        req.user = await s.auth.me(claims.sub);
+        const verified = await s.auth.authenticateToken(token, { ip: req.ip ?? '' });
+        req.user = verified.user;
+        req.sessionId = verified.sessionId;
+        req.tokenVersion = verified.tokenVersion;
       } catch {
-        // Token hết hạn trên route optional: bỏ qua, coi như khách vãng lai
+        // Token hết hạn hoặc đã thay thế trên route optional: bỏ qua, coi như khách vãng lai
       }
     }
     next();
@@ -92,8 +104,10 @@ export function authMiddleware(s: Services) {
   const required: RequestHandler = asyncHandler(async (req, _res, next) => {
     const token = extractAccessToken(req);
     if (!token) throw unauthorized();
-    const claims = s.auth.verifyToken(token);
-    req.user = await s.auth.me(claims.sub);
+    const verified = await s.auth.authenticateToken(token, { ip: req.ip ?? '' });
+    req.user = verified.user;
+    req.sessionId = verified.sessionId;
+    req.tokenVersion = verified.tokenVersion;
     next();
   });
 
@@ -105,5 +119,22 @@ export function authMiddleware(s: Services) {
     },
   ];
 
-  return { optional, required, requireRole };
+  const requireReauth: RequestHandler = asyncHandler(async (req, _res, next) => {
+    if (!req.user || !req.sessionId) throw unauthorized();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    await s.auth.verifyReauth(req.user, req.sessionId, {
+      reauthToken: typeof req.headers['x-reauth-token'] === 'string' ? req.headers['x-reauth-token'] : undefined,
+      currentPassword:
+        typeof req.headers['x-reauth-password'] === 'string'
+          ? req.headers['x-reauth-password']
+          : typeof body.reauthPassword === 'string'
+            ? body.reauthPassword
+            : typeof body.currentPassword === 'string'
+              ? body.currentPassword
+              : undefined,
+    });
+    next();
+  });
+
+  return { optional, required, requireRole, requireReauth };
 }

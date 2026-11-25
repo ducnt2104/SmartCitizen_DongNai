@@ -6,14 +6,25 @@ export interface Actor {
   id: string;
   name: string;
   role: Role | 'system';
+  ip?: string | null;
 }
 
-export const SYSTEM_ACTOR: Actor = { id: 'system', name: 'Hệ thống SmartCitizen', role: 'system' };
+export const SYSTEM_ACTOR: Actor = { id: 'system', name: 'Hệ thống SmartCitizen', role: 'system', ip: null };
 
 export function computeAuditHash(e: Omit<AuditEntry, 'hash'>): string {
-  return sha256(
-    [e.prevHash, e.seq, e.actorId, e.role, e.action, e.targetId, e.timestamp, JSON.stringify(e.beforeState ?? null), JSON.stringify(e.afterState ?? null)].join('|'),
-  );
+  const parts = [
+    e.prevHash,
+    e.seq,
+    e.actorId,
+    e.role,
+    e.action,
+    e.targetId,
+    e.timestamp,
+    JSON.stringify(e.beforeState ?? null),
+    JSON.stringify(e.afterState ?? null),
+  ];
+  if (e.ip) parts.push(e.ip);
+  return sha256(parts.join('|'));
 }
 
 /**
@@ -25,9 +36,17 @@ export class AuditService {
 
   constructor(private readonly repo: AuditRepository) {}
 
-  log(actor: Actor, action: string, targetId: string, beforeState: unknown, afterState: unknown): Promise<AuditEntry> {
+  log(
+    actor: Actor,
+    action: string,
+    targetId: string,
+    beforeState: unknown,
+    afterState: unknown,
+    ip?: string | null,
+  ): Promise<AuditEntry> {
     const task = this.queue.then(async () => {
       const prev = await this.repo.last();
+      const resolvedIp = ip ?? actor.ip ?? null;
       const partial: Omit<AuditEntry, 'hash'> = {
         id: newId('au'),
         seq: (prev?.seq ?? 0) + 1,
@@ -38,6 +57,7 @@ export class AuditService {
         targetId,
         beforeState: beforeState ?? null,
         afterState: afterState ?? null,
+        ...(resolvedIp ? { ip: resolvedIp } : {}),
         timestamp: new Date().toISOString(),
         prevHash: prev?.hash ?? 'GENESIS',
       };

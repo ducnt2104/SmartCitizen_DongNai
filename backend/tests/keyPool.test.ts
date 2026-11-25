@@ -50,13 +50,14 @@ describe('Admin API `/api/admin/api-keys` — Bảo mật RBAC, Bulk Import AES-
 
   async function apiCall<T = any>(
     endpoint: string,
-    init: { method?: string; body?: unknown; token?: string } = {},
+    init: { method?: string; body?: unknown; token?: string; headers?: Record<string, string> } = {},
   ): Promise<{ status: number; data: T }> {
     const res = await fetch(`${base}${endpoint}`, {
       method: init.method ?? (init.body ? 'POST' : 'GET'),
       headers: {
         'Content-Type': 'application/json',
         ...(init.token ? { Authorization: `Bearer ${init.token}` } : {}),
+        ...(init.headers ?? {}),
       },
       body: init.body ? JSON.stringify(init.body) : undefined,
     });
@@ -225,10 +226,18 @@ describe('Admin API `/api/admin/api-keys` — Bảo mật RBAC, Bulk Import AES-
     expect(disableK3.status).toBe(200);
     expect(disableK3.data.isEnabled).toBe(false);
 
-    // DELETE key #3
+    // DELETE key #3 (yêu cầu Re-auth khi thiếu, xóa thành công khi có X-Reauth-Password)
+    const delUnauth = await apiCall<any>(`/api/admin/api-keys/${k3.id}`, {
+      method: 'DELETE',
+      token: cityToken,
+    });
+    expect(delUnauth.status).toBe(403);
+
+    const { INITIAL_STAFF_PASSWORD } = await import('../src/data/seedStore');
     const delK3 = await apiCall<any>(`/api/admin/api-keys/${k3.id}`, {
       method: 'DELETE',
       token: cityToken,
+      headers: { 'X-Reauth-Password': INITIAL_STAFF_PASSWORD },
     });
     expect(delK3.status).toBe(200);
     expect(delK3.data.deleted).toBe(true);
