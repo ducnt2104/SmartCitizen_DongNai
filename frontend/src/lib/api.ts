@@ -347,7 +347,6 @@ async function streamDirectGeminiClient(
     `Khu vực đang chọn: ${body.wardCode ?? 'Toàn TP. Đồng Nai'}. Số khẩn cấp Đồng Nai: Công an 113, Cứu hỏa 114, Cấp cứu 115.`;
 
   const callModel = (modelId: string) => {
-    const isV3OrNewer = /^gemini-(?:3|4)(?:\.|-|$)/i.test(modelId);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
     return fetch(url, {
       method: 'POST',
@@ -361,7 +360,6 @@ async function streamDirectGeminiClient(
         generationConfig: {
           temperature: 0.7,
           maxOutputTokens: 800,
-          thinkingConfig: isV3OrNewer ? { thinkingLevel: 'low' } : { thinkingBudget: 0 },
         },
       }),
       signal,
@@ -370,7 +368,7 @@ async function streamDirectGeminiClient(
 
   let modelId = cachedClientGeminiModel;
   let res = await callModel(modelId);
-  if (res.status === 404) {
+  if (res.status === 404 || res.status === 400) {
     const discovered = await discoverLatestFlashModelClient(apiKey, signal);
     if (discovered && discovered !== modelId) {
       modelId = discovered;

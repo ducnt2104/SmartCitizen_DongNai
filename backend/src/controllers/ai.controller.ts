@@ -190,7 +190,6 @@ export function aiController(s: Services) {
       }
       const userApiKeyHeader = req.headers['x-gemini-api-key'];
       const userApiKey = typeof userApiKeyHeader === 'string' ? userApiKeyHeader.trim() : '';
-      const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, cleanLastText);
 
       res.set({
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -208,6 +207,7 @@ export function aiController(s: Services) {
       };
       let mode: AiMode = 'gemini';
       try {
+        const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, cleanLastText);
         for await (const chunk of s.gemini.streamRealGeminiChat({
           history,
           databaseContext: ctx.text,
@@ -226,7 +226,7 @@ export function aiController(s: Services) {
         console.error('[chat] Gemini stream lỗi:', err);
         const msg =
           err instanceof Error && err.message
-            ? err.message
+            ? `Chi tiết lỗi: ${err.message}`
             : 'Chưa kết nối API Key của Gemini. Vui lòng thêm GEMINI_API_KEY hoặc nhập trong mục Cài đặt ⚙️';
         send({ error: msg, mode: 'fallback' });
         send({ done: true, mode: 'fallback' });
