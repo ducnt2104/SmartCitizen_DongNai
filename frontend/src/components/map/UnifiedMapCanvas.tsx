@@ -54,6 +54,8 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   onUserPan?: () => void;
   crosshairPin?: { onChange: (lat: number, lng: number) => void } | null;
   draggablePin?: DraggablePinSpec | null;
+  selectedPin?: { lat: number; lng: number; label?: string } | null;
+  onMapClick?: (lat: number, lng: number) => void;
   routeOverlay?: RouteOverlaySpec | null;
   onLocate?: () => void;
   locating?: boolean;
@@ -135,6 +137,8 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     onDraggingChange: setDragging,
     onUserPan: p.onUserPan,
     draggablePin: p.draggablePin,
+    selectedPin: p.selectedPin,
+    onMapClick: p.onMapClick,
     routeOverlay: p.routeOverlay,
   };
 

@@ -142,6 +142,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const rafRef = useRef<number | null>(null);
 
   const draggableMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const selectedMarkerRef = useRef<maplibregl.Marker | null>(null);
   const draggablePinRef = useRef<DraggablePinSpec | null | undefined>(p.draggablePin);
   draggablePinRef.current = p.draggablePin;
   const [zoomTick, setZoomTick] = useState(0);
@@ -160,14 +161,48 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   userPanRef.current = p.onUserPan;
   const crosshairActiveRef = useRef(p.crosshairActive);
   crosshairActiveRef.current = p.crosshairActive;
+  const onMapClickRef = useRef(p.onMapClick);
+  onMapClickRef.current = p.onMapClick;
 
   const surfaceRef = useRef(p.surface);
   const langRef = useRef(lang);
   const vectorActiveRef = useRef(false);
   const vectorLoadedRef = useRef(false);
   const vectorFailedRef = useRef(false);
+  const vectorWatchdogRef = useRef<number | null>(null);
   const lastCmdSeqRef = useRef(0);
   const lastFitRouteSeqRef = useRef(0);
+
+  const clearVectorWatchdog = (): void => {
+    if (vectorWatchdogRef.current !== null) {
+      window.clearTimeout(vectorWatchdogRef.current);
+      vectorWatchdogRef.current = null;
+    }
+  };
+
+  const fallbackToRasterStyle = (map: maplibregl.Map, reason: string): void => {
+    clearVectorWatchdog();
+    if (vectorFailedRef.current) return;
+    console.warn('[MapLibre] Chuyển sang nền Esri World_Street_Map do:', reason);
+    vectorFailedRef.current = true;
+    vectorActiveRef.current = false;
+    vectorLoadedRef.current = false;
+    if (surfaceRef.current === 'roadmap' || surfaceRef.current === 'dark') {
+      map.setStyle(buildMapLibreStyle(surfaceRef.current));
+    }
+  };
+
+  const applyVectorStyleWithWatchdog = (map: maplibregl.Map, vecStyle: maplibregl.StyleSpecification): void => {
+    clearVectorWatchdog();
+    vectorActiveRef.current = true;
+    vectorLoadedRef.current = false;
+    map.setStyle(vecStyle);
+    vectorWatchdogRef.current = window.setTimeout(() => {
+      if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
+        fallbackToRasterStyle(map, 'vector load timeout (4.5s)');
+      }
+    }, 4500);
+  };
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi unmount
   useEffect(() => {
@@ -213,15 +248,14 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
 
     const applyDetailedVectorIfSupported = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
       if ((targetSurface !== 'roadmap' && targetSurface !== 'dark') || vectorFailedRef.current) {
+        clearVectorWatchdog();
         vectorActiveRef.current = false;
         vectorLoadedRef.current = false;
         return;
       }
       void loadDetailedVectorStyle(targetSurface, targetLang, vectorAbort.signal).then((vecStyle) => {
         if (vectorDisposed || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
-        vectorActiveRef.current = true;
-        vectorLoadedRef.current = false;
-        map.setStyle(vecStyle);
+        applyVectorStyleWithWatchdog(map, vecStyle);
       });
     };
 
@@ -251,21 +285,33 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     });
 
     map.on('style.load', () => {
-      if (vectorActiveRef.current) vectorLoadedRef.current = true;
       setStyleReadySeq((n) => n + 1);
+    });
+
+    map.on('sourcedata', (ev) => {
+      if (
+        vectorActiveRef.current &&
+        !vectorLoadedRef.current &&
+        ev.sourceId === 'openmaptiles' &&
+        ev.isSourceLoaded &&
+        map.areTilesLoaded()
+      ) {
+        vectorLoadedRef.current = true;
+        clearVectorWatchdog();
+      }
     });
 
     map.on('styledata', () => {
       if (map.isStyleLoaded()) setStyleReadySeq((n) => n + 1);
     });
 
-    map.on('error', () => {
+    map.on('error', (ev) => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        vectorFailedRef.current = true;
-        vectorActiveRef.current = false;
-        if (surfaceRef.current === 'roadmap' || surfaceRef.current === 'dark') {
-          map.setStyle(buildMapLibreStyle(surfaceRef.current));
-        }
+        const msg =
+          (ev as { error?: { message?: string }; sourceId?: string }).error?.message ??
+          (ev as { sourceId?: string }).sourceId ??
+          'style/tile load error';
+        fallbackToRasterStyle(map, msg);
       }
     });
 
@@ -304,7 +350,13 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           zoom: curZoom < 14 ? 15 : curZoom,
           duration: curZoom < 14 ? 320 : 220,
         });
+        return;
       }
+      const target = ev.originalEvent?.target as HTMLElement | null;
+      if (target?.closest('.sc-map-pin, .sc-cluster, .maplibregl-ctrl, .maplibregl-marker')) {
+        return;
+      }
+      onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng);
     });
 
     const handleResize = () => map.resize();
@@ -314,6 +366,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
 
     return () => {
       vectorDisposed = true;
+      clearVectorWatchdog();
       vectorAbort.abort();
       ro?.disconnect();
       window.removeEventListener('resize', handleResize);
@@ -330,6 +383,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       userMarkerModeRef.current = null;
       draggableMarkerRef.current?.remove();
       draggableMarkerRef.current = null;
+      selectedMarkerRef.current?.remove();
+      selectedMarkerRef.current = null;
       mapRef.current = null;
       map.remove();
     };
@@ -344,7 +399,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     return () => window.cancelAnimationFrame(id);
   }, [p.followPadding?.bottom, p.followPadding?.top, p.followPadding?.left]);
 
-  // 2) Đổi lớp nền mượt không hủy instance Map
+  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Đường) mượt không hủy instance Map
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -359,23 +414,26 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       const ctrl = new AbortController();
       const targetSurface = p.surface;
       if (surfaceChanged) {
+        clearVectorWatchdog();
         vectorActiveRef.current = false;
+        vectorLoadedRef.current = false;
         map.setStyle(buildMapLibreStyle(targetSurface));
       }
       void loadDetailedVectorStyle(targetSurface, lang, ctrl.signal).then((vecStyle) => {
         if (cancelled || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
-        vectorActiveRef.current = true;
-        vectorLoadedRef.current = false;
-        map.setStyle(vecStyle);
+        applyVectorStyleWithWatchdog(map, vecStyle);
       });
       return () => {
         cancelled = true;
+        clearVectorWatchdog();
         ctrl.abort();
       };
     }
 
     if (surfaceChanged) {
+      clearVectorWatchdog();
       vectorActiveRef.current = false;
+      vectorLoadedRef.current = false;
       map.setStyle(buildMapLibreStyle(p.surface));
     }
   }, [p.surface, lang]);
@@ -615,6 +673,31 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       draggableMarkerRef.current.setLngLat([p.draggablePin.lng, p.draggablePin.lat]);
     }
   }, [p.draggablePin?.lat, p.draggablePin?.lng, styleReadySeq]);
+
+  // Ghim vị trí đang chọn hoặc kết quả tìm kiếm địa chỉ
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !p.selectedPin) {
+      selectedMarkerRef.current?.remove();
+      selectedMarkerRef.current = null;
+      return;
+    }
+    if (!selectedMarkerRef.current) {
+      const wrap = document.createElement('div');
+      wrap.style.pointerEvents = 'none';
+      if (p.selectedPin.label) wrap.title = p.selectedPin.label;
+      wrap.innerHTML =
+        '<div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 4px 8px rgba(0,0,0,0.28));"><div style="width:28px;height:28px;border-radius:9999px;background:#DC2626;border:2.5px solid #fff;display:grid;place-items:center;"><span style="width:9px;height:9px;border-radius:9999px;background:#fff;display:block;"></span></div><div style="width:3.5px;height:9px;margin-top:-2px;background:#DC2626;border-radius:0 0 4px 4px;"></div></div>';
+      selectedMarkerRef.current = new maplibregl.Marker({ element: wrap, anchor: 'bottom' })
+        .setLngLat([p.selectedPin.lng, p.selectedPin.lat])
+        .addTo(map);
+    } else {
+      selectedMarkerRef.current.setLngLat([p.selectedPin.lng, p.selectedPin.lat]);
+      if (p.selectedPin.label) {
+        selectedMarkerRef.current.getElement().title = p.selectedPin.label;
+      }
+    }
+  }, [p.selectedPin?.lat, p.selectedPin?.lng, p.selectedPin?.label, styleReadySeq]);
 
   // 5) Chuyển động Marker Xe Cứu Hộ mượt 60FPS (`requestAnimationFrame` ~800ms, tái sử dụng DOM 100%)
   useEffect(() => {

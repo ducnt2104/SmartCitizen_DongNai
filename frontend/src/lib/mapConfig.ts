@@ -273,27 +273,79 @@ export const OPENFREEMAP_DARK_STYLE_URL = 'https://tiles.openfreemap.org/styles/
 
 const cachedVectorStylePromises: Partial<Record<'roadmap' | 'dark', Promise<StyleSpecification | null>>> = {};
 
-function cloneAndLocalizeVectorStyle(base: StyleSpecification, lang: 'vi' | 'en'): StyleSpecification {
+function cloneAndLocalizeVectorStyle(
+  base: StyleSpecification,
+  lang: 'vi' | 'en',
+  surface: 'roadmap' | 'dark',
+): StyleSpecification {
   const nameExpr: unknown =
     lang === 'en'
       ? ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name:latin'], ['get', 'name']]
       : ['coalesce', ['get', 'name:vi'], ['get', 'name'], ['get', 'name:latin']];
 
+  const cleanSources = { ...base.sources } as Record<string, unknown>;
+  if (surface === 'roadmap' && 'ne2_shaded' in cleanSources) {
+    delete cleanSources.ne2_shaded;
+  }
+
   return {
     ...base,
-    layers: base.layers.map((layer) => {
-      if (layer.type !== 'symbol') return layer;
-      const layout = layer.layout as Record<string, unknown> | undefined;
-      if (!layout || !('text-field' in layout) || layer.id.includes('shield')) return layer;
-      if (JSON.stringify(layout['text-field']).includes('"ref"')) return layer;
-      return {
-        ...layer,
-        layout: {
+    sources: cleanSources as StyleSpecification['sources'],
+    layers: base.layers
+      .filter((layer) => !(surface === 'roadmap' && layer.id === 'natural_earth'))
+      .map((layer) => {
+        const next = { ...layer } as Record<string, unknown>;
+        if (surface === 'roadmap') {
+          if (layer.id === 'background' && layer.type === 'background') {
+            next.paint = { ...(layer.paint as Record<string, unknown>), 'background-color': '#F1F4F8' };
+          } else if ((layer.id === 'water' || layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'fill') {
+            next.paint = { ...(layer.paint as Record<string, unknown>), 'fill-color': '#9DD0FE' };
+          } else if ((layer.id === 'waterway_river' || layer.id === 'waterway_other') && layer.type === 'line') {
+            next.paint = { ...(layer.paint as Record<string, unknown>), 'line-color': '#9DD0FE' };
+          } else if ((layer.id === 'park' || layer.id === 'landcover_grass') && layer.type === 'fill') {
+            next.paint = { ...(layer.paint as Record<string, unknown>), 'fill-color': '#CFEFD2' };
+          } else if (layer.id === 'highway-name-major') {
+            next.minzoom = 11.5;
+          } else if (layer.id === 'highway-name-minor') {
+            next.minzoom = 13.4;
+          } else if (layer.id === 'highway-name-path') {
+            next.minzoom = 14.2;
+          } else if (layer.id === 'poi_r1') {
+            next.minzoom = 13.6;
+          } else if (layer.id === 'poi_r7') {
+            next.minzoom = 14.6;
+          } else if (layer.id === 'poi_r20') {
+            next.minzoom = 15.6;
+          } else if (layer.id === 'label_village') {
+            next.minzoom = 8;
+          } else if (layer.id === 'label_other') {
+            next.minzoom = 7.5;
+          }
+        }
+
+        if (layer.type !== 'symbol') return next as unknown as typeof layer;
+        const layout = layer.layout as Record<string, unknown> | undefined;
+        const paint = (layer.paint as Record<string, unknown> | undefined) ?? {};
+        if (!layout || !('text-field' in layout) || layer.id.includes('shield')) {
+          return next as unknown as typeof layer;
+        }
+        if (JSON.stringify(layout['text-field']).includes('"ref"')) {
+          return next as unknown as typeof layer;
+        }
+
+        next.layout = {
           ...layout,
           'text-field': nameExpr,
-        },
-      } as typeof layer;
-    }),
+        };
+        if (surface === 'roadmap' && 'text-halo-color' in paint) {
+          next.paint = {
+            ...paint,
+            'text-halo-color': 'rgba(255, 255, 255, 0.96)',
+            'text-halo-width': Math.max(Number(paint['text-halo-width'] ?? 1.2), 1.6),
+          };
+        }
+        return next as unknown as typeof layer;
+      }),
   };
 }
 
@@ -332,7 +384,7 @@ export async function loadDetailedVectorStyle(
 
   const base = await cachedVectorStylePromises[surface];
   if (!base || signal?.aborted) return null;
-  return cloneAndLocalizeVectorStyle(base, lang);
+  return cloneAndLocalizeVectorStyle(base, lang, surface);
 }
 
 export function loadDetailedVectorRoadmapStyle(

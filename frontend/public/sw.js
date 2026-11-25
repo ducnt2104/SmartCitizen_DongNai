@@ -1,8 +1,8 @@
-/* Service Worker v2: mở app tức thì khi ngoại tuyến (app shell + tài nguyên build + tile bản đồ đã xem).
+/* Service Worker v3: mở app tức thì khi ngoại tuyến (app shell + tài nguyên build + tile bản đồ đã xem).
  * Dữ liệu nghiệp vụ nằm ở IndexedDB (Dexie) nên SW KHÔNG cache /api và KHÔNG cache nhầm HTML cho chunk .js/.css. */
-const SHELL = 'sc-shell-v2';
-const TILES = 'sc-tiles-v2';
-const ASSETS = 'sc-assets-v2';
+const SHELL = 'sc-shell-v3';
+const TILES = 'sc-tiles-v3';
+const ASSETS = 'sc-assets-v3';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -34,7 +34,7 @@ async function staleWhileRevalidate(cacheName, request, checkMime = false) {
     .then((res) => {
       const valid = checkMime
         ? isCacheableAssetResponse(url.pathname, res)
-        : Boolean(res && (res.ok || res.type === 'opaque'));
+        : Boolean(res && res.ok);
       if (valid) cache.put(request, res.clone());
       return res;
     })

@@ -275,12 +275,71 @@ async function arcgisReverseGeocode(
   }
 }
 
+/** Reverse Geocode qua Photon OSM (chi tiết tên đường, số nhà, POI). */
+async function photonReverseGeocode(
+  lat: number,
+  lng: number,
+  signal?: AbortSignal,
+): Promise<ReverseGeocodeResult | null> {
+  if (signal?.aborted) return null;
+  try {
+    const url = `https://photon.komoot.io/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lon=${encodeURIComponent(lng.toFixed(6))}&limit=1`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      features?: Array<{
+        properties?: {
+          housenumber?: string;
+          street?: string;
+          name?: string;
+          district?: string;
+          suburb?: string;
+          city?: string;
+          state?: string;
+        };
+      }>;
+    };
+    const pr = json.features?.[0]?.properties;
+    if (!pr) return null;
+
+    const streetLine = [pr.housenumber, pr.street].filter(Boolean).join(' ').trim();
+    const poi = (pr.name ?? '').trim();
+    const headPart =
+      poi && streetLine && !streetLine.toLowerCase().includes(poi.toLowerCase())
+        ? `${poi}, ${streetLine}`
+        : streetLine || poi;
+    const rawText = [poi, streetLine, pr.district, pr.suburb, pr.city, pr.state].filter(Boolean).join(', ');
+    const normalized = resolveAdminUnit({ lat, lng, street: streetLine || poi, rawAddressText: rawText });
+
+    if (normalized.inBounds && normalized.wardName && headPart) {
+      return {
+        ...normalized,
+        address: `${headPart}, ${normalized.wardName}, Thành phố Đồng Nai`,
+      };
+    }
+    return normalized;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return null;
+  }
+}
+
+function hasStreetLevelDetail(r: ReverseGeocodeResult | null): boolean {
+  if (!r || r.needsConfirmation || r.source === 'local_fallback') return false;
+  const parts = r.address
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length < 3) return false;
+  return !r.wardName || parts[0].toLowerCase() !== r.wardName.toLowerCase();
+}
+
 /**
  * Reverse Geocoding đa tầng có AbortController:
  *  - Tầng 1: Kiểm tra khung bao toàn Thành phố Đồng Nai (ngoài biên giới -> báo rõ).
  *  - Tầng 2A: Google Maps Geocoder chính chủ (nếu đã nạp Google Maps) -> chuẩn hóa về 95 Phường/Xã.
  *  - Tầng 2B: Backend `/api/geo/reverse` (cache LRU ~11m + Nominatim 4s + chuẩn hóa 2 thế hệ về 95 Phường/Xã).
- *  - Tầng 2C: ArcGIS World Geocoder client-side (chi tiết tới số nhà/hẻm/POI khi backend hoặc Nominatim không khả dụng).
+ *  - Tầng 2C: ArcGIS World Geocoder + Photon OSM song song (ưu tiên kết quả có số nhà/tên đường/hẻm/POI cụ thể).
  *  - Tầng 3: Fallback Nearest Centroid Haversine cục bộ (`needsConfirmation: true`).
  */
 export async function reverseGeocode(lat: number, lng: number, signal?: AbortSignal): Promise<ReverseGeocodeResult> {
@@ -293,20 +352,32 @@ export async function reverseGeocode(lat: number, lng: number, signal?: AbortSig
   const googleHit = await googleReverseGeocode(lat, lng, signal);
   if (googleHit) return googleHit;
 
+  let apiHit: ReverseGeocodeResult | null = null;
   try {
-    const apiHit = await api<ReverseGeocodeResult>(
+    const resp = await api<ReverseGeocodeResult>(
       `/api/geo/reverse?lat=${encodeURIComponent(lat.toFixed(6))}&lng=${encodeURIComponent(lng.toFixed(6))}`,
       { signal, timeoutMs: 4500 },
     );
-    if (apiHit && apiHit.source !== 'local_fallback') return apiHit;
+    if (resp && resp.source !== 'local_fallback') {
+      apiHit = resp;
+      if (hasStreetLevelDetail(resp)) return resp;
+    }
   } catch (err) {
     if (signal?.aborted) throw err;
   }
 
-  const arcHit = await arcgisReverseGeocode(lat, lng, signal);
-  if (arcHit) return arcHit;
+  const [arcRes, photonRes] = await Promise.allSettled([
+    arcgisReverseGeocode(lat, lng, signal),
+    photonReverseGeocode(lat, lng, signal),
+  ]);
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-  return fallback;
+  const arcHit = arcRes.status === 'fulfilled' ? arcRes.value : null;
+  const photonHit = photonRes.status === 'fulfilled' ? photonRes.value : null;
+
+  if (hasStreetLevelDetail(arcHit) && arcHit) return arcHit;
+  if (hasStreetLevelDetail(photonHit) && photonHit) return photonHit;
+  return apiHit ?? arcHit ?? photonHit ?? fallback;
 }
 
 async function searchArcGisPlaces(q: string, signal?: AbortSignal): Promise<PlaceSuggestion[]> {
@@ -445,16 +516,31 @@ export async function searchPlacesDongNai(query: string, signal?: AbortSignal): 
     }
   }
 
-  // 2) ArcGIS World Geocoder (CORS-enabled, nhanh và chính xác tại Việt Nam)
-  const arcMatches = await searchArcGisPlaces(q, signal);
-  if (signal?.aborted || arcMatches.length > 0) {
-    return [...wardMatches, ...arcMatches];
-  }
+  // 2) Chạy song song ArcGIS World Geocoder + Photon OSM để tìm nhanh số nhà, đường, hẻm và POI
+  const [arcMatches, photonMatches] = await Promise.all([
+    searchArcGisPlaces(q, signal),
+    searchPhotonPlaces(q, signal),
+  ]);
+  if (signal?.aborted) return wardMatches;
 
-  // 3) Photon OSM Geocoder
-  const photonMatches = await searchPhotonPlaces(q, signal);
-  if (signal?.aborted || photonMatches.length > 0) {
-    return [...wardMatches, ...photonMatches];
+  const mergedPlaces: PlaceSuggestion[] = [...arcMatches];
+  for (const ph of photonMatches) {
+    const isDuplicate = mergedPlaces.some((existing) => {
+      if (existing.label.trim().toLowerCase() === ph.label.trim().toLowerCase()) return true;
+      if (
+        typeof existing.lat === 'number' &&
+        typeof existing.lng === 'number' &&
+        typeof ph.lat === 'number' &&
+        typeof ph.lng === 'number'
+      ) {
+        return haversineMeters(existing.lat, existing.lng, ph.lat, ph.lng) < 60;
+      }
+      return false;
+    });
+    if (!isDuplicate) mergedPlaces.push(ph);
+  }
+  if (mergedPlaces.length > 0) {
+    return [...wardMatches, ...mergedPlaces.slice(0, 8)];
   }
 
   // 4) Fallback OSM Nominatim

@@ -1,4 +1,5 @@
 import {
+  ExternalLink,
   Flame,
   Globe2,
   Layers,
@@ -12,7 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
-import { haversineMeters, inDongNaiBBox } from '@shared/geo';
+import { haversineMeters, inDongNaiBBox, matchArterial } from '@shared/geo';
 import type { Category, ReportStatus, ReportSummary } from '@shared/types';
 import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { useOnline, useScopedReports } from '../../db/hooks';
@@ -21,10 +22,11 @@ import { useI18n } from '../../i18n';
 import { api } from '../../lib/api';
 import {
   resolvePlaceSuggestion,
+  reverseGeocode,
   searchPlacesDongNai,
   type PlaceSuggestion,
 } from '../../lib/geoClient';
-import type { MapBbox, MapMode, MapPoint } from '../../lib/mapConfig';
+import { googleMapsPlaceUrl, type MapBbox, type MapMode, type MapPoint } from '../../lib/mapConfig';
 import { CATEGORY_META } from '../../lib/meta';
 import { useSettings } from '../../state/settings';
 import { useToast } from '../../state/toast';
@@ -53,6 +55,16 @@ const RADII: Array<{ v: number | null; k: 'r500' | 'r1k' | 'r5k' | 'rall' }> = [
   { v: 5000, k: 'r5k' },
   { v: null, k: 'rall' },
 ];
+
+interface InspectedSpot {
+  lat: number;
+  lng: number;
+  label: string;
+  address: string;
+  wardName?: string;
+  arterialName?: string;
+  loading?: boolean;
+}
 
 const LEGEND_COLORS = [
   ['emergency', '#E11D48', 'legend.emergency'],
@@ -109,8 +121,10 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
   const [searchFocused, setSearchFocused] = useState(false);
   const [bboxPoints, setBboxPoints] = useState<ReportSummary[] | null>(null);
   const [cameraCmd, setCameraCmd] = useState<CameraCommand | null>(null);
+  const [inspectedSpot, setInspectedSpot] = useState<InspectedSpot | null>(null);
 
   const bboxAbortRef = useRef<AbortController | null>(null);
+  const inspectAbortRef = useRef<AbortController | null>(null);
   const autoLocatedRef = useRef(false);
 
   const pushCamera = useCallback((cmd: Omit<CameraCommand, 'seq'>) => {
@@ -146,8 +160,14 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     };
   }, [embedded, gps, pushCamera, settings.scope]);
 
-  // Dọn sạch request bbox đang bay khi unmount
-  useEffect(() => () => bboxAbortRef.current?.abort(), []);
+  // Dọn sạch request bbox & reverse-geocode đang bay khi unmount
+  useEffect(
+    () => () => {
+      bboxAbortRef.current?.abort();
+      inspectAbortRef.current?.abort();
+    },
+    [],
+  );
 
   // Autocomplete Địa chỉ + 95 Phường/Xã có debounce 250ms & AbortController
   useEffect(() => {
@@ -237,6 +257,51 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     }
   };
 
+  const inspectLocation = useCallback(
+    async (lat: number, lng: number, labelHint?: string, zoomTo?: number): Promise<void> => {
+      if (!inDongNaiBBox(lat, lng)) {
+        toast('info', 'Tọa độ nằm ngoài ranh giới Thành phố Đồng Nai.');
+        return;
+      }
+      inspectAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      inspectAbortRef.current = ctrl;
+
+      const arterial = matchArterial(lat, lng, 80);
+      setInspectedSpot({
+        lat,
+        lng,
+        label: labelHint ?? 'Đang dò địa chỉ chi tiết…',
+        address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        arterialName: arterial?.name,
+        loading: true,
+      });
+
+      if (typeof zoomTo === 'number') {
+        pushCamera({ kind: 'flyTo', lat, lng, zoom: zoomTo });
+      }
+
+      try {
+        const res = await reverseGeocode(lat, lng, ctrl.signal);
+        if (ctrl.signal.aborted) return;
+        const firstPart = res.address.split(',')[0]?.trim();
+        setInspectedSpot({
+          lat,
+          lng,
+          label: labelHint || (firstPart && firstPart !== res.wardName ? firstPart : res.wardName ?? 'Vị trí đã chọn'),
+          address: res.address,
+          wardName: res.wardName ?? undefined,
+          arterialName: arterial?.name,
+          loading: false,
+        });
+      } catch {
+        if (ctrl.signal.aborted) return;
+        setInspectedSpot((prev) => (prev ? { ...prev, loading: false } : null));
+      }
+    },
+    [pushCamera, toast],
+  );
+
   const handlePickSuggestion = async (item: PlaceSuggestion): Promise<void> => {
     setSearchFocused(false);
     setQuery(item.label);
@@ -244,14 +309,16 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     if (!resolved) return;
     if (item.kind === 'ward' && item.wardCode) {
       set({ scope: `ward:${item.wardCode}` });
-      pushCamera({ kind: 'flyTo', lat: resolved.lat, lng: resolved.lng, zoom: 14 });
+      void inspectLocation(resolved.lat, resolved.lng, item.label, 14.5);
     } else {
       if (resolved.wardCode) set({ scope: 'city' });
-      pushCamera({ kind: 'flyTo', lat: resolved.lat, lng: resolved.lng, zoom: 17 });
+      void inspectLocation(resolved.lat, resolved.lng, resolved.label, 17);
     }
   };
 
   const resetAllFilters = (): void => {
+    inspectAbortRef.current?.abort();
+    setInspectedSpot(null);
     setCats([]);
     setStatusFilter('all');
     setRadius(null);
@@ -540,6 +607,10 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
           }}
           onLocate={() => void locateMe()}
           locating={gps.status === 'locating'}
+          selectedPin={inspectedSpot ? { lat: inspectedSpot.lat, lng: inspectedSpot.lng, label: inspectedSpot.label } : null}
+          onMapClick={(lat, lng) => {
+            void inspectLocation(lat, lng);
+          }}
           onViewportChange={onViewportChange}
           showArterials
           showFitCityButton
@@ -547,6 +618,66 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
           className={className ?? 'h-[62dvh]'}
           ariaLabel={ariaLabel ?? t('map.aria')}
         />
+      )}
+
+      {/* Thẻ địa chỉ chi tiết khi bấm vào bản đồ hoặc chọn kết quả tìm kiếm */}
+      {inspectedSpot && (
+        <div
+          className="rounded-2xl border border-brand/25 bg-surface px-3.5 py-3 shadow-sm"
+          role="region"
+          aria-label="Địa chỉ vị trí đã chọn"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-start gap-2.5">
+              <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-rose-500/12 text-rose-600">
+                <MapPinned className="h-4 w-4" aria-hidden />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <p className="text-sm font-extrabold text-ink">{inspectedSpot.label}</p>
+                  {inspectedSpot.wardName && (
+                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-bold text-brand">
+                      {inspectedSpot.wardName}
+                    </span>
+                  )}
+                  {inspectedSpot.arterialName && (
+                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-bold text-amber-800 dark:text-amber-200">
+                      {inspectedSpot.arterialName}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted">
+                  {inspectedSpot.loading ? 'Đang tra cứu số nhà, tên đường…' : inspectedSpot.address}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                inspectAbortRef.current?.abort();
+                setInspectedSpot(null);
+              }}
+              aria-label="Đóng địa chỉ đang xem"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted hover:bg-surface-2 hover:text-ink"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-2 pl-10">
+            <p className="font-mono text-[11px] text-muted">
+              {inspectedSpot.lat.toFixed(6)}, {inspectedSpot.lng.toFixed(6)}
+            </p>
+            <a
+              href={googleMapsPlaceUrl(inspectedSpot.lat, inspectedSpot.lng)}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-soft !min-h-8 !px-3 !text-xs"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+              {t('map.openGoogleMaps')}
+            </a>
+          </div>
+        </div>
       )}
 
       {/* Chú giải mức ưu tiên & tổng số phản ánh */}
