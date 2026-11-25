@@ -1,12 +1,16 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  Cloud,
+  CloudLightning,
   CloudRain,
+  CloudSun,
   Compass,
+  Droplets,
   ExternalLink,
-  Flame,
   Layers,
   MapPin,
+  Newspaper,
   Pencil,
   Plus,
   RefreshCw,
@@ -14,8 +18,11 @@ import {
   Search,
   ShieldAlert,
   Sparkles,
+  Sun,
+  Thermometer,
   ThumbsUp,
   Trash2,
+  Umbrella,
   Wind,
   X,
 } from 'lucide-react';
@@ -35,8 +42,56 @@ import { useI18n } from '../i18n';
 import { api } from '../lib/api';
 import { fastFetch } from '../lib/swrCache';
 import { useSession } from '../lib/authStore';
+import {
+  buildFallbackWeather,
+  fetchDongNaiWeather,
+  type DongNaiWeather,
+  type WeatherKind,
+} from '../lib/weather';
+import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
 import { Spinner } from '../components/ui';
+
+function WeatherGlyph({ kind, className = 'h-6 w-6' }: { kind: WeatherKind; className?: string }) {
+  switch (kind) {
+    case 'sun':
+      return <Sun className={`${className} text-amber-300`} aria-hidden />;
+    case 'partlyCloudy':
+      return <CloudSun className={`${className} text-amber-200`} aria-hidden />;
+    case 'cloud':
+      return <Cloud className={`${className} text-sky-200`} aria-hidden />;
+    case 'rain':
+      return <CloudRain className={`${className} text-sky-300`} aria-hidden />;
+    case 'heavyRain':
+      return <Umbrella className={`${className} text-cyan-300`} aria-hidden />;
+    case 'storm':
+      return <CloudLightning className={`${className} text-yellow-300`} aria-hidden />;
+  }
+}
+
+function WeatherGlyphInk({ kind, className = 'h-5 w-5' }: { kind: WeatherKind; className?: string }) {
+  switch (kind) {
+    case 'sun':
+      return <Sun className={`${className} text-amber-500`} aria-hidden />;
+    case 'partlyCloudy':
+      return <CloudSun className={`${className} text-amber-500`} aria-hidden />;
+    case 'cloud':
+      return <Cloud className={`${className} text-slate-500`} aria-hidden />;
+    case 'rain':
+      return <CloudRain className={`${className} text-sky-600`} aria-hidden />;
+    case 'heavyRain':
+      return <Umbrella className={`${className} text-blue-600`} aria-hidden />;
+    case 'storm':
+      return <CloudLightning className={`${className} text-amber-600`} aria-hidden />;
+  }
+}
+
+function heroSkyGradient(w: DongNaiWeather): string {
+  if (!w.isDay) return 'from-slate-900 via-indigo-950 to-sky-950';
+  if (w.kind === 'storm' || w.kind === 'heavyRain') return 'from-slate-800 via-sky-900 to-cyan-900';
+  if (w.kind === 'rain' || w.kind === 'cloud') return 'from-sky-800 via-blue-800 to-slate-800';
+  return 'from-blue-600 via-sky-600 to-cyan-600';
+}
 
 const WardInspectorDrawer = lazy(() =>
   import('../components/WardInspectorDrawer').then((m) => ({ default: m.WardInspectorDrawer })),
@@ -65,9 +120,35 @@ const COMMON_ARTERIALS = [
 ] as const;
 
 export default function AlertsPage() {
-  const { fmtDate } = useI18n();
+  const { fmtDate, lang } = useI18n();
+  const { settings } = useSettings();
   const session = useSession();
   const toast = useToast();
+
+  const selectedWard = settings.scope.startsWith('ward:')
+    ? WARD_BY_CODE[settings.scope.replace('ward:', '')]
+    : undefined;
+  const forecastCoords = useMemo(
+    () => (selectedWard ? { lat: selectedWard.centerLat, lng: selectedWard.centerLng } : { lat: 10.9465, lng: 106.8235 }),
+    [selectedWard],
+  );
+  const forecastAreaName = selectedWard ? selectedWard.name : 'Toàn TP. Đồng Nai';
+
+  const [forecast, setForecast] = useState<DongNaiWeather>(() =>
+    buildFallbackWeather(forecastCoords.lat, forecastCoords.lng, lang),
+  );
+  const [forecastLoading, setForecastLoading] = useState(true);
+
+  const loadForecast = useCallback(async () => {
+    setForecastLoading(true);
+    const data = await fetchDongNaiWeather(forecastCoords.lat, forecastCoords.lng, lang);
+    setForecast(data);
+    setForecastLoading(false);
+  }, [forecastCoords.lat, forecastCoords.lng, lang]);
+
+  useEffect(() => {
+    void loadForecast();
+  }, [loadForecast]);
 
   const role = session?.user ? normalizeRole(session.user.role) : null;
   const isStaffOrRescue = role === 'admin' || role === 'officer' || role === 'rescue';
@@ -440,54 +521,227 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      {/* Thanh Thời tiết & Lượng mưa thực tế Đồng Nai (Open-Meteo) */}
-      <section aria-label="Thời tiết và lượng mưa thực tế Đồng Nai" className="card p-3.5">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-brand">
-            <CloudRain className="h-4 w-4" aria-hidden />
-            <span>Khí tượng & Lượng mưa Thực tế Đồng Nai (Open-Meteo)</span>
-          </div>
-          <span className="text-[11px] text-muted">
-            {weatherSyncAt ? `Cập nhật lúc: ${fmtDate(weatherSyncAt, true)}` : 'Chưa có snapshot'}
-          </span>
-        </div>
-        {weather.length === 0 ? (
-          <p className="text-xs text-muted">
-            {loading
-              ? 'Đang tải dữ liệu khí tượng Open-Meteo…'
-              : 'Chưa nhận được dữ liệu từ Open-Meteo. Hệ thống sẽ tự cập nhật lại ở chu kỳ kế tiếp.'}
-          </p>
-        ) : (
-          <div className="flex gap-2.5 overflow-x-auto pb-1">
-            {weather.map((w) => (
-              <button
-                key={w.regionKey}
-                type="button"
-                onClick={() => setInspectWardCode(w.wardCode)}
-                className={`min-w-[11.5rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors hover:border-brand/40 ${
-                  w.isHazard
-                    ? 'border-rose-500/40 bg-rose-500/10'
-                    : 'border-line bg-surface-2/75'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
-                  <span className="mono text-xs font-extrabold text-brand">{w.temperatureC}°C</span>
+      {/* ── Giao diện Dự báo Thời tiết chi tiết (Weather App + Điểm đo Open-Meteo Đồng Nai) ── */}
+      {(() => {
+        const allTemps = forecast.daily.flatMap((d) => [d.tempMin, d.tempMax]);
+        const weekMin = Math.min(...allTemps, 20);
+        const weekMax = Math.max(...allTemps, 36);
+        const tempSpan = Math.max(1, weekMax - weekMin);
+        const uvLabel =
+          forecast.uvIndex >= 8
+            ? 'Rất cao'
+            : forecast.uvIndex >= 6
+              ? 'Cao'
+              : forecast.uvIndex >= 3
+                ? 'Trung bình'
+                : 'Thấp';
+        const floodRisk =
+          forecast.rainNow >= 5 || forecast.rainProbNow >= 70 || alerts.filter((a) => a.category === 'disaster').length >= 2
+            ? 'Cao — Đề phòng ngập'
+            : forecast.rainProbNow >= 45 || alerts.some((a) => a.category === 'disaster')
+              ? 'Trung bình'
+              : 'Thấp';
+
+        return (
+          <div className="space-y-4">
+            <section
+              aria-label="Dự báo thời tiết hiện tại Đồng Nai"
+              className={`relative overflow-hidden rounded-[1.75rem] bg-gradient-to-br ${heroSkyGradient(forecast)} p-5 text-white shadow-lift sm:p-6`}
+            >
+              <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden />
+              <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
+                      <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      <span>{forecastAreaName}</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
+                      <span className={`h-2 w-2 rounded-full ${forecast.source === 'live' ? 'bg-emerald-400' : 'bg-amber-300'}`} aria-hidden />
+                      <span>{forecast.source === 'live' ? 'Open-Meteo Trực tiếp' : 'Dữ liệu dự phòng'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void loadForecast()}
+                      disabled={forecastLoading}
+                      className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/20"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${forecastLoading ? 'animate-spin' : ''}`} aria-hidden />
+                      Làm mới
+                    </button>
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-4">
+                    <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl border border-white/20 bg-white/15 backdrop-blur-md sm:h-20 sm:w-20">
+                      <WeatherGlyph kind={forecast.kind} className="h-10 w-10 sm:h-12 sm:w-12" />
+                    </div>
+                    <div>
+                      <div className="flex items-baseline gap-2.5">
+                        <span className="mono text-4xl font-extrabold tracking-tight sm:text-5xl">{forecast.temp}°C</span>
+                        <span className="text-sm font-semibold text-white/85">
+                          C: {forecast.tempHigh}° · T: {forecast.tempLow}°
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-base font-bold text-white sm:text-lg">
+                        {lang === 'vi' ? forecast.conditionVi : forecast.conditionEn}
+                      </p>
+                      <p className="text-xs text-white/80">
+                        Cảm giác như {forecast.feelsLike}°C · Cập nhật {fmtDate(forecast.fetchedAt, true)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
-                <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                  <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
-                    Mưa: {w.precipitationMm}mm/h
-                  </span>
-                  <span className="inline-flex items-center gap-0.5 text-muted">
-                    <Wind className="h-3 w-3" aria-hidden /> {w.windGustsKmh}km/h
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[27rem]">
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
+                    </p>
+                    <p className="mono mt-1 text-lg font-extrabold">{forecast.humidity}%</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <Umbrella className="h-3.5 w-3.5 text-cyan-200" aria-hidden /> Xác suất mưa
+                    </p>
+                    <p className="mono mt-1 text-lg font-extrabold">
+                      {forecast.rainProbNow}% <span className="text-xs font-medium text-white/75">({forecast.rainNow}mm)</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Sức gió
+                    </p>
+                    <p className="mono mt-1 text-lg font-extrabold">{forecast.windSpeed} km/h</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
+                    </p>
+                    <p className="mono mt-1 text-lg font-extrabold">
+                      {forecast.uvIndex} <span className="text-xs font-semibold text-white/85">{uvLabel}</span>
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <Cloud className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Mây che phủ
+                    </p>
+                    <p className="mono mt-1 text-lg font-extrabold">{forecast.cloudCover}%</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/80">
+                      <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
+                    </p>
+                    <p className="mt-1 text-xs font-extrabold sm:text-sm">{floodRisk}</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Dự báo theo giờ (12h) & Dự báo 5 ngày */}
+            <div className="grid gap-4 lg:grid-cols-12">
+              <section className="card p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
+                    <Compass className="h-4 w-4 text-brand" aria-hidden /> Dự báo theo giờ (12 giờ tới)
+                  </h2>
+                  <span className="text-[11px] font-semibold text-muted">{forecastAreaName}</span>
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {forecast.hourly.map((pt, idx) => (
+                    <div
+                      key={pt.timeIso}
+                      className={`flex min-w-[4.5rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2.5 text-center ${
+                        idx === 0 ? 'border-brand/35 bg-brand-soft/75' : 'border-line/70 bg-surface-2/60'
+                      }`}
+                    >
+                      <span className="mono text-[11px] font-bold text-muted">{pt.hourLabel}</span>
+                      <WeatherGlyphInk kind={pt.kind} className="h-6 w-6" />
+                      <span className="mono text-sm font-extrabold text-ink">{pt.temp}°</span>
+                      <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                        <Droplets className="h-3 w-3" aria-hidden />
+                        {pt.rainProb}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="card p-4 lg:col-span-5" aria-label="Dự báo 5 ngày tới">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
+                    <Thermometer className="h-4 w-4 text-brand" aria-hidden /> Dự báo 5 ngày tới
+                  </h2>
+                  <span className="text-[11px] font-semibold text-muted">Nhiệt độ & Mưa</span>
+                </div>
+                <div className="divide-y divide-line/60">
+                  {forecast.daily.map((d) => {
+                    const leftPct = ((d.tempMin - weekMin) / tempSpan) * 100;
+                    const widthPct = Math.max(10, ((d.tempMax - d.tempMin) / tempSpan) * 100);
+                    return (
+                      <div key={d.dateIso} className="flex items-center gap-2.5 py-2 first:pt-0 last:pb-0">
+                        <span className="w-20 shrink-0 text-xs font-bold text-ink">{d.dayLabel}</span>
+                        <WeatherGlyphInk kind={d.kind} className="h-5 w-5 shrink-0" />
+                        <span className="mono w-9 shrink-0 text-right text-[11px] font-semibold text-sky-700 dark:text-sky-300">
+                          {d.rainProbMax}%
+                        </span>
+                        <span className="mono w-7 shrink-0 text-right text-xs font-semibold text-muted">{d.tempMin}°</span>
+                        <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                          <div
+                            className="absolute inset-y-0 rounded-full bg-gradient-to-r from-sky-400 via-amber-400 to-orange-500"
+                            style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                          />
+                        </div>
+                        <span className="mono w-7 shrink-0 text-xs font-extrabold text-ink">{d.tempMax}°</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+
+            {/* Thanh Thời tiết các khu vực trọng điểm Đồng Nai */}
+            {weather.length > 0 && (
+              <section aria-label="Thời tiết và lượng mưa các khu vực Đồng Nai" className="card p-3.5">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-brand">
+                    <CloudRain className="h-4 w-4" aria-hidden />
+                    <span>Trạm đo Khí tượng các khu vực Đồng Nai</span>
+                  </div>
+                  <span className="text-[11px] text-muted">
+                    {weatherSyncAt ? `Đồng bộ lúc: ${fmtDate(weatherSyncAt, true)}` : ''}
                   </span>
                 </div>
-              </button>
-            ))}
+                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                  {weather.map((w) => (
+                    <button
+                      key={w.regionKey}
+                      type="button"
+                      onClick={() => setInspectWardCode(w.wardCode)}
+                      className={`min-w-[11.5rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors hover:border-brand/40 ${
+                        w.isHazard ? 'border-rose-500/40 bg-rose-500/10' : 'border-line bg-surface-2/75'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
+                        <span className="mono text-xs font-extrabold text-brand">{w.temperatureC}°C</span>
+                      </div>
+                      <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
+                      <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                        <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
+                          Mưa: {w.precipitationMm}mm/h
+                        </span>
+                        <span className="inline-flex items-center gap-0.5 text-muted">
+                          <Wind className="h-3 w-3" aria-hidden /> {w.windGustsKmh}km/h
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
-        )}
-      </section>
+        );
+      })()}
 
       {/* Cached Daily AI Digest (DB Cache ONLY) */}
       {digest && digest.bullets.length > 0 && (
@@ -867,30 +1121,36 @@ export default function AlertsPage() {
               })
             )}
 
-            {/* Thông báo chính thống gần nhất (Bulletins) */}
+            {/* Thông báo chính thống & Bản tin Thời tiết dạng bài báo */}
             {filteredBulletins.length > 0 && (
-              <div className="space-y-2 pt-2">
-                <h2 className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-muted">
-                  <Flame className="h-3.5 w-3.5 text-brand" aria-hidden />
-                  Bản tin Chính thống Đồng Nai mới nhất ({filteredBulletins.length})
+              <div className="space-y-2.5 pt-2">
+                <h2 className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-ink">
+                  <Newspaper className="h-4 w-4 text-brand" aria-hidden />
+                  Bản tin Thời tiết & Cảnh báo Chính thống ({filteredBulletins.length})
                 </h2>
                 {filteredBulletins.map((b) => (
-                  <div key={b.id} className="card space-y-1 border-l-4 border-l-brand p-3">
-                    <div className="flex items-center justify-between text-[11px] text-muted">
-                      <span className="font-bold text-brand">{b.sourceName}</span>
-                      <span>{fmtDate(b.publishedAt, true)}</span>
+                  <article key={b.id} className="card relative overflow-hidden p-4">
+                    <span className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-brand to-brand-2" aria-hidden />
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-0.5 font-bold text-brand">
+                        {b.sourceName}
+                      </span>
+                      <span className="font-medium text-muted">{fmtDate(b.publishedAt, true)}</span>
                     </div>
-                    <p className="text-sm font-bold text-ink">{b.title}</p>
-                    <p className="text-xs leading-relaxed text-muted">{b.cleanSummary}</p>
-                    <a
-                      href={b.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Đọc bài gốc
-                    </a>
-                  </div>
+                    <h3 className="mt-2 text-sm font-extrabold leading-snug text-ink sm:text-base">{b.title}</h3>
+                    <p className="mt-1.5 text-xs leading-relaxed text-muted sm:text-sm">{b.cleanSummary}</p>
+                    <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2">
+                      <span className="text-[11px] font-semibold text-muted">Nguồn chính thống Đồng Nai</span>
+                      <a
+                        href={b.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Đọc bài chi tiết
+                      </a>
+                    </div>
+                  </article>
                 ))}
               </div>
             )}
