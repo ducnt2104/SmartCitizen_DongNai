@@ -348,8 +348,6 @@ export function safeParseStructuredJson<S extends z.ZodTypeAny>(raw: string, sch
   return schema.parse(parsed) as z.output<S>;
 }
 
-let cachedLiveGeminiModel: string | null = null;
-
 /** Chuỗi model Gemini chính thức, ổn định 2026: `gemini-3.8-flash` -> `gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite`. */
 export function resolveGeminiModelChain(
   configuredModel?: string,
@@ -357,7 +355,7 @@ export function resolveGeminiModelChain(
 ): string[] {
   return buildGeminiModelChain(
     configuredModel !== undefined ? configuredModel : env.geminiModel,
-    configuredModel === undefined && !options?.preferFallbackModel ? cachedLiveGeminiModel : null,
+    null,
     options,
   );
 }
@@ -397,8 +395,8 @@ function inferSuggestedOtherLabel(text: string): string {
 
 /**
  * Tạo cấu hình `@google/genai` SDK theo định tuyến key:
- * - Chỉ key Google AI Studio (`AIzaSy*`) mới định tuyến tới Google AI Studio (`generativelanguage.googleapis.com`).
- * - Key dạng `AQ.*`, tag `vertex:` hoặc cấu hình trong `VERTEX_API_KEYS` định tuyến tới Vertex AI (`vertexai: true`).
+ * - Mặc định key `AIzaSy*` và `AQ.*` định tuyến tới Google AI Studio (`generativelanguage.googleapis.com`).
+ * - Chỉ khi có tag `vertex:`, cấu hình `VERTEX_API_KEYS`, hoặc `explicitEndpoint === 'vertex'` mới định tuyến tới Vertex AI (`vertexai: true`).
  */
 export function buildGoogleGenAiClientOptions(
   apiKey: string,
@@ -431,6 +429,7 @@ export class GeminiService {
   private rag: LocalRagService | null = null;
   private ollamaOfflineUntil = 0;
   private localLlmCache: { at: number; value: LocalLlmHealth } | null = null;
+  private cachedLiveGeminiModel: string | null = null;
   lastError: string | null = null;
   lastOkAt: string | null = null;
 
@@ -505,34 +504,61 @@ export class GeminiService {
     timeoutMs: number,
     label: string,
     routingOpts?: {
+      keyId?: string;
       keyFormat?: GeminiKeyFormat;
       preferFallbackModel?: boolean;
       fallbackModel?: string;
     },
   ): Promise<{ text: string; modelUsed: string }> {
-    const models = resolveGeminiModelChain(undefined, {
-      preferFallbackModel: routingOpts?.preferFallbackModel,
-      fallbackModel: routingOpts?.fallbackModel,
-    });
-    const { text, modelUsed } = await executeGeminiWithModelFallback({
-      apiKey,
-      geminiEndpoint: geminiEndpoint ?? 'ai_studio',
-      keyFormat: routingOpts?.keyFormat,
-      models,
-      contents: (modelId: string) => buildParams(modelId).contents,
-      config: (modelId: string) => (buildParams(modelId).config ?? {}) as GeminiRestConfig,
-      timeoutMs: Math.min(timeoutMs, 8_000),
-      label,
-      onModelNotFound: (modelId: string) => {
-        console.warn(`[ai] Model "${modelId}" trả 404, tự động chuyển sang model dự phòng kế tiếp trên cùng key...`);
+    const preferFallback =
+      Boolean(routingOpts?.preferFallbackModel) || this.keyPool.isPrimaryModelOverloaded();
+    const models = buildGeminiModelChain(
+      env.geminiModel,
+      preferFallback ? null : this.cachedLiveGeminiModel,
+      {
+        preferFallbackModel: preferFallback,
+        fallbackModel: routingOpts?.fallbackModel,
       },
-      onModelSuccess: (modelId: string) => {
-        if (!routingOpts?.preferFallbackModel) {
-          cachedLiveGeminiModel = modelId;
-        }
-      },
-    });
-    return { text, modelUsed };
+    );
+    const runWithModels = (modelList: string[], fallbackOn503: boolean) =>
+      executeGeminiWithModelFallback({
+        apiKey,
+        geminiEndpoint: geminiEndpoint ?? 'ai_studio',
+        keyFormat: routingOpts?.keyFormat,
+        models: modelList,
+        contents: (modelId: string) => buildParams(modelId).contents,
+        config: (modelId: string) => (buildParams(modelId).config ?? {}) as GeminiRestConfig,
+        timeoutMs: Math.min(timeoutMs, 8_000),
+        label,
+        fallbackModelOn503: fallbackOn503,
+        onModelNotFound: (modelId: string) => {
+          console.warn(`[ai] Model "${modelId}" không khả dụng, tự động chuyển sang model dự phòng kế tiếp trên cùng key...`);
+        },
+        onModelSuccess: (modelId: string, endpoint: GeminiEndpointKind) => {
+          this.cachedLiveGeminiModel = modelId;
+          if (routingOpts?.keyId && endpoint !== geminiEndpoint) {
+            this.keyPool.updateResolvedEndpoint(routingOpts.keyId, endpoint);
+          }
+        },
+      });
+
+    try {
+      const { text, modelUsed } = await runWithModels(models, false);
+      return { text, modelUsed };
+    } catch (err) {
+      const st = err && typeof err === 'object' && 'status' in err ? Number((err as { status?: unknown }).status) : 0;
+      if (st === 503 && !preferFallback && this.keyPool.countHealthyKeys('gemini') <= 1) {
+        this.cachedLiveGeminiModel = null;
+        const fallbackModels = buildGeminiModelChain(env.geminiModel, null, {
+          preferFallbackModel: true,
+          fallbackModel: routingOpts?.fallbackModel,
+        });
+        const { text, modelUsed } = await runWithModels(fallbackModels, true);
+        this.keyPool.markPrimaryModelOverloaded();
+        return { text, modelUsed };
+      }
+      throw err;
+    }
   }
 
   async checkLocalLlmHealth(): Promise<LocalLlmHealth> {
@@ -880,6 +906,7 @@ export class GeminiService {
               8_000,
               'Gemini TacticalBriefing',
               {
+                keyId: meta.id,
                 keyFormat: meta.keyFormat,
                 preferFallbackModel: meta.preferFallbackModel,
                 fallbackModel: meta.fallbackModel,
@@ -2011,6 +2038,7 @@ export class GeminiService {
               8_000,
               'Gemini Chat',
               {
+                keyId: meta.id,
                 keyFormat: meta.keyFormat,
                 preferFallbackModel: meta.preferFallbackModel,
                 fallbackModel: meta.fallbackModel,
@@ -2191,6 +2219,7 @@ export class GeminiService {
               8_000,
               'Gemini BulletinClassify',
               {
+                keyId: meta.id,
                 keyFormat: meta.keyFormat,
                 preferFallbackModel: meta.preferFallbackModel,
                 fallbackModel: meta.fallbackModel,
@@ -2327,6 +2356,7 @@ export class GeminiService {
               8_000,
               'Gemini DailyDigest',
               {
+                keyId: meta.id,
                 keyFormat: meta.keyFormat,
                 preferFallbackModel: meta.preferFallbackModel,
                 fallbackModel: meta.fallbackModel,

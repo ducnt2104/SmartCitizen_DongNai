@@ -196,6 +196,7 @@ export class VisionAnalyzerService {
     mimeType: string,
     userPrompt: string,
     routingOpts?: {
+      keyId?: string;
       keyFormat?: GeminiKeyFormat;
       preferFallbackModel?: boolean;
       fallbackModel?: string;
@@ -260,16 +261,18 @@ export class VisionAnalyzerService {
       }
     }
 
+    const preferFallback =
+      Boolean(routingOpts?.preferFallbackModel) || this.keyPool.isPrimaryModelOverloaded();
     const models = buildGeminiModelChain(env.geminiFastModel, null, {
-      preferFallbackModel: routingOpts?.preferFallbackModel,
+      preferFallbackModel: preferFallback,
       fallbackModel: routingOpts?.fallbackModel,
     });
-    const execGemini = () =>
+    const execGemini = (modelList: string[], fallbackOn503: boolean) =>
       executeGeminiWithModelFallback({
         apiKey,
         geminiEndpoint: geminiEndpoint ?? 'ai_studio',
         keyFormat: routingOpts?.keyFormat,
-        models,
+        models: modelList,
         contents: [
           {
             role: 'user',
@@ -288,18 +291,30 @@ export class VisionAnalyzerService {
         },
         timeoutMs: REQUEST_TIMEOUT_MS,
         label: 'Stage1 VisionAnalyzer',
+        fallbackModelOn503: fallbackOn503,
         onModelNotFound: (modelId) => {
-          console.warn(`[ai] Stage1 Vision model "${modelId}" trả 404, chuyển sang model dự phòng kế tiếp trên cùng key...`);
+          console.warn(`[ai] Stage1 Vision model "${modelId}" không khả dụng, chuyển sang model dự phòng kế tiếp trên cùng key...`);
+        },
+        onModelSuccess: (_modelId, endpoint) => {
+          if (routingOpts?.keyId && endpoint !== geminiEndpoint) {
+            this.keyPool.updateResolvedEndpoint(routingOpts.keyId, endpoint);
+          }
         },
       }).then((r) => ({ text: r.text, modelUsed: r.modelUsed }));
 
     try {
-      return await execGemini();
+      return await execGemini(models, false);
     } catch (err) {
       const st = err && typeof err === 'object' && 'status' in err ? Number((err as { status?: unknown }).status) : 0;
       if (st === 503 && this.keyPool.countHealthyKeys('gemini') <= 1) {
         await new Promise((r) => setTimeout(r, 120));
-        return execGemini();
+        const fallbackModels = buildGeminiModelChain(env.geminiFastModel, null, {
+          preferFallbackModel: true,
+          fallbackModel: routingOpts?.fallbackModel,
+        });
+        const recovered = await execGemini(fallbackModels, true);
+        this.keyPool.markPrimaryModelOverloaded();
+        return recovered;
       }
       throw err;
     }
@@ -396,6 +411,7 @@ export class VisionAnalyzerService {
             mimeType,
             userPrompt,
             {
+              keyId: meta.id,
               keyFormat: meta.keyFormat,
               preferFallbackModel: meta.preferFallbackModel,
               fallbackModel: meta.fallbackModel,

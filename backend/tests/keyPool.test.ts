@@ -320,9 +320,10 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
       const pool = new KeyPoolManager({
         persistenceMode: 'memory',
         envSource: {
-          GEMINI_API_KEYS: 'AIzaSyTestStudioKey_001,AQ.Ab8RN6TestVertexKey_002',
+          GEMINI_API_KEYS: 'AIzaSyTestStudioKey_001,vertex:AQ.Ab8RN6TestVertexKey_002',
           GEMINI_MODEL: 'gemini-3.8-flash',
         },
+        fallbackOn503Threshold: 3,
         retry503JitterMaxMs: 0,
         sleepFn: async (ms) => {
           sleepSpy.push(ms);
@@ -353,7 +354,7 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
       expect(requests[0].body.generation_config.thinking_level).toBe('low');
       expect(requests[0].body.generation_config.temperature).toBeUndefined();
 
-      // Key #2 (AQ.*) định tuyến sang Vertex AI Express và gặp 404 ở 3.8-flash -> chuyển sang 3.5-flash-lite trên CÙNG Key #2
+      // Key #2 (vertex:AQ.*) định tuyến sang Vertex AI Express và gặp 404 ở 3.8-flash -> chuyển sang 3.5-flash-lite trên CÙNG Key #2
       expect(requests[1].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:generateContent');
       expect(requests[1].url).toContain('key=AQ.Ab8RN6TestVertexKey_002');
       expect(requests[2].url).toContain('aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.5-flash-lite:generateContent');
@@ -554,5 +555,130 @@ describe('Cloud AI Routing & Fallback Chain (AIzaSy AI Studio, AQ.* Vertex, 404 
     expect(triedModels).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']);
     const snap = await pool.listMaskedKeys();
     expect(snap.keys[0].status).toBe('HEALTHY');
+  });
+
+  it('AQ.* trong GEMINI_API_KEYS chạy AI Studio, tự phục hồi key DB từng dính lỗi SERVICE_DISABLED và hạ cấp 503 khi chỉ còn 1 key', async () => {
+    const { encryptApiKey, KeyPoolManager } = await import('../src/services/keyPool');
+    const { GeminiService } = await import('../src/services/gemini.service');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-kp-aq-heal-'));
+    const secret = 'test-heal-encryption-secret-32-bytes-ok!';
+    const enc = encryptApiKey('AQ.Ab8RN6PersistedStudioKey0001', secret);
+    fs.writeFileSync(
+      path.join(tmpDir, 'api_keys.encrypted.json'),
+      JSON.stringify([
+        {
+          keyId: 'ak_old_misrouted_aq',
+          label: 'Old AQ Key',
+          provider: 'gemini',
+          geminiEndpoint: 'vertex',
+          encryptedKey: enc.encryptedKey,
+          iv: enc.iv,
+          authTag: enc.authTag,
+          keyFingerprint: enc.keyFingerprint,
+          maskedKey: enc.maskedKey,
+          weight: 1,
+          isEnabled: true,
+          status: 'INVALID',
+          totalRequests: 1,
+          successCount: 0,
+          errorCount: 1,
+          error429Count: 0,
+          consecutive429: 0,
+          lastUsedAt: null,
+          cooldownUntil: null,
+          dailyQuotaExhaustedAt: null,
+          quotaResetAt: null,
+          lastError: 'VertexAI(gemini-3.8-flash) HTTP 403 PERMISSION_DENIED SERVICE_DISABLED [CHƯA_BẬT_API]: Agent Platform API has not been used in project 123',
+          addedBy: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+      'utf8',
+    );
+
+    const prevFetch = globalThis.fetch;
+    const prevAllowCloud = process.env.ALLOW_CLOUD_AI_FALLBACK;
+    process.env.ALLOW_CLOUD_AI_FALLBACK = 'true';
+    const seenCalls: Array<{ url: string; model: string; key: string | null }> = [];
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes('googleapis.com')) return prevFetch(input, init);
+      const headers = new Headers(init?.headers);
+      const body = JSON.parse(String(init?.body ?? '{}')) as { model?: string };
+      seenCalls.push({ url, model: body.model ?? '', key: headers.get('x-goog-api-key') });
+
+      if (body.model === 'gemini-3.8-flash') {
+        return new Response(
+          JSON.stringify({ error: { code: 'service_unavailable', message: 'gemini-3.8-flash is currently experiencing high demand' } }),
+          { status: 503 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: 'int_single_503_recovered',
+          status: 'completed',
+          steps: [
+            {
+              type: 'model_output',
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    riskSummary: 'Ngập cục bộ tại nút giao cần đặt biển cảnh báo.',
+                    equipmentAndCrew: '01 Tổ Thoát nước đô thị.',
+                    safetyWarning: 'Kiểm tra hố ga trước khi tiếp cận.',
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const pool = new KeyPoolManager({
+        dataDir: tmpDir,
+        encryptionSecret: secret,
+        envSource: {},
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      });
+      await pool.init();
+      const healedSnap = await pool.listMaskedKeys();
+      expect(healedSnap.keys).toHaveLength(1);
+      expect(healedSnap.keys[0].status).toBe('HEALTHY');
+      expect(healedSnap.keys[0].geminiEndpoint).toBe('ai_studio');
+
+      const svc = new GeminiService(pool);
+      const b1 = await svc.generateTacticalBriefing({
+        category: 'ngap_nuoc',
+        title: 'Ngập nước đường Nguyễn Ái Quốc',
+        severity: 4,
+        forceRefresh: true,
+      });
+      expect(b1.mode).toBe('gemini');
+      expect(seenCalls.map((c) => c.model)).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash-lite']);
+      expect(seenCalls[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
+      expect(seenCalls[0].key).toBe('AQ.Ab8RN6PersistedStudioKey0001');
+
+      // Request kế tiếp tự đi thẳng gemini-3.5-flash-lite vì 3.8-flash đã được ghi nhớ quá tải 503
+      const b2 = await svc.generateTacticalBriefing({
+        category: 'mat_duong',
+        title: 'Ổ gà sâu trên đường Đồng Khởi',
+        severity: 3,
+        forceRefresh: true,
+      });
+      expect(b2.mode).toBe('gemini');
+      expect(seenCalls[2].model).toBe('gemini-3.5-flash-lite');
+    } finally {
+      globalThis.fetch = prevFetch;
+      if (prevAllowCloud === undefined) delete process.env.ALLOW_CLOUD_AI_FALLBACK;
+      else process.env.ALLOW_CLOUD_AI_FALLBACK = prevAllowCloud;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

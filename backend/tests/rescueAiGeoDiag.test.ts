@@ -99,7 +99,6 @@ describe('Zero-Crash AI Brain, Chuẩn hóa GPS, Diagnostics Plugin & Cổng Đ�
 
     expect(buildGoogleGenAiClientOptions('AQ.Ab8RN6J2zkHaPWh_test')).toEqual({
       apiKey: 'AQ.Ab8RN6J2zkHaPWh_test',
-      vertexai: true,
     });
     expect(buildGoogleGenAiClientOptions('AIzaSyTestStandardKey')).toEqual({
       apiKey: 'AIzaSyTestStandardKey',

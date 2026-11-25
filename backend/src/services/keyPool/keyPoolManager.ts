@@ -46,6 +46,7 @@ import {
 
 export const DEFAULT_503_BACKOFF_STEPS_MS: readonly number[] = [500, 1_000, 1_500] as const;
 export const DEFAULT_503_JITTER_MAX_MS = 250;
+export const DEFAULT_MODEL_OVERLOAD_COOLDOWN_MS = 180_000;
 
 export interface KeyPoolLogger {
   info: (msg: string) => void;
@@ -68,6 +69,8 @@ export interface KeyPoolManagerOptions {
   retry503BackoffStepsMs?: readonly number[];
   /** Biên độ Jitter ngẫu nhiên cộng thêm khi backoff 503 (mặc định 250ms). */
   retry503JitterMaxMs?: number;
+  /** Thời gian tạm ưu tiên model dự phòng sau khi model chính bị 503 quá tải (mặc định 180_000ms = 3 phút). */
+  modelOverloadCooldownMs?: number;
   /** Hàm sleep tùy chỉnh để kiểm thử backoff không cần chờ thời gian thật. */
   sleepFn?: (ms: number) => Promise<void>;
   /** Ngưỡng số key liên tiếp gặp 503 để tự động hạ cấp sang fallbackModel (mặc định 3). */
@@ -145,7 +148,10 @@ export class KeyPoolManager {
   private readonly retry503JitterMaxMs: number;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly fallbackOn503Threshold: number;
+  private readonly hasExplicitFallbackThreshold: boolean;
   private readonly fallbackGeminiModel: string;
+  private readonly modelOverloadCooldownMs: number;
+  private readonly overloadedModels = new Map<string, number>();
   private readonly quotaResetTimeZone: string;
   private readonly defaultMaxAttempts: number;
   private readonly nowFn: () => number;
@@ -172,7 +178,12 @@ export class KeyPoolManager {
     this.cooldownStepsMs = options.cooldownStepsMs ?? DEFAULT_COOLDOWN_STEPS_MS;
     this.retry503BackoffStepsMs = options.retry503BackoffStepsMs ?? DEFAULT_503_BACKOFF_STEPS_MS;
     this.retry503JitterMaxMs = Math.max(0, options.retry503JitterMaxMs ?? DEFAULT_503_JITTER_MAX_MS);
+    this.modelOverloadCooldownMs = Math.max(
+      10_000,
+      options.modelOverloadCooldownMs ?? DEFAULT_MODEL_OVERLOAD_COOLDOWN_MS,
+    );
     this.sleepFn = options.sleepFn ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.hasExplicitFallbackThreshold = options.fallbackOn503Threshold !== undefined;
     this.fallbackOn503Threshold = Math.max(1, options.fallbackOn503Threshold ?? 3);
     this.fallbackGeminiModel = normalizeGeminiModelName(
       options.fallbackGeminiModel ?? this.envSource.GEMINI_FALLBACK_MODEL ?? FALLBACK_GEMINI_MODEL,
@@ -341,7 +352,7 @@ export class KeyPoolManager {
     let otherCount = 0;
     for (const k of this.keys.values()) {
       if (k.provider === 'gemini') {
-        if (k.geminiEndpoint === 'ai_studio' && k.keyFormat === 'ai_studio_aiza') {
+        if (k.geminiEndpoint === 'ai_studio') {
           aiStudioCount += 1;
         } else {
           vertexCount += 1;
@@ -493,21 +504,33 @@ export class KeyPoolManager {
                 keyFormat: undefined,
                 formatMismatchWarning: undefined,
               };
-        // Tự động khôi phục các key bị đánh dấu INVALID oan do lỗi 404 model cũ trước đây
+        // Tự động khôi phục các key bị đánh dấu INVALID oan do lỗi 404 model cũ hoặc lỗi định tuyến nhầm AQ.* sang aiplatform trước đây
         const healedFromOld404 =
           row.status === 'INVALID' &&
           Boolean(row.lastError && /\b404\b|not[_ -]?found/i.test(row.lastError));
+        const healedFromMisroutedAqVertex =
+          row.provider === 'gemini' &&
+          routing.keyFormat === 'vertex_aq' &&
+          !/^vertex:/i.test(decrypted.trim()) &&
+          row.geminiEndpoint === 'vertex' &&
+          row.status === 'INVALID' &&
+          Boolean(
+            row.lastError &&
+              /(aiplatform\.googleapis\.com|Agent Platform API|SERVICE_DISABLED|CHƯA_BẬT_API)/i.test(row.lastError),
+          );
+        const healed = healedFromOld404 || healedFromMisroutedAqVertex;
+        const resolvedEndpoint = healedFromMisroutedAqVertex ? 'ai_studio' : routing.geminiEndpoint;
         const registered = this.registerInMemoryKey({
           id: row.keyId,
           rawKey: routing.cleanKey,
           label: row.label,
           provider: row.provider,
-          geminiEndpoint: routing.geminiEndpoint,
+          geminiEndpoint: resolvedEndpoint,
           keyFormat: routing.keyFormat,
           source: 'db',
           weight: row.weight,
           isEnabled: row.isEnabled,
-          status: healedFromOld404 ? 'HEALTHY' : row.status,
+          status: healed ? 'HEALTHY' : row.status,
           totalRequests: row.totalRequests,
           successCount: row.successCount,
           errorCount: row.errorCount,
@@ -519,11 +542,11 @@ export class KeyPoolManager {
             ? Date.parse(row.dailyQuotaExhaustedAt)
             : null,
           quotaResetAt: row.quotaResetAt ? Date.parse(row.quotaResetAt) : null,
-          lastError: healedFromOld404 ? null : row.lastError,
+          lastError: healed ? null : row.lastError,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
         });
-        if (healedFromOld404 && registered) {
+        if (healed && registered) {
           this.persistRecordStateAsync(registered);
         }
       } catch (err) {
@@ -563,6 +586,7 @@ export class KeyPoolManager {
 
     const updateFields = {
       label: record.label,
+      geminiEndpoint: record.geminiEndpoint,
       weight: record.weight,
       isEnabled: record.isEnabled,
       status: record.status,
@@ -792,11 +816,36 @@ export class KeyPoolManager {
     return baseMs + jitter;
   }
 
+  /** Kiểm tra xem model chính có đang trong thời gian tạm hạ cấp do 503 Overloaded diện rộng hay không. */
+  isPrimaryModelOverloaded(modelId = this.defaultGeminiModel): boolean {
+    const until = this.overloadedModels.get(modelId);
+    if (!until) return false;
+    if (this.nowFn() >= until) {
+      this.overloadedModels.delete(modelId);
+      return false;
+    }
+    return true;
+  }
+
+  /** Đánh dấu model đang gặp quá tải 503 tạm thời để các request tiếp theo đi thẳng sang `fallbackModel`. */
+  markPrimaryModelOverloaded(modelId = this.defaultGeminiModel): void {
+    this.overloadedModels.set(modelId, this.nowFn() + this.modelOverloadCooldownMs);
+  }
+
+  /** Cập nhật endpoint thực tế đã phản hồi thành công (vd: key AQ.* fallback từ Vertex về AI Studio). */
+  updateResolvedEndpoint(keyId: string, endpoint: GeminiEndpointKind): void {
+    const record = this.keys.get(keyId);
+    if (!record || record.provider !== 'gemini' || record.geminiEndpoint === endpoint) return;
+    record.geminiEndpoint = endpoint;
+    record.updatedAt = new Date(this.nowFn()).toISOString();
+    this.persistRecordStateAsync(record);
+  }
+
   /**
    * Thực thi hàm gọi AI với cơ chế tự động xoay vòng Key:
    * - Gặp 429: Cooldown theo bậc (1m -> 3m -> 10m) hoặc EXHAUSTED tới 00:00 và xoay sang key kế tiếp.
    * - Gặp 503 Overloaded: Cooldown 60s + Exponential Backoff kèm Jitter trước khi thử key kế tiếp;
-   *   nếu >= 3 key liên tiếp gặp 503 trên model chính thì tự động hạ cấp sang `fallbackModel` cho request đó.
+   *   tự động hạ cấp sang `fallbackModel` khi 503 liên tiếp và ghi nhớ tạm thời để không lãng phí key trên các request kế tiếp.
    * - Gặp 401/403 (Invalid/Revoked/Chưa bật API/Giới hạn IP-Referer): đánh dấu INVALID vĩnh viễn cho phiên chạy và log chi tiết Google API.
    */
   async executeWithRotation<T>(
@@ -818,12 +867,22 @@ export class KeyPoolManager {
       initialHealthyCount,
       Math.max(1, options.maxAttempts ?? this.defaultMaxAttempts),
     );
-    const fallbackThreshold = Math.max(1, options.fallbackOn503Threshold ?? this.fallbackOn503Threshold);
+    const configuredThreshold = Math.max(
+      1,
+      options.fallbackOn503Threshold ?? this.fallbackOn503Threshold,
+    );
+    const hasExplicitThreshold =
+      options.fallbackOn503Threshold !== undefined || this.hasExplicitFallbackThreshold;
+    const fallbackThreshold =
+      !hasExplicitThreshold && initialHealthyCount === 2
+        ? Math.min(configuredThreshold, 1)
+        : configuredThreshold;
     const fallbackModel = normalizeGeminiModelName(options.fallbackModel ?? this.fallbackGeminiModel);
 
     let attempt = 0;
     let consecutive503Count = 0;
-    let preferFallbackModel = false;
+    let preferFallbackModel =
+      !options.forcePrimaryModel && this.isPrimaryModelOverloaded(this.defaultGeminiModel);
     let lastError: unknown;
     let preselected: PoolKeyRecord | null = null;
 
@@ -863,6 +922,9 @@ export class KeyPoolManager {
         candidate.cooldownUntil = null;
         candidate.lastError = null;
         candidate.updatedAt = new Date(finishNow).toISOString();
+        if (preferFallbackModel && consecutive503Count > 0) {
+          this.markPrimaryModelOverloaded(this.defaultGeminiModel);
+        }
         this.persistRecordStateAsync(candidate);
         return result;
       } catch (err) {

@@ -114,6 +114,8 @@ export interface ExecuteWithRotationOptions {
   fallbackOn503Threshold?: number;
   /** Model hạ cấp khi 503 liên tiếp (mặc định "gemini-3.5-flash-lite"). */
   fallbackModel?: string;
+  /** Bỏ qua trạng thái model overloaded đang lưu tạm để ép thử model chính (mặc định false). */
+  forcePrimaryModel?: boolean;
 }
 
 export interface AddApiKeyInputItem {

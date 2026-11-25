@@ -213,7 +213,7 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     expect(fetchCount).toBe(1);
   });
 
-  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép): chỉ AIzaSy* -> AI Studio, AQ.* -> Vertex kèm cảnh báo', async () => {
+  it('4. KeyPool parse đa định dạng (dấu phẩy, xuống dòng, khoảng trắng, dấu ngoặc kép): AIzaSy* & AQ.* trong GEMINI_API_KEYS -> AI Studio, vertex:/VERTEX_API_KEYS -> Vertex', async () => {
     const calledEndpoints: string[] = [];
     const poolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-keypool-vertex-'));
     try {
@@ -223,7 +223,6 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
         '   vertex:AQ.Ab8RN6ExplicitVertexKey22222 ; AIzaSyHealthyStudioKey9876543210000 ',
       ].join(',\n');
 
-      const warnings: string[] = [];
       const pool = new KeyPoolManager({
         dataDir: poolDir,
         encryptionSecret: 'test-secret-32-bytes-minimum-key!!',
@@ -234,7 +233,7 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
         },
         logger: {
           info: () => undefined,
-          warn: (m) => warnings.push(m),
+          warn: () => undefined,
           error: () => undefined,
         },
       });
@@ -242,12 +241,11 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
       const snap = await pool.listMaskedKeys();
       // Đúng 5 key duy nhất sau khi tách đa định dạng và lọc trùng
       expect(snap.summary.totalKeys).toBe(5);
-      // AQ.* phải được phân loại sang Vertex thay vì gán nhầm AI Studio; chỉ AIzaSy* mới là ai_studio
-      expect(snap.keys.find((k) => k.maskedKey.endsWith('2345'))?.geminiEndpoint).toBe('vertex');
+      // AQ.* trong GEMINI_API_KEYS mặc định chạy AI Studio; chỉ vertex: hoặc VERTEX_API_KEYS chạy Vertex AI
+      expect(snap.keys.find((k) => k.maskedKey.endsWith('2345'))?.geminiEndpoint).toBe('ai_studio');
       expect(snap.keys.find((k) => k.maskedKey.endsWith('0000'))?.geminiEndpoint).toBe('ai_studio');
       expect(snap.keys.find((k) => k.maskedKey.endsWith('2222'))?.geminiEndpoint).toBe('vertex');
       expect(snap.keys.find((k) => k.maskedKey.endsWith('3333'))?.geminiEndpoint).toBe('vertex');
-      expect(warnings.some((w) => w.includes('2345'))).toBe(true);
 
       const out = await pool.executeWithRotation(async (apiKey, meta) => {
         if (meta.geminiEndpoint === 'vertex') {
@@ -257,17 +255,18 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
             { status: 403 },
           );
         }
-        if (apiKey.includes('DisabledStudioKey')) {
-          calledEndpoints.push('ai_studio:disabled');
-          throw Object.assign(new Error('403 API_KEY_INVALID: Key revoked'), { status: 403 });
+        if (apiKey.includes('DisabledStudioKey') || apiKey.startsWith('AQ.')) {
+          calledEndpoints.push(`ai_studio:${apiKey.slice(0, 6)}`);
+          if (apiKey.includes('DisabledStudioKey')) {
+            throw Object.assign(new Error('403 API_KEY_INVALID: Key revoked'), { status: 403 });
+          }
         }
         calledEndpoints.push(`ai_studio:${apiKey.slice(0, 6)}`);
         return 'OK_FROM_HEALTHY_AI_STUDIO_KEY';
       });
 
       expect(out).toBe('OK_FROM_HEALTHY_AI_STUDIO_KEY');
-      expect(calledEndpoints.some((e) => e.startsWith('ai_studio:AIzaSy'))).toBe(true);
-      expect(calledEndpoints.some((e) => e.startsWith('vertex:AQ.Ab8'))).toBe(true);
+      expect(calledEndpoints.some((e) => e.startsWith('ai_studio:AQ.Ab8'))).toBe(true);
     } finally {
       fs.rmSync(poolDir, { recursive: true, force: true });
     }

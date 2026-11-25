@@ -45,6 +45,7 @@ async function main(): Promise<void> {
       persistenceMode: 'memory',
       envSource: {
         GEMINI_API_KEYS: rawKeys.join(','),
+        VERTEX_API_KEYS: 'AQ.Ab8RN6MockExplicitVertex_0006',
         GEMINI_MODEL: 'gemini-2.5-flash', // Cố tình truyền model cũ/đã ngừng hỗ trợ để kiểm tra tự chuẩn hóa
       },
       logger: {
@@ -62,12 +63,12 @@ async function main(): Promise<void> {
       'gemini-3.1-flash-lite',
     ]);
     assert.ok(
-      logs.info.some((l) => l.includes('Loaded 5 keys (AI Studio: 2, Vertex: 3)')),
-      `Log khởi động phải phân tách chuẩn AI Studio: 2, Vertex: 3. Thực tế: ${logs.info.join(' | ')}`,
+      logs.info.some((l) => l.includes('Loaded 6 keys (AI Studio: 4, Vertex: 2)')),
+      `Log khởi động phải phân tách chuẩn AI Studio: 4, Vertex: 2. Thực tế: ${logs.info.join(' | ')}`,
     );
     assert.ok(
-      logs.warn.length >= 3,
-      'Phải ghi cảnh báo rõ ràng cho các key AQ.* và định dạng lạ không bắt đầu bằng AIzaSy',
+      logs.warn.length >= 1,
+      'Phải ghi cảnh báo rõ ràng cho key định dạng lạ không bắt đầu bằng AIzaSy hay AQ.',
     );
 
     const allLogs = [...logs.info, ...logs.warn, ...logs.error].join('\n');
@@ -77,9 +78,10 @@ async function main(): Promise<void> {
 
     const snap = await pool.listMaskedKeys();
     assert.equal(snap.keys[0].geminiEndpoint, 'ai_studio');
-    assert.equal(snap.keys[2].geminiEndpoint, 'vertex');
+    assert.equal(snap.keys[2].geminiEndpoint, 'ai_studio');
     assert.equal(snap.keys[4].geminiEndpoint, 'vertex');
-    console.log('✅ [1/4] Phân loại Key (AIzaSy -> AI Studio, AQ.* -> Vertex), chuẩn hóa Model & bảo mật log: PASS');
+    assert.equal(snap.keys[5].geminiEndpoint, 'vertex');
+    console.log('✅ [1/4] Phân loại Key (AIzaSy & AQ.* -> AI Studio, VERTEX_API_KEYS/unknown -> Vertex), chuẩn hóa Model & bảo mật log: PASS');
   }
 
   // 2. Xử lý lỗi 401/403 -> Đánh dấu INVALID vĩnh viễn + Log chi tiết Google API (không xoay lại)

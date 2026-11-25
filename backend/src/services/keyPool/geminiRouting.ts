@@ -169,8 +169,12 @@ export interface ExecuteGeminiChainOptions {
   timeoutMs: number;
   label: string;
   fetchImpl?: typeof fetch;
-  /** Cho phép thử Vertex Express đúng 1 lần nếu key `AQ.*` bị gọi nhầm qua AI Studio và trả về 401/403. */
+  /** Cho phép thử Vertex Express đúng 1 lần nếu key `AQ.*` gọi qua AI Studio trả về 401/403. */
   allowAqVertexFallbackOnAuthError?: boolean;
+  /** Cho phép thử AI Studio đúng 1 lần nếu key `AQ.*` gọi qua Vertex Express trả về 401/403 (`SERVICE_DISABLED`). */
+  allowAqAiStudioFallbackOnAuthError?: boolean;
+  /** Cho phép hạ cấp sang model kế tiếp trong chuỗi ngay trên cùng key khi gặp 503 Overloaded (vd: khi probe/còn 1 key). */
+  fallbackModelOn503?: boolean;
   onModelNotFound?: (modelId: string, err: unknown) => void;
   onModelSuccess?: (modelId: string, endpoint: GeminiEndpointKind) => void;
 }
@@ -279,7 +283,7 @@ export function buildGeminiRestRequest(params: {
   endpointLabel: 'AIStudio' | 'VertexAI';
 } {
   const isOAuthBearer = params.keyFormat === 'oauth_bearer' || params.cleanKey.startsWith('ya29.');
-  const isVertex = params.endpoint === 'vertex' || (!isOAuthBearer && params.cleanKey.startsWith('AQ.'));
+  const isVertex = params.endpoint === 'vertex';
   const resolvedModel = isValidGeminiModel(params.modelId) ? params.modelId.trim() : DEFAULT_GEMINI_MODEL;
   const encodedModel = encodeURIComponent(resolvedModel);
   const cfg = params.config ?? {};
@@ -529,6 +533,16 @@ async function callSingleGeminiRequest(params: {
   }
 }
 
+function isOverloaded503Error(err: unknown): boolean {
+  const st =
+    err && typeof err === 'object' && 'status' in err
+      ? Number((err as { status?: unknown }).status)
+      : 0;
+  if (st === 503) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b503\b|service_unavailable|overloaded|high demand/i.test(msg);
+}
+
 async function runChainOnEndpoint(
   opts: ExecuteGeminiChainOptions,
   cleanKey: string,
@@ -561,7 +575,7 @@ async function runChainOnEndpoint(
       return { text, modelUsed: modelId, endpointUsed: endpoint };
     } catch (err) {
       lastErr = err;
-      if (isModelNotFoundError(err)) {
+      if (isModelNotFoundError(err) || (opts.fallbackModelOn503 && isOverloaded503Error(err))) {
         opts.onModelNotFound?.(modelId, err);
         continue;
       }
@@ -577,9 +591,9 @@ async function runChainOnEndpoint(
 
 /**
  * Thực thi gọi Gemini REST qua chuỗi model dự phòng trên CÙNG một API key khỏe:
- * - Gặp HTTP 404: tự động chuyển sang model kế tiếp trong chuỗi trên cùng key (không đánh dấu key hỏng).
- * - Gặp HTTP 429 / 503: ném lỗi ngay để KeyPool Cooldown + Backoff và xoay key tức thì.
- * - Định tuyến nghiêm ngặt: chỉ `AIzaSy*` mặc định chạy AI Studio; `AQ.*` mặc định chạy Vertex AI Express.
+ * - Gặp HTTP 404 (hoặc 503 khi bật `fallbackModelOn503`): tự động chuyển sang model kế tiếp trong chuỗi trên cùng key.
+ * - Gặp HTTP 429 / 503 (mặc định): ném lỗi ngay để KeyPool Cooldown + Backoff và xoay key tức thì.
+ * - Định tuyến thông minh cho `AQ.*`: thử endpoint chính trước, nếu gặp 401/403 (chưa bật API ở endpoint đó) sẽ thử chéo endpoint còn lại đúng 1 lần.
  */
 export async function executeGeminiWithModelFallback(
   opts: ExecuteGeminiChainOptions,
@@ -587,25 +601,32 @@ export async function executeGeminiWithModelFallback(
   const fetchImpl = opts.fetchImpl ?? fetch;
   const routing = parseGeminiKeyRouting(opts.apiKey, opts.geminiEndpoint ?? 'ai_studio');
   const keyFormat = opts.keyFormat ?? routing.keyFormat;
+  const primaryEndpoint = opts.geminiEndpoint ?? routing.geminiEndpoint;
 
   try {
-    return await runChainOnEndpoint(opts, routing.cleanKey, routing.geminiEndpoint, keyFormat, fetchImpl);
+    return await runChainOnEndpoint(opts, routing.cleanKey, primaryEndpoint, keyFormat, fetchImpl);
   } catch (err) {
-    const canTryVertexOnce =
-      opts.allowAqVertexFallbackOnAuthError !== false &&
-      routing.geminiEndpoint === 'ai_studio' &&
-      /^AQ\./.test(routing.cleanKey) &&
-      isGeminiAuthOrInvalidKeyError(err);
-
-    if (!canTryVertexOnce) {
+    const isAqKey = /^AQ\./.test(routing.cleanKey);
+    if (!isAqKey || !isGeminiAuthOrInvalidKeyError(err)) {
       throw err;
     }
 
-    return await runChainOnEndpoint(opts, routing.cleanKey, 'vertex', keyFormat, fetchImpl);
+    const alternateEndpoint: GeminiEndpointKind | null =
+      primaryEndpoint === 'ai_studio' && opts.allowAqVertexFallbackOnAuthError !== false
+        ? 'vertex'
+        : primaryEndpoint === 'vertex' && opts.allowAqAiStudioFallbackOnAuthError !== false
+          ? 'ai_studio'
+          : null;
+
+    if (!alternateEndpoint) {
+      throw err;
+    }
+
+    return await runChainOnEndpoint(opts, routing.cleanKey, alternateEndpoint, keyFormat, fetchImpl);
   }
 }
 
-/** Kiểm tra trực tiếp một key Gemini (`AIzaSy*` qua AI Studio hoặc `AQ.*`/`ya29.*` qua Vertex/OAuth). */
+/** Kiểm tra trực tiếp một key Gemini (`AIzaSy*`/`AQ.*` qua AI Studio hoặc `vertex:`/`ya29.*` qua Vertex/OAuth). */
 export async function probeGeminiKeyEndpoint(params: {
   apiKey: string;
   geminiEndpoint?: GeminiEndpointKind;
@@ -624,6 +645,7 @@ export async function probeGeminiKeyEndpoint(params: {
     config: { maxOutputTokens: 64, thinkingLevel: 'low' },
     timeoutMs: params.timeoutMs ?? 8_000,
     label: 'KeyPool Probe',
+    fallbackModelOn503: true,
     fetchImpl: params.fetchImpl,
   });
   const endpointLabel = endpointUsed === 'vertex' ? 'Vertex AI' : 'Google AI Studio';

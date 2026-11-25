@@ -78,7 +78,7 @@ export function redactSecretsInText(raw: string): string {
     );
 }
 
-/** Phân loại định dạng key Google Gemini: chỉ `AIzaSy*` là Google AI Studio key chuẩn. */
+/** Phân loại định dạng key Google Gemini (`AIzaSy*` truyền thống, `AQ.*` Google Cloud/AI Studio SA-bound, `ya29.*` OAuth). */
 export function classifyGeminiKeyFormat(rawKey: string): GeminiKeyFormat {
   const clean = rawKey.trim().replace(/^(?:vertex|ai_?studio):\s*/i, '').trim();
   if (clean.startsWith('AIzaSy')) return 'ai_studio_aiza';
@@ -176,10 +176,11 @@ export function decryptApiKey(
 }
 
 /**
- * Phân loại & định tuyến key Google Gemini theo định dạng chuẩn:
- * - Chỉ key bắt đầu bằng `AIzaSy` mới được nhận diện là `ai_studio` (trừ khi có tiền tố `vertex:` hoặc đặt trong `VERTEX_API_KEYS`).
- * - Key dạng `AQ.*` (Vertex AI Express) hoặc `ya29.*` (OAuth token) hoặc định dạng lạ KHÔNG BAO GIỜ gán nhầm vào `ai_studio`:
- *   chúng được định tuyến sang `vertex` và trả kèm `formatMismatchWarning` để cảnh báo rõ ràng lúc khởi động.
+ * Phân loại & định tuyến key Google Gemini theo ngữ cảnh khai báo:
+ * - Tiền tố `vertex:` hoặc đặt trong `VERTEX_API_KEYS` (`defaultEndpoint='vertex'`) -> định tuyến tới `vertex` (`aiplatform.googleapis.com`).
+ * - Tiền tố `ai_studio:` hoặc đặt trong `GEMINI_API_KEYS` (`defaultEndpoint='ai_studio'`) cho cả `AIzaSy*` lẫn `AQ.*` -> định tuyến tới `ai_studio` (`generativelanguage.googleapis.com`).
+ *   (Google AI Studio hiện cấp cả key `AQ.*` gắn Service Account cho `generativelanguage.googleapis.com`; nếu key `AQ.*` chỉ bật Vertex Express, tầng gọi REST sẽ tự fallback 1 lần).
+ * - Token `ya29.*` (OAuth2 tạm thời) hoặc định dạng lạ mặc định định tuyến an toàn sang `vertex` kèm cảnh báo.
  */
 export function parseGeminiKeyRouting(
   rawKey: string,
@@ -204,25 +205,19 @@ export function parseGeminiKeyRouting(
     };
   }
 
-  if (keyFormat === 'ai_studio_aiza') {
+  if (hasExplicitStudio) {
     return {
       cleanKey,
-      geminiEndpoint: hasExplicitStudio ? 'ai_studio' : defaultEndpoint,
+      geminiEndpoint: 'ai_studio',
       keyFormat,
     };
   }
 
-  if (keyFormat === 'vertex_aq') {
+  if (keyFormat === 'ai_studio_aiza' || keyFormat === 'vertex_aq') {
     return {
       cleanKey,
-      geminiEndpoint: 'vertex',
+      geminiEndpoint: defaultEndpoint,
       keyFormat,
-      ...(defaultEndpoint === 'ai_studio'
-        ? {
-            formatMismatchWarning:
-              'Key có tiền tố "AQ." (không phải chuẩn AIzaSy* của Google AI Studio). Tự động định tuyến sang Vertex AI Express endpoint thay vì AI Studio.',
-          }
-        : {}),
     };
   }
 
@@ -241,7 +236,7 @@ export function parseGeminiKeyRouting(
     geminiEndpoint: 'vertex',
     keyFormat,
     formatMismatchWarning:
-      'Định dạng key không bắt đầu bằng "AIzaSy" (AI Studio) hay "AQ." (Vertex Express). Không gán vào AI Studio; vui lòng kiểm tra lại key.',
+      'Định dạng key không bắt đầu bằng "AIzaSy" (AI Studio) hay "AQ." (Google Cloud/Vertex). Không gán mặc định vào AI Studio; vui lòng kiểm tra lại key.',
   };
 }
 
