@@ -11,5 +11,8 @@
     "test": "node ../scripts/render-compat.mjs test backend",
     "seed": "node ../scripts/render-compat.mjs seed backend",
     "start": "node ../scripts/render-compat.mjs start backend"
+  },
+  "devDependencies": {
+    "typescript": "5.7"
   }
 }

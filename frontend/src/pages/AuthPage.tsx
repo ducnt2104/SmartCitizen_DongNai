@@ -151,7 +151,6 @@ export default function AuthPage() {
               </button>
             </form>
             {err && <p role="alert" className="mt-3 rounded border border-red-500/50 bg-red-500/10 p-2 text-sm text-ioc-red">{err}</p>}
-            <p className="mt-3 text-[11px] leading-relaxed text-ioc-dim">{t('auth.staffNote')}</p>
             <Link
               to="/rescue/login"
               className="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg border border-rose-500/50 bg-rose-500/15 px-3 text-xs font-bold text-rose-300 hover:bg-rose-500/25"

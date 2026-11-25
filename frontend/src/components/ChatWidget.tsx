@@ -19,8 +19,7 @@ export function openAssistant(voice = false): void {
 /** Chatbot AI Cộng đồng: SSE streaming, micro vi-VN, đọc to câu trả lời (TTS). */
 export function ChatWidget() {
   const { t, lang } = useI18n();
-  const { settings } = useSettings();
-  const [open, setOpen] = useState(false);
+  const { settings, assistantOpen: open, setAssistantOpen: setOpen } = useSettings();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -47,6 +46,25 @@ export function ChatWidget() {
 
   useEffect(() => () => stopAll(), [stopAll]);
 
+  const close = useCallback(() => {
+    stopAll();
+    setOpen(false);
+  }, [stopAll, setOpen]);
+
+  useEffect(() => {
+    if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, close]);
+
   const toggleListen = useCallback(() => {
     if (listening) {
       stopListenRef.current?.();
@@ -70,7 +88,7 @@ export function ChatWidget() {
     };
     window.addEventListener('sc:open-chat', onOpen);
     return () => window.removeEventListener('sc:open-chat', onOpen);
-  }, [toggleListen]);
+  }, [setOpen, toggleListen]);
 
   const send = useCallback(async (raw: string) => {
     const text = raw.trim();
@@ -112,98 +130,95 @@ export function ChatWidget() {
 
   const chips: Array<Parameters<typeof t>[0]> = ['chat.q1', 'chat.q2', 'chat.q3'];
 
+  if (!open) return null;
+
   return (
-    <>
-      {!open && (
-        <button
-          type="button"
-          data-tour="assistant"
-          onClick={() => setOpen(true)}
-          className="fixed bottom-20 right-3 z-40 inline-flex min-h-14 items-center gap-2 rounded-full bg-brand px-4 text-brand-ink shadow-lift md:bottom-6"
-          aria-label={t('chat.open')}
-        >
-          <Bot className="h-6 w-6" aria-hidden />
-          <span className="font-semibold">{t('chat.fab')}</span>
-        </button>
-      )}
-      {open && (
-        <section
-          className="fixed inset-x-0 bottom-0 z-[1700] flex max-h-[88dvh] min-h-[60dvh] animate-slideup flex-col rounded-t-3xl border border-line bg-surface shadow-lift sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[26rem] sm:rounded-3xl"
-          role="dialog"
-          aria-label={t('chat.title')}
-        >
-          <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-            <Bot className="h-5 w-5 text-brand" aria-hidden />
-            <h2 className="min-w-0 flex-1 truncate font-bold">{t('chat.title')}</h2>
-            <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2" aria-pressed={tts} onClick={() => { setTts((v) => !v); stopSpeaking(); }} aria-label={t('chat.tts')} title={t('chat.tts')}>
-              {tts ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
-            </button>
-            <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2" onClick={() => { stopAll(); setOpen(false); }} aria-label={t('common.close')}>
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+    <div className="fixed inset-0 z-[1700] flex items-end justify-center sm:items-end sm:justify-end sm:p-4">
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-950/45 backdrop-blur-[1px]"
+        onClick={close}
+        aria-label={t('common.close')}
+        tabIndex={-1}
+      />
+      <section
+        className="relative flex max-h-[85dvh] w-full animate-slideup flex-col rounded-t-3xl border border-line bg-surface shadow-lift sm:max-h-[min(80dvh,38rem)] sm:w-[26rem] sm:rounded-3xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('chat.title')}
+      >
+        <div className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-line sm:hidden" aria-hidden />
+        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+          <Bot className="h-5 w-5 shrink-0 text-brand" aria-hidden />
+          <h2 className="min-w-0 flex-1 truncate font-bold">{t('chat.title')}</h2>
+          <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2" aria-pressed={tts} onClick={() => { setTts((v) => !v); stopSpeaking(); }} aria-label={t('chat.tts')} title={t('chat.tts')}>
+            {tts ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+          </button>
+          <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2" onClick={close} aria-label={t('common.close')}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3" aria-live="polite">
-            {msgs.length === 0 && (
-              <div className="rounded-2xl bg-brand-soft p-3 text-sm">
-                <p className="font-semibold text-brand">{t('chat.welcome')}</p>
-                <p className="mt-1 text-ink">{t('chat.welcomeText')}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {chips.map((k) => (
-                    <button key={k} type="button" className="chip" onClick={() => void send(t(k))}>{t(k)}</button>
-                  ))}
-                </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3" aria-live="polite">
+          {msgs.length === 0 && (
+            <div className="rounded-2xl bg-brand-soft p-3 text-sm">
+              <p className="font-semibold text-brand">{t('chat.welcome')}</p>
+              <p className="mt-1 text-ink">{t('chat.welcomeText')}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {chips.map((k) => (
+                  <button key={k} type="button" className="chip" onClick={() => void send(t(k))}>{t(k)}</button>
+                ))}
               </div>
-            )}
-            {msgs.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[15px] ${
-                    m.role === 'user' ? 'bg-brand text-brand-ink' : m.error ? 'border border-danger/40 bg-danger-soft text-danger' : 'bg-surface-2 text-ink'
-                  }`}
-                >
-                  {m.text || <span className="inline-flex gap-1" aria-label={t('chat.thinking')}><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /></span>}
-                  {m.mode === 'fallback' && m.text && !m.error && (
-                    <span className="mt-1 block text-[11px] font-semibold text-warn">{t('ai.fallbackLabel')}</span>
-                  )}
-                </div>
+            </div>
+          )}
+          {msgs.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[15px] ${
+                  m.role === 'user' ? 'bg-brand text-brand-ink' : m.error ? 'border border-danger/40 bg-danger-soft text-danger' : 'bg-surface-2 text-ink'
+                }`}
+              >
+                {m.text || <span className="inline-flex gap-1" aria-label={t('chat.thinking')}><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /></span>}
+                {m.mode === 'fallback' && m.text && !m.error && (
+                  <span className="mt-1 block text-[11px] font-semibold text-warn">{t('ai.fallbackLabel')}</span>
+                )}
               </div>
-            ))}
-            <div ref={endRef} />
-          </div>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
 
-          <form
-            className="flex items-center gap-2 border-t border-line p-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send(input);
-            }}
-          >
-            {speechRecognitionSupported() && (
-              <button type="button" onClick={toggleListen} aria-pressed={listening} className={`btn !min-w-12 !px-0 ${listening ? 'btn-danger animate-ring' : 'btn-ghost'}`} aria-label={listening ? t('chat.micStop') : t('chat.micStart')}>
-                {listening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-              </button>
-            )}
-            <input
-              className="field min-w-0 flex-1"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={listening ? t('chat.listening') : t('chat.placeholder')}
-              maxLength={800}
-              aria-label={t('chat.placeholder')}
-            />
-            {busy ? (
-              <button type="button" className="btn btn-ghost !min-w-12 !px-0" onClick={() => abortRef.current?.abort()} aria-label={t('chat.stop')}>
-                <Square className="h-5 w-5" />
-              </button>
-            ) : (
-              <button type="submit" className="btn btn-primary !min-w-12 !px-0" disabled={!input.trim()} aria-label={t('chat.send')}>
-                <Send className="h-5 w-5" />
-              </button>
-            )}
-          </form>
-        </section>
-      )}
-    </>
+        <form
+          className="flex items-center gap-2 border-t border-line p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send(input);
+          }}
+        >
+          {speechRecognitionSupported() && (
+            <button type="button" onClick={toggleListen} aria-pressed={listening} className={`btn !min-h-11 !min-w-11 !px-0 ${listening ? 'btn-danger animate-ring' : 'btn-ghost'}`} aria-label={listening ? t('chat.micStop') : t('chat.micStart')}>
+              {listening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            </button>
+          )}
+          <input
+            className="field min-w-0 flex-1"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={listening ? t('chat.listening') : t('chat.placeholder')}
+            maxLength={800}
+            aria-label={t('chat.placeholder')}
+          />
+          {busy ? (
+            <button type="button" className="btn btn-ghost !min-h-11 !min-w-11 !px-0" onClick={() => abortRef.current?.abort()} aria-label={t('chat.stop')}>
+              <Square className="h-5 w-5" />
+            </button>
+          ) : (
+            <button type="submit" className="btn btn-primary !min-h-11 !min-w-11 !px-0" disabled={!input.trim()} aria-label={t('chat.send')}>
+              <Send className="h-5 w-5" />
+            </button>
+          )}
+        </form>
+      </section>
+    </div>
   );
 }

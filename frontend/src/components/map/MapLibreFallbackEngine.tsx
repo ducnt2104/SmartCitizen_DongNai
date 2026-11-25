@@ -183,6 +183,15 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         attributionControl: { compact: true },
       });
       map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left');
+      const collapseMobileAttrib = (): void => {
+        if (el.clientWidth >= 640) return;
+        el.querySelectorAll('details.maplibregl-ctrl-attrib[open]').forEach((d) => d.removeAttribute('open'));
+        el.querySelectorAll('.maplibregl-ctrl-attrib.maplibregl-compact-show').forEach((d) =>
+          d.classList.remove('maplibregl-compact-show'),
+        );
+      };
+      requestAnimationFrame(collapseMobileAttrib);
+      map.on('resize', collapseMobileAttrib);
     } catch (err) {
       console.warn('[MapLibre] Thiết bị không hỗ trợ WebGL, kích hoạt khung dự phòng 2D:', err);
       setWebglUnavailable(true);

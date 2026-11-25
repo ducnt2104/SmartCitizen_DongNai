@@ -18,19 +18,19 @@ export function ScopePicker({ dark = false }: { dark?: boolean }) {
   const isCity = settings.scope === 'city';
   const selectedWardCode = settings.scope.startsWith('ward:') ? settings.scope.slice(5) : '';
   const selectedWard = selectedWardCode ? getWard(selectedWardCode) : undefined;
-  const base = dark ? 'ioc-btn' : 'btn btn-ghost !min-h-10 !px-3 !text-sm';
+  const base = dark ? 'ioc-btn' : 'btn btn-ghost !min-h-10 !px-2.5 !text-xs sm:!px-3 sm:!text-sm';
   const active = dark ? 'ioc-btn-cyan' : '!border-brand !bg-brand !text-brand-ink';
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('scope.label')}>
-      <button type="button" aria-pressed={isCity} className={`${base} ${isCity ? active : ''}`} onClick={() => set({ scope: 'city' })}>
-        <Globe2 className="h-4 w-4" aria-hidden />
-        {t('scope.cityAll', { n: cityStats?.total ?? 80 })}
+    <div className="flex w-full flex-wrap items-center gap-1.5" role="group" aria-label={t('scope.label')}>
+      <button type="button" aria-pressed={isCity} className={`${base} ${isCity ? active : ''} max-w-full shrink-0`} onClick={() => set({ scope: 'city' })}>
+        <Globe2 className="h-4 w-4 shrink-0" aria-hidden />
+        <span className="truncate">{t('scope.cityAll', { n: cityStats?.total ?? 80 })}</span>
       </button>
       {selectedWard && (
-        <span className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold ${dark ? 'border border-ioc-cyan/40 bg-ioc-raised text-ioc-cyan' : 'bg-brand-soft text-brand'}`}>
-          <MapPin className="h-3.5 w-3.5" aria-hidden />
-          {selectedWard.name}
+        <span className={`inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold ${dark ? 'border border-ioc-cyan/40 bg-ioc-raised text-ioc-cyan' : 'bg-brand-soft text-brand'}`}>
+          <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="truncate">{selectedWard.name}</span>
         </span>
       )}
       <label className="sr-only" htmlFor="scope-ward">{t('scope.other')}</label>
@@ -38,7 +38,7 @@ export function ScopePicker({ dark = false }: { dark?: boolean }) {
         id="scope-ward"
         value={settings.scope.startsWith('ward:') ? settings.scope : ''}
         onChange={(e) => set({ scope: e.target.value || 'city' })}
-        className={dark ? 'ioc-field' : 'field !min-h-10 !w-auto !px-2.5 !py-1 !text-sm'}
+        className={dark ? 'ioc-field min-w-0' : 'field !h-10 !min-h-10 min-w-0 flex-1 truncate !px-2.5 !py-1 !text-xs sm:w-auto sm:flex-none sm:!text-sm'}
       >
         <option value="">{t('scope.other')}</option>
         <optgroup label={t('scope.groupPhuong')}>
@@ -73,7 +73,7 @@ function UserMenu() {
 
   if (!session) {
     return (
-      <Link to="/auth" className="btn btn-primary !min-h-10 !px-3 !text-sm">
+      <Link to="/auth" aria-label={t('nav.login')} className="btn btn-primary !min-h-9 !min-w-9 !px-2 !text-sm sm:!min-h-10 sm:!min-w-10 sm:!px-3">
         <LogIn className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">{t('nav.login')}</span>
       </Link>
     );
@@ -81,7 +81,7 @@ function UserMenu() {
   const u = session.user;
   return (
     <div className="relative" ref={ref}>
-      <button type="button" className="btn btn-ghost !min-h-10 !px-2" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} aria-label={t('nav.account')}>
+      <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} aria-label={t('nav.account')}>
         <UserRound className="h-5 w-5" aria-hidden />
         <span className="hidden max-w-[8rem] truncate text-sm sm:inline">{u.name}</span>
       </button>
@@ -132,29 +132,31 @@ export function Header({ showScope = true }: { showScope?: boolean }) {
   const { settings, toggleSenior, setDrawerOpen, setTourOpen } = useSettings();
   const nav = useNavigate();
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-surface/95">
-      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
-        <Link to="/" className="min-w-0 shrink" aria-label={t('nav.home')}>
-          <Logo />
-        </Link>
-        <div className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
-            data-tour="senior"
-            aria-pressed={settings.senior}
-            onClick={toggleSenior}
-            className={`btn !min-h-10 !px-3 !text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
-            title={t('senior.toggleHint')}
-          >
-            <span className="font-extrabold">Aa+</span> <span className="hidden sm:inline">{t('senior.toggle')}</span>
-          </button>
-          <button type="button" className="btn btn-ghost !min-h-10 !px-2.5" onClick={() => { nav('/'); setTourOpen(true); }} aria-label={t('tour.open')} title={t('tour.open')}>
-            <CircleHelp className="h-5 w-5" aria-hidden /> <span className="hidden text-sm md:inline">{t('tour.open')}</span>
-          </button>
-          <button type="button" className="btn btn-ghost !min-h-10 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
-            <SettingsIcon className="h-5 w-5" aria-hidden />
-          </button>
-          <UserMenu />
+    <header className="sticky top-0 z-40 border-b border-line bg-surface/95 backdrop-blur-md">
+      <div className="mx-auto flex max-w-5xl flex-col gap-2 px-3 py-2">
+        <div className="flex w-full items-center justify-between gap-2">
+          <Link to="/" className="min-w-0 shrink overflow-hidden" aria-label={t('nav.home')}>
+            <Logo />
+          </Link>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            <button
+              type="button"
+              data-tour="senior"
+              aria-pressed={settings.senior}
+              onClick={toggleSenior}
+              className={`btn !min-h-9 !min-w-9 !px-2 !text-xs sm:!min-h-10 sm:!min-w-10 sm:!px-3 sm:!text-sm ${settings.senior ? 'btn-primary' : 'btn-soft'}`}
+              title={t('senior.toggleHint')}
+            >
+              <span className="font-extrabold">Aa+</span> <span className="hidden sm:inline">{t('senior.toggle')}</span>
+            </button>
+            <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10 sm:!px-2.5" onClick={() => { nav('/'); setTourOpen(true); }} aria-label={t('tour.open')} title={t('tour.open')}>
+              <CircleHelp className="h-5 w-5" aria-hidden /> <span className="hidden text-sm md:inline">{t('tour.open')}</span>
+            </button>
+            <button type="button" className="btn btn-ghost !min-h-9 !min-w-9 !px-2 sm:!min-h-10 sm:!min-w-10" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
+              <SettingsIcon className="h-5 w-5" aria-hidden />
+            </button>
+            <UserMenu />
+          </div>
         </div>
         {showScope && (
           <div className="w-full">

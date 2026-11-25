@@ -8,5 +8,8 @@
     "build": "node ../scripts/render-compat.mjs build frontend",
     "typecheck": "node ../scripts/render-compat.mjs typecheck frontend",
     "test": "node ../scripts/render-compat.mjs test frontend"
+  },
+  "devDependencies": {
+    "typescript": "5.7"
   }
 }
