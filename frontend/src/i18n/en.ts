@@ -297,6 +297,7 @@ export const en: Record<keyof typeof vi, string> = {
   'role.citizen': 'Citizen',
   'role.volunteer': 'Youth Volunteer',
   'role.ward_officer': 'Ward Officer',
+  'role.rescue_team': 'Field Rescue Team',
   'role.city_admin': 'City IOC Admin',
   'role.super_admin': 'Super Administrator',
   'badge.emergency1': 'LEVEL-1 EMERGENCY',

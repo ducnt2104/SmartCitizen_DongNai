@@ -47,6 +47,9 @@ delete cleanEnv.INIT_CWD;
 const argsByAction = {
   install: ['install', '--include=dev'],
   build: ['run', 'build'],
+  typecheck: ['run', 'typecheck'],
+  test: ['run', 'test'],
+  seed: ['run', 'seed'],
   start: ['start'],
 };
 

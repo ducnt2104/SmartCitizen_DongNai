@@ -1,9 +1,22 @@
 import dns from 'node:dns';
+import fs from 'node:fs';
+import path from 'node:path';
 import dotenv from 'dotenv';
 import { performance } from 'node:perf_hooks';
 import mongoose, { type ClientSession, type ConnectOptions } from 'mongoose';
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  for (const candidate of [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../.env'),
+    path.resolve(__dirname, '../../.env'),
+    path.resolve(__dirname, '../../../.env'),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      dotenv.config({ path: candidate, override: false });
+    }
+  }
+}
 
 export type ConnectionStateName =
   | 'disconnected'
@@ -230,8 +243,8 @@ export function buildMongoConnectOptions(uri?: string): ConnectOptions {
     ...(explicitDb ? {} : { dbName: DEFAULT_MONGODB_DB_NAME }),
     maxPoolSize: 20,
     minPoolSize: 5,
-    serverSelectionTimeoutMS: explicitServerSel ?? 10_000,
-    connectTimeoutMS: 10_000,
+    serverSelectionTimeoutMS: explicitServerSel ?? 8_000,
+    connectTimeoutMS: 8_000,
     socketTimeoutMS: 45_000,
     maxIdleTimeMS: 60_000,
     // Ép IPv4 để tránh lỗi DNS/TLS handshake chậm trên container Linux (Render / Docker)
@@ -388,19 +401,28 @@ export async function ensureDatabaseIndexes(): Promise<IndexSyncSummary[]> {
     models.ApiKey,
   ].filter(Boolean);
 
-  const summaries: IndexSyncSummary[] = [];
-  for (const m of targets) {
-    await m.createIndexes();
-    const rawIndexes = await m.collection.indexes().catch(() => []);
-    summaries.push({
-      modelName: m.modelName,
-      collectionName: m.collection.collectionName,
-      indexCount: rawIndexes.length,
-      indexes: rawIndexes.map((idx: Record<string, unknown>) => String(idx.name ?? 'unnamed')),
-    });
-  }
+  const summaries = await Promise.all(
+    targets.map(async (m): Promise<IndexSyncSummary> => {
+      try {
+        await m.createIndexes();
+      } catch (err) {
+        console.warn(
+          `[mongodb] Cảnh báo khi đồng bộ index cho ${m.collection.collectionName}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      const rawIndexes = await m.collection.indexes().catch(() => []);
+      return {
+        modelName: m.modelName,
+        collectionName: m.collection.collectionName,
+        indexCount: rawIndexes.length,
+        indexes: rawIndexes.map((idx: Record<string, unknown>) => String(idx.name ?? 'unnamed')),
+      };
+    }),
+  );
   console.log(
-    `[mongodb] Đã đồng bộ createIndexes() cho ${summaries.length} collections (${summaries.map((s) => s.collectionName).join(', ')}).`,
+    `[mongodb] Đã đồng bộ createIndexes() song song cho ${summaries.length} collections (${summaries.map((s) => s.collectionName).join(', ')}).`,
   );
   return summaries;
 }

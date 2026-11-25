@@ -1,6 +1,7 @@
 import { AlertTriangle, Crosshair, ExternalLink, MapPin, Search, ThumbsUp, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { DUPLICATE_SCAN_RADIUS_M, GPS_WARN_M } from '@shared/constants';
+import { normalizeCoordinates, TRAN_BIEN_FALLBACK_COORDS } from '@shared/coordinates';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '@shared/geo';
 import type { Category, ReverseGeocodeResult } from '@shared/types';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
@@ -104,11 +105,24 @@ export function PrecisionLocationPicker({
   const triggerLocate = useCallback(async () => {
     const f = await onRequestGps();
     if (f) {
-      onPinChange({ lat: f.lat, lng: f.lng });
+      const norm = normalizeCoordinates({ lat: f.lat, lng: f.lng }, { requireVietnam: false });
+      const safeLat = norm.ok ? norm.lat : f.lat;
+      const safeLng = norm.ok ? norm.lng : f.lng;
+      onPinChange({ lat: safeLat, lng: safeLng });
       onManualWardChange('');
-      pushCamera({ kind: 'flyTo', lat: f.lat, lng: f.lng, zoom: 18 });
+      pushCamera({ kind: 'flyTo', lat: safeLat, lng: safeLng, zoom: 18 });
+    } else if (!pin) {
+      // Fallback thông minh về tâm Phường Trấn Biên [10.9465, 106.8235] khi thiết bị chặn quyền GPS hoàn toàn
+      onPinChange({ lat: TRAN_BIEN_FALLBACK_COORDS.lat, lng: TRAN_BIEN_FALLBACK_COORDS.lng });
+      onManualWardChange('');
+      pushCamera({
+        kind: 'flyTo',
+        lat: TRAN_BIEN_FALLBACK_COORDS.lat,
+        lng: TRAN_BIEN_FALLBACK_COORDS.lng,
+        zoom: 16,
+      });
     }
-  }, [onRequestGps, onPinChange, onManualWardChange, pushCamera]);
+  }, [onRequestGps, onPinChange, onManualWardChange, pushCamera, pin]);
 
   // Tự động lấy mẫu GPS chính xác cao khi mở Bước 2 lần đầu (nếu chưa có tọa độ EXIF/pin)
   useEffect(() => {
@@ -230,9 +244,20 @@ export function PrecisionLocationPicker({
 
   const handleCrosshairMove = useCallback(
     (lat: number, lng: number) => {
-      onPinChange({ lat, lng });
+      const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
+      if (norm.ok) onPinChange({ lat: norm.lat, lng: norm.lng });
     },
     [onPinChange],
+  );
+
+  const handlePinDragEnd = useCallback(
+    (lat: number, lng: number) => {
+      const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
+      if (!norm.ok) return;
+      onPinChange({ lat: norm.lat, lng: norm.lng });
+      pushCamera({ kind: 'flyTo', lat: norm.lat, lng: norm.lng });
+    },
+    [onPinChange, pushCamera],
   );
 
   const activeWardCode =
@@ -345,17 +370,56 @@ export function PrecisionLocationPicker({
         </div>
       )}
 
-      {/* Khung Bản đồ Tâm ngắm Cố định Giữa Màn hình (Center Crosshair Pin) */}
+      {/* Nút Định vị lại vị trí của tôi + Hiển thị sai số ±mét & tầng GPS */}
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface p-2.5 shadow-card">
+        <div className="min-w-0 text-xs">
+          {fix ? (
+            <p className="font-semibold text-ink">
+              Độ chính xác GPS:{' '}
+              <span className={`mono font-bold ${fix.accuracy <= 35 ? 'text-ok' : 'text-warn'}`}>
+                ±{Math.round(fix.accuracy)}m
+              </span>{' '}
+              <span className="text-muted">
+                ({fix.tier === 2 ? 'Định vị mạng trong nhà' : 'GPS vệ tinh'})
+              </span>
+            </p>
+          ) : (
+            <p className="font-medium text-muted">
+              Kéo thả ghim trực tiếp trên bản đồ hoặc bấm định vị lại vị trí của bạn.
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          className="btn btn-soft !min-h-10 !px-3 !text-xs font-bold"
+          disabled={gpsStatus === 'locating'}
+          onClick={() => void triggerLocate()}
+        >
+          <Crosshair className={`h-4 w-4 ${gpsStatus === 'locating' ? 'animate-spin' : ''}`} aria-hidden />
+          Định vị lại vị trí của tôi
+        </button>
+      </div>
+
+      {/* Khung Bản đồ Kéo thả Ghim Trực tiếp + Tâm ngắm Cố định Giữa Màn hình */}
       <UnifiedMapCanvas
         reports={[]}
-        initialCenter={pin ? [pin.lat, pin.lng] : undefined}
-        initialZoom={pin ? 17 : 9}
-        fitCityOnMount={!pin}
+        initialCenter={pin ? [pin.lat, pin.lng] : [TRAN_BIEN_FALLBACK_COORDS.lat, TRAN_BIEN_FALLBACK_COORDS.lng]}
+        initialZoom={pin ? 17 : 15}
+        fitCityOnMount={false}
         cameraCommand={cameraCmd}
         onRequestCamera={pushCamera}
         userPos={fix ? { lat: fix.lat, lng: fix.lng } : null}
         accuracyM={fix?.accuracy ?? null}
         crosshairPin={{ onChange: handleCrosshairMove }}
+        draggablePin={
+          pin
+            ? {
+                lat: pin.lat,
+                lng: pin.lng,
+                onDragEnd: handlePinDragEnd,
+              }
+            : null
+        }
         showArterials
         showFitCityButton
         onLocate={() => void triggerLocate()}

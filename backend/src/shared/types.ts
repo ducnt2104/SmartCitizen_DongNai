@@ -12,19 +12,21 @@ export const CATEGORIES: readonly Category[] = [
   'khac',
 ] as const;
 
-export type Role = 'super_admin' | 'city_admin' | 'ward_officer' | 'volunteer' | 'citizen';
-export type RoleCode = 'SUPER_ADMIN' | 'ADMIN' | 'OFFICER' | 'YOUTH_UNION' | 'CITIZEN';
+export type Role = 'super_admin' | 'city_admin' | 'ward_officer' | 'rescue_team' | 'volunteer' | 'citizen';
+export type RoleCode = 'SUPER_ADMIN' | 'ADMIN' | 'OFFICER' | 'RESCUE_TEAM' | 'YOUTH_UNION' | 'CITIZEN';
 
 export const ROLES: readonly Role[] = [
   'super_admin',
   'city_admin',
   'ward_officer',
+  'rescue_team',
   'volunteer',
   'citizen',
 ] as const;
 
 export type ReportStatus = 'received' | 'verifying' | 'processing' | 'resolved' | 'quarantined' | 'rejected';
 export type Priority = 'normal' | 'high' | 'emergency';
+export type SeverityLabel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 export type QuarantineReason =
   | 'duplicate_image'
@@ -87,6 +89,34 @@ export interface Photo {
 
 export type AiMode = 'local_rust_llm' | 'local_rust' | 'ollama' | 'gemini' | 'fallback' | 'seed';
 
+export interface TacticalBriefing {
+  /** (1) Tóm tắt rủi ro hiện trường */
+  riskSummary: string;
+  /** (2) Thiết bị & nhân lực cần mang theo */
+  equipmentAndCrew: string;
+  /** (3) Cảnh báo an toàn tại hiện trường */
+  safetyWarning: string;
+  mode: AiMode;
+  generatedAt: string;
+  latencyMs?: number;
+}
+
+export type RescueMissionStatus = 'unassigned' | 'accepted' | 'en_route' | 'on_site' | 'completed';
+
+export interface RescueMissionState {
+  status: RescueMissionStatus;
+  assignedTeamId: string | null;
+  assignedTeamName: string | null;
+  assignedTeamCode: string | null;
+  acceptedAt: string | null;
+  enRouteAt: string | null;
+  onSiteAt: string | null;
+  completedAt: string | null;
+  lastLat?: number | null;
+  lastLng?: number | null;
+  note?: string;
+}
+
 export interface AiAnalysis {
   authenticityScore: number;
   fraudFlags: string[];
@@ -94,6 +124,9 @@ export interface AiAnalysis {
   safetyHazards: string[];
   suggestedDepartment: Department | null;
   aiSuggestedLabel?: string | null;
+  priorityScore?: number;
+  severityLabel?: SeverityLabel;
+  tacticalBriefing?: TacticalBriefing | null;
   isDuplicateCrop?: boolean;
   duplicateSimilarity?: number | null;
   inlierCount?: number | null;
@@ -159,6 +192,8 @@ export interface Report {
   title: string;
   description: string;
   severity: 1 | 2 | 3 | 4 | 5;
+  severityLabel?: SeverityLabel;
+  priorityScore?: number;
   isEmergency: boolean;
   emergencyLevel: 0 | 1;
   priority: Priority;
@@ -191,6 +226,7 @@ export interface Report {
   department: Department | null;
   slaDueAt: string | null;
   dispatches: DispatchOrder[];
+  rescueMission?: RescueMissionState | null;
   resolvedAt: string | null;
   resolution: ResolutionVerification | null;
   rating: Rating | null;
@@ -217,6 +253,8 @@ export interface ReportSummary {
   category: Category;
   title: string;
   severity: 1 | 2 | 3 | 4 | 5;
+  severityLabel?: SeverityLabel;
+  priorityScore?: number;
   isEmergency: boolean;
   emergencyLevel: 0 | 1;
   priority: Priority;
@@ -304,6 +342,8 @@ export interface VisionResult {
   title: string;
   description: string;
   severity: 1 | 2 | 3 | 4 | 5;
+  severityLabel?: SeverityLabel;
+  priorityScore?: number;
   isEmergency: boolean;
   safetyHazards: string[];
   suggestedDepartment: Department;
@@ -311,6 +351,7 @@ export interface VisionResult {
   isAuthentic?: boolean;
   fraudFlags: string[];
   confidence: number;
+  tacticalBriefing?: TacticalBriefing | null;
   mode: AiMode;
   cached: boolean;
   latencyMs?: number;

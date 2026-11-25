@@ -11,9 +11,11 @@ import {
 import { Incident, User } from '../models';
 import { incidentRepository } from '../repositories/incidentRepository';
 
-// Nạp biến môi trường từ cả backend/.env và ../.env
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+// Nạp biến môi trường từ cả backend/.env và ../.env (bỏ qua khi chạy Vitest để cô lập unit test)
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+  dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+}
 
 export interface VerifyDbReport {
   connectionTarget: 'atlas_uri' | 'ephemeral_mongod';

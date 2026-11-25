@@ -1,4 +1,4 @@
-import type { Category, Department, Role, RoleCode } from './types';
+import type { Category, Department, Role, RoleCode, SeverityLabel } from './types';
 
 export const DHASH_DUPLICATE_MAX = 5;
 export const DHASH_ANGLE_MIN = 12;
@@ -58,6 +58,8 @@ export function toRoleCode(role: Role): RoleCode {
       return 'ADMIN';
     case 'ward_officer':
       return 'OFFICER';
+    case 'rescue_team':
+      return 'RESCUE_TEAM';
     case 'volunteer':
       return 'YOUTH_UNION';
     case 'citizen':
@@ -76,6 +78,10 @@ export function normalizeRoleInput(raw: string): Role | null {
     case 'ward_officer':
     case 'officer':
       return 'ward_officer';
+    case 'rescue_team':
+    case 'rescue':
+    case 'cuu_ho':
+      return 'rescue_team';
     case 'volunteer':
     case 'youth_union':
       return 'volunteer';
@@ -84,6 +90,32 @@ export function normalizeRoleInput(raw: string): Role | null {
     default:
       return null;
   }
+}
+
+/** Chuyển mức độ 1–5 + cờ khẩn cấp thành nhãn SOS chuẩn quốc tế (`CRITICAL | HIGH | MEDIUM | LOW`). */
+export function toSeverityLabel(severity: number, isEmergency = false): SeverityLabel {
+  if (isEmergency || severity >= 5) return 'CRITICAL';
+  if (severity >= 4) return 'HIGH';
+  if (severity >= 3) return 'MEDIUM';
+  return 'LOW';
+}
+
+/** Chấm điểm ưu tiên SOS thông minh (thang 1–100) phục vụ sắp xếp hàng đợi Đội Cứu Hộ & IOC. */
+export function computeSosPriorityScore(params: {
+  severity: number;
+  isEmergency?: boolean;
+  onArterial?: boolean;
+  clusterCount?: number;
+  confirmCount?: number;
+}): number {
+  const sev = Math.max(1, Math.min(5, Math.round(params.severity || 3)));
+  let score = sev * 14; // 14..70
+  if (params.isEmergency) score += 18;
+  if (params.onArterial) score += 8;
+  const clusterBonus = Math.min(12, Math.max(0, (params.clusterCount ?? 1) - 1) * 4);
+  const confirmBonus = Math.min(8, Math.max(0, params.confirmCount ?? 0) * 2);
+  score += clusterBonus + confirmBonus;
+  return Math.max(1, Math.min(100, Math.round(score)));
 }
 
 export function normalizeCategoryInput(raw: string): Category | null {

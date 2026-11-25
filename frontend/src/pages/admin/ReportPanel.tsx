@@ -1,14 +1,19 @@
-import { ArrowRightLeft, Ban, CheckCircle2, Radio, RotateCcw, ShieldAlert, Upload, X } from 'lucide-react';
+import { ArrowRightLeft, Ban, CheckCircle2, ExternalLink, Navigation, Radio, RotateCcw, ShieldAlert, Upload, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { DEPARTMENTS } from '@shared/constants';
 import type { ClientReport, Department } from '@shared/types';
+import { TacticalNavigationWorkspace } from '../../components/navigation/TacticalNavigationWorkspace';
+import { TacticalBriefingCard } from '../../components/TacticalBriefingCard';
 import { BeforeAfterSlider, SlaClock, Timeline } from '../../components/Timeline';
 import { Spinner } from '../../components/ui';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../../data/dongNaiWards';
 import { db } from '../../db/localDb';
+import { useLiveNavigationGps } from '../../hooks/useLiveNavigationGps';
 import { useI18n } from '../../i18n';
 import { api, ApiError, NetworkError } from '../../lib/api';
+import { useSession } from '../../lib/authStore';
 import { edge } from '../../lib/edgeClient';
+import { googleMapsDirectionsUrl } from '../../lib/mapConfig';
 import { CATEGORY_META, DEPT_KEY } from '../../lib/meta';
 import { useToast } from '../../state/toast';
 
@@ -25,6 +30,11 @@ interface Props {
 export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   const { t, fmtDate } = useI18n();
   const toast = useToast();
+  const session = useSession();
+  const { pos: livePos, refreshNow, startSimulation, stopSimulation } = useLiveNavigationGps(
+    session?.user.wardCode ?? r.wardCode,
+  );
+  const [navModalOpen, setNavModalOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [dept, setDept] = useState<Department>(r.department ?? r.ai.suggestedDepartment ?? 'ubnd_khu_pho');
   const [sla, setSla] = useState(r.priority === 'emergency' ? 2 : r.priority === 'high' ? 24 : 72);
@@ -113,6 +123,55 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
           </div>
         )}
         <p className="break-words text-ioc-dim">{r.description}</p>
+
+        {/* SmartCitizen AI Brain: Gợi ý tác chiến 3 dòng + Chỉ đường Turn-by-Turn tới hiện trường */}
+        <TacticalBriefingCard
+          report={r}
+          compact
+          onBriefingUpdated={(b) => {
+            onChanged({ ...r, ai: { ...r.ai, tacticalBriefing: b } });
+          }}
+        />
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setNavModalOpen(true)}
+            className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded bg-[#1A73E8] px-3 text-xs font-extrabold text-white shadow hover:bg-[#1557B0]"
+          >
+            <Navigation className="h-3.5 w-3.5 fill-current" aria-hidden />
+            Chỉ đường tới hiện trường
+          </button>
+          <a
+            href={googleMapsDirectionsUrl(r.lat, r.lng, { lat: livePos.lat, lng: livePos.lng })}
+            target="_blank"
+            rel="noreferrer"
+            className="ioc-btn ioc-btn-cyan justify-center !min-h-10 !text-xs"
+          >
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Mở Google Maps gốc
+          </a>
+        </div>
+
+        {navModalOpen && (
+          <div
+            className="fixed inset-0 z-[90] bg-slate-950"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Dẫn đường tác chiến tới hiện trường ${r.code}`}
+          >
+            <TacticalNavigationWorkspace
+              mission={r}
+              livePos={livePos}
+              onRefreshGps={() => void refreshNow()}
+              onStartSimulation={startSimulation}
+              onStopSimulation={stopSimulation}
+              onMissionUpdated={(upd) => onChanged(upd)}
+              onCloseModal={() => {
+                stopSimulation();
+                setNavModalOpen(false);
+              }}
+            />
+          </div>
+        )}
 
         <dl className="grid grid-cols-2 gap-2 text-xs">
           <div className="rounded border border-ioc-line p-2"><dt className="text-ioc-dim">{t('detail.sla')}</dt><dd><SlaClock iso={r.slaDueAt} dark /></dd></div>

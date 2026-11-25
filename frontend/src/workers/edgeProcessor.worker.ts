@@ -8,6 +8,7 @@
  *  6) So khớp Hamming với các hash đã biết
  */
 import { DUPLICATE_SCAN_RADIUS_M } from '@shared/constants';
+import { normalizeCoordinates } from '@shared/coordinates';
 import { hammingDistance } from '@shared/dhash';
 import { haversineMeters, inDongNaiBBox, matchArterial, nearestWard } from '@shared/geo';
 
@@ -148,8 +149,9 @@ function extractExifGps(buf: ArrayBuffer): ExifGpsCoords | null {
           let lng = lngVals[0] + lngVals[1] / 60 + lngVals[2] / 3600;
           if (latRef === 'S') lat = -lat;
           if (lngRef === 'W') lng = -lng;
-          if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return null;
-          return { lat, lng, inBounds: inDongNaiBBox(lat, lng) };
+          const norm = normalizeCoordinates({ lat, lng }, { requireVietnam: false });
+          if (!norm.ok) return null;
+          return { lat: norm.lat, lng: norm.lng, inBounds: inDongNaiBBox(norm.lat, norm.lng) };
         }
       }
       offset += segLen;

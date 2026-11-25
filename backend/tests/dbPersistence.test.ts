@@ -45,8 +45,8 @@ describe('MongoDB Production Persistence Upgrade (Real mongod Wire Protocol)', (
     const opts = buildMongoConnectOptions();
     expect(opts.maxPoolSize).toBe(20);
     expect(opts.minPoolSize).toBe(5);
-    expect(opts.serverSelectionTimeoutMS).toBe(10_000);
-    expect(opts.connectTimeoutMS).toBe(10_000);
+    expect(opts.serverSelectionTimeoutMS).toBe(8_000);
+    expect(opts.connectTimeoutMS).toBe(8_000);
     expect(opts.socketTimeoutMS).toBe(45_000);
     expect(opts.family).toBe(4);
     expect(opts.retryWrites).toBe(true);

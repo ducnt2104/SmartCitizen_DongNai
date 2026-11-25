@@ -14,6 +14,7 @@ async function runSeed(): Promise<void> {
     console.log(`[seed] Chế độ lưu trữ: ${boot.repos.mode}`);
     console.log(`[seed] Đơn vị hành chính TP. Đồng Nai: ${DONG_NAI_WARDS.length} (33 Phường, 62 Xã)`);
     console.log(`[seed] Tài khoản Super Admin: ${env.superAdminCode} / ${env.superAdminEmail}`);
+    console.log(`[seed] Tài khoản Đội Cứu Hộ mẫu (RESCUE_TEAM): CUUHO-01 / cuuho01@dongnai.gov.vn (P. Trấn Biên) & CUUHO-CD-01 (Cơ động TP)`);
     console.log(`[seed] Mới nạp thêm: ${res.users} tài khoản, ${res.reports} phản ánh`);
     console.log(`[seed] Tổng hiện có trong DB: ${stats.counts.users} users, ${stats.counts.reports} reports, ${stats.counts.auditLogs} audit logs`);
   } finally {

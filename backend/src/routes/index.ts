@@ -3,12 +3,18 @@ import { authMiddleware, asyncHandler } from '../middleware/auth';
 import { limits } from '../middleware/rateLimit';
 import { validateBody } from '../middleware/validate';
 import {
-  adminController, authController, metaController, reportController, volunteerController,
+  adminController,
+  authController,
+  metaController,
+  reportController,
+  rescueController,
+  volunteerController,
 } from '../controllers';
 import { aiController } from '../controllers/ai.controller';
 import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
 import { buildApiKeysRouter } from './apiKeys';
+import { buildSystemDiagnosticsRouter } from './system';
 
 export function buildRouter(
   s: Services,
@@ -18,6 +24,7 @@ export function buildRouter(
   const a = authController(s);
   const r = reportController(s);
   const v = volunteerController(s);
+  const rc = rescueController(s);
   const ad = adminController(s);
   const ai = aiController(s);
   const meta = metaController(s, bootInfo);
@@ -32,7 +39,7 @@ export function buildRouter(
   api.get('/geo/reverse', h(r.reverseGeocode));
   api.get('/stats', h(r.stats));
 
-  // Xác thực thật & Quản lý phiên (Citizen OTP + Password + Staff/Admin/SuperAdmin JWT)
+  // Xác thực thật & Quản lý phiên (Citizen OTP + Password + Staff/Admin/SuperAdmin + Rescue Team JWT)
   api.get('/auth/otp/status', h(a.otpStatus));
   api.post('/auth/otp/request', limits.otp, validateBody(schemas.otpRequest), h(a.otpRequest));
   api.post('/auth/otp/verify', limits.login, validateBody(schemas.otpVerify), h(a.otpVerify));
@@ -40,6 +47,7 @@ export function buildRouter(
   api.post('/auth/password/reset', limits.login, validateBody(schemas.passwordReset), h(a.passwordReset));
   api.post('/auth/staff/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
   api.post('/auth/admin/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
+  api.post('/auth/rescue/login', limits.login, validateBody(schemas.rescueLogin), h(a.rescueLogin));
   api.post('/auth/refresh', limits.login, h(a.refresh));
   api.post('/auth/logout', h(a.logout));
   api.post('/auth/logout-all', auth.required, h(a.logoutAll));
@@ -68,8 +76,16 @@ export function buildRouter(
   api.get('/volunteer/leaderboard', auth.optional, h(v.leaderboard));
   api.get('/volunteer/logbook', vol, h(v.logbook));
 
+  // Cổng Tác chiến Đội Cứu Hộ Hiện trường (RESCUE_TEAM + Cán bộ hiện trường & Giám sát cấp TP/SuperAdmin)
+  const rescue = auth.requireRole('rescue_team', 'ward_officer', 'city_admin', 'super_admin');
+  api.get('/rescue/missions', rescue, h(rc.missions));
+  api.patch('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
+  api.post('/rescue/missions/:id/status', rescue, validateBody(schemas.rescueStatus), h(rc.updateStatus));
+  api.post('/rescue/missions/:id/complete', rescue, validateBody(schemas.rescueComplete), h(rc.complete));
+
   // IOC Cán bộ & Quản trị Hệ thống (SUPER_ADMIN, ADMIN, OFFICER)
   const staff = auth.requireRole('ward_officer', 'city_admin', 'super_admin');
+  const staffOrRescue = auth.requireRole('rescue_team', 'ward_officer', 'city_admin', 'super_admin');
   const admins = auth.requireRole('city_admin', 'super_admin');
 
   api.get('/admin/overview', staff, h(ad.overview));
@@ -99,9 +115,13 @@ export function buildRouter(
   api.use('/admin/api-keys', buildApiKeysRouter(s));
   api.get('/admin/export', staff, h(ad.export));
 
-  // AI & Computer Vision
+  // System Diagnostics & Control Plugin
+  api.use('/system', buildSystemDiagnosticsRouter(s, bootInfo));
+
+  // SmartCitizen AI Brain & Computer Vision
   api.post('/ai/analyze-image', limits.vision, validateBody(schemas.analyzeImage), h(ai.analyzeImage));
-  api.post('/ai/verify-resolution', staff, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
+  api.post('/ai/verify-resolution', staffOrRescue, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
+  api.post('/ai/tactical-briefing', staffOrRescue, validateBody(schemas.tacticalBriefing), h(ai.tacticalBriefing));
   api.post('/ai/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));
 
   return { api, root };

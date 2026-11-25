@@ -337,6 +337,7 @@ export class AuthService {
     const scopeOk =
       !!u &&
       (u.role === 'super_admin' ||
+        (u.role === 'rescue_team' && (!u.wardCode || unit === 'city' || u.wardCode === unit)) ||
         (unit === 'city' ? u.role === 'city_admin' : u.role === 'ward_officer' && u.wardCode === unit));
     if (!ok || !scopeOk || !u) {
       const next = { count: (f?.count ?? 0) + 1, lockedUntil: 0 };
@@ -346,6 +347,43 @@ export class AuthService {
     }
     this.staffFails.delete(key);
     await this.audit.log({ id: u.id, name: u.name, role: u.role }, 'auth.staff_login', u.id, null, { unit });
+    return this.issueSession(u, userAgent);
+  }
+
+  /** Đăng nhập Cổng Tác chiến Đội Cứu Hộ (`/rescue/login`) cho vai trò `rescue_team` (hoặc `super_admin` / `city_admin`). */
+  async rescueLogin(identifierRaw: string, password: string, userAgent?: string): Promise<IssuedAuth> {
+    const trimmed = identifierRaw.trim();
+    const key = `rescue:${trimmed.toLowerCase()}`;
+    const now = Date.now();
+    const f = this.staffFails.get(key);
+    if (f && f.lockedUntil > now) {
+      throw tooMany('Tài khoản Đội Cứu Hộ tạm khóa 15 phút do nhập sai nhiều lần.', 'rescue_locked');
+    }
+    const normalizedPhone = normalizePhone(trimmed);
+    const u = trimmed.includes('@')
+      ? await this.users.getByEmail(trimmed.toLowerCase())
+      : normalizedPhone
+        ? (await this.users.getByPhone(normalizedPhone)) ?? (await this.users.getByStaffCode(trimmed))
+        : await this.users.getByStaffCode(trimmed);
+    if (u?.revoked) {
+      throw forbidden('Tài khoản Đội Cứu Hộ đã bị khóa hoặc thu hồi quyền truy cập.');
+    }
+    const roleOk = !!u && (u.role === 'rescue_team' || u.role === 'super_admin' || u.role === 'city_admin');
+    const pwOk = !!u && !!u.passwordHash && verifyPassword(password, u.passwordHash);
+    if (!roleOk || !pwOk || !u) {
+      const next = { count: (f?.count ?? 0) + 1, lockedUntil: 0 };
+      if (next.count >= OTP_MAX_FAILS) next.lockedUntil = now + OTP_LOCK_MS;
+      this.staffFails.set(key, next);
+      throw unauthorized('Mã Đội Cứu Hộ / Email hoặc mật khẩu không đúng (yêu cầu quyền RESCUE_TEAM).');
+    }
+    this.staffFails.delete(key);
+    await this.audit.log(
+      { id: u.id, name: u.name, role: u.role },
+      'auth.rescue_login',
+      u.id,
+      null,
+      { staffCode: u.staffCode, wardCode: u.wardCode },
+    );
     return this.issueSession(u, userAgent);
   }
 

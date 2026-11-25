@@ -38,7 +38,7 @@ reportSchema.index({ reporterId: 1, createdAt: -1 });
 reportSchema.index({ syncId: 1 }, { unique: true, sparse: true });
 reportSchema.index({ imageHash: 1, createdAt: -1 });
 
-/** Người dùng & Phân quyền RBAC 5 cấp (`SUPER_ADMIN`, `ADMIN`, `OFFICER`, `YOUTH_UNION`, `CITIZEN`). */
+/** Người dùng & Phân quyền RBAC 6 cấp (`SUPER_ADMIN`, `ADMIN`, `OFFICER`, `RESCUE_TEAM`, `YOUTH_UNION`, `CITIZEN`). */
 const appUserSchema = mk({
   id: { type: String, required: true, unique: true },
   role: { type: String, required: true, index: true },

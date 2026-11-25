@@ -1,0 +1,13 @@
+{
+  "extends": "../frontend/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../frontend",
+    "typeRoots": ["../frontend/node_modules/@types"],
+    "types": ["google.maps"],
+    "paths": {
+      "@shared/*": ["src/shared/*"],
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["../frontend/node_modules/vite/client.d.ts", "../frontend/src"]
+}

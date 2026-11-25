@@ -5,6 +5,8 @@
   "description": "Compatibility shim for Render services still configured with --prefix client -> forwards to ../frontend",
   "scripts": {
     "postinstall": "node ../scripts/render-compat.mjs install frontend",
-    "build": "node ../scripts/render-compat.mjs build frontend"
+    "build": "node ../scripts/render-compat.mjs build frontend",
+    "typecheck": "node ../scripts/render-compat.mjs typecheck frontend",
+    "test": "node ../scripts/render-compat.mjs test frontend"
   }
 }

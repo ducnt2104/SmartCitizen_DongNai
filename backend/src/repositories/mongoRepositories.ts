@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import { computeSosPriorityScore, toSeverityLabel } from '../shared/constants';
+import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint } from '../shared/coordinates';
 import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
 import { connectDatabase, disconnectDatabase } from '../config/database';
 import {
@@ -46,28 +48,52 @@ function strip<T>(doc: Doc | null): T | null {
 
 function reportFromDoc(doc: Doc | null): Report | null {
   if (!doc) return null;
-  const { location, imageHash, syncId, priorityScore, customCategoryLabel, ...rest } = doc;
-  void location;
+  const { location, imageHash, syncId, customCategoryLabel, ...rest } = doc;
   void imageHash;
   void syncId;
-  void priorityScore;
   void customCategoryLabel;
-  return strip<Report>(rest);
+  const parsedGeo = fromGeoJsonPoint(location as { type?: string; coordinates?: readonly number[] } | undefined);
+  const base = strip<Report>(rest);
+  if (!base) return null;
+  if (parsedGeo && (!Number.isFinite(base.lat) || !Number.isFinite(base.lng))) {
+    base.lat = parsedGeo.lat;
+    base.lng = parsedGeo.lng;
+  }
+  return base;
 }
 
 function reportToDoc(r: Report): Doc {
   const syncId = normalizeSparseString(r.id.startsWith('rp_') ? r.id.slice(3) : r.id);
-  const priorityScore = computePriorityScore({
-    severityLevel: r.severity,
-    duplicateCount: Math.max(0, (r.clusterCount ?? 1) - 1),
-    reporterTrustScore: 100,
-  });
+  const norm = normalizeCoordinates({ lat: r.lat, lng: r.lng });
+  const safeLat = norm.ok ? norm.lat : r.lat;
+  const safeLng = norm.ok ? norm.lng : r.lng;
+  const geoPoint = norm.ok ? norm.geoJson : { type: 'Point' as const, coordinates: [safeLng, safeLat] as [number, number] };
+  const priorityScore =
+    r.priorityScore ??
+    r.ai?.priorityScore ??
+    computeSosPriorityScore({
+      severity: r.severity,
+      isEmergency: r.isEmergency || r.emergencyLevel === 1,
+      onArterial: r.onArterial,
+      clusterCount: r.clusterCount,
+      confirmCount: r.confirmations.length,
+    }) ??
+    computePriorityScore({
+      severityLevel: r.severity,
+      duplicateCount: Math.max(0, (r.clusterCount ?? 1) - 1),
+      reporterTrustScore: 100,
+    });
+  const severityLabel =
+    r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
   return {
     ...r,
+    lat: safeLat,
+    lng: safeLng,
     ...(syncId ? { syncId } : {}),
     priorityScore,
+    severityLabel,
     imageHash: r.photos[0]?.dHash ?? '',
-    location: { type: 'Point', coordinates: [r.lng, r.lat] },
+    location: geoPoint,
   };
 }
 
@@ -128,16 +154,17 @@ class MongoReportRepo implements ReportRepository {
   }
 
   async findNearby(q: NearbyQuery): Promise<Report[]> {
+    const geoPoint = toGeoJsonPoint(q.lat, q.lng);
     const filter: Record<string, unknown> = {
       location: {
         $nearSphere: {
-          $geometry: { type: 'Point', coordinates: [q.lng, q.lat] },
+          $geometry: geoPoint,
           $maxDistance: Math.max(1, q.radiusM),
         },
       },
     };
     if (q.category) filter.category = String(q.category);
-    const docs = (await ReportModel.find(filter).limit(100).lean()) as Doc[];
+    const docs = (await ReportModel.find(filter).limit(150).lean()) as Doc[];
     return docs.map((d) => reportFromDoc(d)!);
   }
 

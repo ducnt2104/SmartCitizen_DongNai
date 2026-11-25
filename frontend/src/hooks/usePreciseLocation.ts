@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { normalizeCoordinates } from '@shared/coordinates';
 import type { GpsErrorKind, GpsFix } from '../lib/geoClient';
 
 export type GpsStatus = 'idle' | 'locating' | 'ok' | 'denied' | 'error';
@@ -8,65 +9,53 @@ export interface PreciseLocationState {
   status: GpsStatus;
   errorKind: GpsErrorKind | null;
   samples: number;
+  /** Tầng GPS đã khóa thành công: 1 = Vệ tinh chính xác cao, 2 = Định vị mạng/Wi-Fi trong nhà */
+  tier: 1 | 2 | null;
   /** True nếu độ chính xác > 50m (nhắc người dùng kéo ghim tinh chỉnh tay) */
   isLowAccuracy: boolean;
   locate: () => Promise<GpsFix | null>;
   stop: () => void;
 }
 
-const TARGET_ACCURACY_M = 18;
 const LOW_ACCURACY_THRESHOLD_M = 50;
-const SAMPLE_WINDOW_MS = 4000;
-const HARD_TIMEOUT_MS = 12000;
 
 /**
- * Định vị GPS độ chính xác cao (`watchPosition` với `enableHighAccuracy: true`):
- * - Thu mẫu liên tục trong cửa sổ 4 giây, dừng ngay khi đạt `accuracy <= 18m`.
- * - Luôn giữ mẫu có sai số (`accuracy`) tốt nhất thay vì lấy mẫu đầu tiên bị lệch trạm phát sóng.
- * - Giải phóng triệt để `clearWatch` và mọi timer khi hoàn tất hoặc khi component unmount.
+ * Chiến lược lấy GPS 2 tầng chuẩn thực địa (Không bao giờ treo hay timeout trong nhà):
+ * - Tầng 1: `getCurrentPosition` với `enableHighAccuracy: true, timeout: 6000, maximumAge: 15000`.
+ * - Tầng 2 (Fallback tự động khi trong nhà / yếu sóng vệ tinh): `enableHighAccuracy: false, timeout: 8000, maximumAge: 60000`.
+ * - Kiểm tra chặt bằng `normalizeCoordinates`: loại bỏ `[0, 0]`, `NaN`, và tự sửa nếu tọa độ bị đảo ngược.
  */
 export function usePreciseLocation(): PreciseLocationState {
   const [fix, setFix] = useState<GpsFix | null>(null);
   const [status, setStatus] = useState<GpsStatus>('idle');
   const [errorKind, setErrorKind] = useState<GpsErrorKind | null>(null);
   const [samples, setSamples] = useState(0);
+  const [tier, setTier] = useState<1 | 2 | null>(null);
 
-  const watchIdRef = useRef<number | null>(null);
-  const sampleTimerRef = useRef<number | null>(null);
-  const hardTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const activeReqIdRef = useRef(0);
 
   const stop = useCallback(() => {
-    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
-    if (sampleTimerRef.current !== null) {
-      window.clearTimeout(sampleTimerRef.current);
-      sampleTimerRef.current = null;
-    }
-    if (hardTimerRef.current !== null) {
-      window.clearTimeout(hardTimerRef.current);
-      hardTimerRef.current = null;
-    }
+    activeReqIdRef.current += 1;
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      stop();
+      activeReqIdRef.current += 1;
     };
-  }, [stop]);
+  }, []);
 
-  const locate = useCallback((): Promise<GpsFix | null> => {
-    stop();
+  const locate = useCallback(async (): Promise<GpsFix | null> => {
+    const reqId = ++activeReqIdRef.current;
+
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
       if (mountedRef.current) {
         setStatus('error');
         setErrorKind('unsupported');
       }
-      return Promise.resolve(null);
+      return null;
     }
 
     if (mountedRef.current) {
@@ -75,79 +64,116 @@ export function usePreciseLocation(): PreciseLocationState {
       setSamples(0);
     }
 
-    return new Promise((resolve) => {
-      let best: GpsFix | null = null;
-      let count = 0;
-      let settled = false;
+    const runAttempt = (
+      opts: PositionOptions,
+      tierNum: 1 | 2,
+    ): Promise<{ fix: GpsFix | null; errKind: GpsErrorKind | null }> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const guardTimer = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve({ fix: null, errKind: 'timeout' });
+        }, (opts.timeout ?? 7000) + 500);
 
-      const finish = (result: GpsFix | null, err: GpsErrorKind | null): void => {
-        if (settled) return;
-        settled = true;
-        stop();
-        if (mountedRef.current) {
-          if (result) {
-            setFix(result);
-            setStatus('ok');
-            setErrorKind(null);
-          } else {
-            setStatus(err === 'denied' ? 'denied' : 'error');
-            setErrorKind(err ?? 'unavailable');
-          }
-        }
-        resolve(result);
-      };
-
-      const startSampleWindow = (): void => {
-        if (sampleTimerRef.current !== null) return;
-        sampleTimerRef.current = window.setTimeout(
-          () => finish(best, best ? null : 'timeout'),
-          SAMPLE_WINDOW_MS,
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(guardTimer);
+            const norm = normalizeCoordinates(
+              { lat: pos.coords.latitude, lng: pos.coords.longitude },
+              { requireVietnam: false },
+            );
+            if (!norm.ok) {
+              resolve({ fix: null, errKind: 'unavailable' });
+              return;
+            }
+            resolve({
+              fix: {
+                lat: norm.lat,
+                lng: norm.lng,
+                accuracy: Math.max(1, Math.round(pos.coords.accuracy || (tierNum === 1 ? 15 : 85))),
+                tier: tierNum,
+              },
+              errKind: null,
+            });
+          },
+          (err) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(guardTimer);
+            const kind: GpsErrorKind =
+              err.code === err.PERMISSION_DENIED
+                ? 'denied'
+                : err.code === err.TIMEOUT
+                  ? 'timeout'
+                  : 'unavailable';
+            resolve({ fix: null, errKind: kind });
+          },
+          opts,
         );
-      };
+      });
 
-      hardTimerRef.current = window.setTimeout(
-        () => finish(best, best ? null : 'timeout'),
-        HARD_TIMEOUT_MS,
-      );
+    // Tầng 1: GPS vệ tinh độ chính xác cao (timeout 6s)
+    const tier1 = await runAttempt(
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 },
+      1,
+    );
+    if (reqId !== activeReqIdRef.current) return null;
 
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (pos) => {
-          if (hardTimerRef.current !== null) {
-            window.clearTimeout(hardTimerRef.current);
-            hardTimerRef.current = null;
-          }
-          const candidate: GpsFix = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracy: Math.max(1, Math.round(pos.coords.accuracy)),
-          };
-          count += 1;
-          if (mountedRef.current) setSamples(count);
-          if (!best || candidate.accuracy < best.accuracy) {
-            best = candidate;
-            if (mountedRef.current) setFix(candidate);
-          }
-          if (candidate.accuracy <= TARGET_ACCURACY_M) {
-            finish(best, null);
-          } else {
-            startSampleWindow();
-          }
-        },
-        (err) => {
-          const kind: GpsErrorKind =
-            err.code === err.PERMISSION_DENIED ? 'denied' : err.code === err.TIMEOUT ? 'timeout' : 'unavailable';
-          finish(best, kind);
-        },
-        { enableHighAccuracy: true, timeout: HARD_TIMEOUT_MS, maximumAge: 0 },
-      );
-    });
-  }, [stop]);
+    if (tier1.fix) {
+      if (mountedRef.current) {
+        setFix(tier1.fix);
+        setTier(1);
+        setSamples(1);
+        setStatus('ok');
+        setErrorKind(null);
+      }
+      return tier1.fix;
+    }
+
+    // Nếu người dùng từ chối thẳng quyền vị trí -> dừng ngay không hỏi lại tầng 2
+    if (tier1.errKind === 'denied') {
+      if (mountedRef.current) {
+        setStatus('denied');
+        setErrorKind('denied');
+      }
+      return null;
+    }
+
+    // Tầng 2: Fallback tự động sang định vị Wi-Fi / Trạm phát sóng trong nhà (timeout 8s)
+    const tier2 = await runAttempt(
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+      2,
+    );
+    if (reqId !== activeReqIdRef.current) return null;
+
+    if (tier2.fix) {
+      if (mountedRef.current) {
+        setFix(tier2.fix);
+        setTier(2);
+        setSamples(2);
+        setStatus('ok');
+        setErrorKind(null);
+      }
+      return tier2.fix;
+    }
+
+    const finalErr = tier2.errKind ?? tier1.errKind ?? 'unavailable';
+    if (mountedRef.current) {
+      setStatus(finalErr === 'denied' ? 'denied' : 'error');
+      setErrorKind(finalErr);
+    }
+    return null;
+  }, []);
 
   return {
     fix,
     status,
     errorKind,
     samples,
+    tier,
     isLowAccuracy: fix !== null && fix.accuracy > LOW_ACCURACY_THRESHOLD_M,
     locate,
     stop,

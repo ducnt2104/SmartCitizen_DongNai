@@ -1,4 +1,4 @@
-import { Lock, LogOut, Settings as SettingsIcon, ShieldCheck, Users } from 'lucide-react';
+import { Lock, LogOut, Settings as SettingsIcon, ShieldCheck, Siren, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { AuthSession } from '@shared/types';
@@ -46,7 +46,16 @@ export default function AuthPage() {
     if (role === 'super_admin' || role === 'city_admin') set({ scope: 'city' });
     else if (role === 'ward_officer' && s.user.wardCode) set({ scope: `ward:${s.user.wardCode}` });
     else if (s.user.defaultWardCode) set({ scope: `ward:${s.user.defaultWardCode}` });
-    nav(role === 'volunteer' ? '/volunteer' : role === 'citizen' ? '/' : '/admin', { replace: true });
+    nav(
+      role === 'rescue_team'
+        ? '/rescue'
+        : role === 'volunteer'
+          ? '/volunteer'
+          : role === 'citizen'
+            ? '/'
+            : '/admin',
+      { replace: true },
+    );
   };
 
   const staffLogin = async (): Promise<void> => {
@@ -143,6 +152,12 @@ export default function AuthPage() {
             </form>
             {err && <p role="alert" className="mt-3 rounded border border-red-500/50 bg-red-500/10 p-2 text-sm text-ioc-red">{err}</p>}
             <p className="mt-3 text-[11px] leading-relaxed text-ioc-dim">{t('auth.staffNote')}</p>
+            <Link
+              to="/rescue/login"
+              className="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg border border-rose-500/50 bg-rose-500/15 px-3 text-xs font-bold text-rose-300 hover:bg-rose-500/25"
+            >
+              <Siren className="h-4 w-4" aria-hidden /> Chuyển sang Cổng Tác Chiến Đội Cứu Hộ (/rescue/login)
+            </Link>
           </div>
           <p className="mt-auto pt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </div>
@@ -203,6 +218,12 @@ export default function AuthPage() {
             </div>
           )}
           {err && <p role="alert" className="rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">{err}</p>}
+          <Link
+            to="/rescue/login"
+            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 text-xs font-bold text-danger hover:bg-rose-500/15"
+          >
+            <Siren className="h-4 w-4" aria-hidden /> Dành cho Đội Cứu Hộ Hiện Trường → /rescue/login
+          </Link>
         </div>
         <p className="mt-auto pt-6 text-center text-xs text-muted">{t('footer.credit')}</p>
       </div>

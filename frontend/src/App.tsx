@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react';
 import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { UserProfile } from '@shared/types';
 import { CommunityLayout } from './components/CommunityLayout';
+import { RoleGuard } from './components/RoleGuard';
 import { RouteErrorBoundary, RouteLoadingSkeleton } from './components/RouteErrorBoundary';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { SpotlightTour } from './components/SpotlightTour';
@@ -20,6 +21,8 @@ const ProfilePage = lazyWithRetry(() => import('./pages/ProfilePage'), 'ProfileP
 const VolunteerPage = lazyWithRetry(() => import('./pages/VolunteerPage'), 'VolunteerPage');
 const AuthPage = lazyWithRetry(() => import('./pages/AuthPage'), 'AuthPage');
 const AdminPage = lazyWithRetry(() => import('./pages/admin/AdminPage'), 'AdminPage');
+const RescueLoginPage = lazyWithRetry(() => import('./pages/rescue/RescueLoginPage'), 'RescueLoginPage');
+const RescuePortalPage = lazyWithRetry(() => import('./pages/rescue/RescuePortalPage'), 'RescuePortalPage');
 
 /** Đồng bộ hồ sơ & xoay vòng cookie phiên khi khởi động nếu trình duyệt đang lưu phiên. */
 function SessionSync() {
@@ -87,8 +90,40 @@ export default function App() {
               <Route path="*" element={<HomePage />} />
             </Route>
             <Route path="auth" element={<AuthPage />} />
-            <Route path="admin" element={<AdminPage />} />
-            <Route path="dashboard" element={<AdminPage />} />
+            <Route path="rescue/login" element={<RescueLoginPage />} />
+            <Route
+              path="rescue"
+              element={
+                <RoleGuard
+                  allowedRoles={['rescue_team', 'ward_officer', 'city_admin', 'super_admin']}
+                  redirectTo="/rescue/login"
+                >
+                  <RescuePortalPage />
+                </RoleGuard>
+              }
+            />
+            <Route
+              path="admin"
+              element={
+                <RoleGuard
+                  allowedRoles={['ward_officer', 'city_admin', 'super_admin']}
+                  redirectTo="/auth"
+                >
+                  <AdminPage />
+                </RoleGuard>
+              }
+            />
+            <Route
+              path="dashboard"
+              element={
+                <RoleGuard
+                  allowedRoles={['ward_officer', 'city_admin', 'super_admin']}
+                  redirectTo="/auth"
+                >
+                  <AdminPage />
+                </RoleGuard>
+              }
+            />
           </Routes>
         </Suspense>
       </RouteErrorBoundary>

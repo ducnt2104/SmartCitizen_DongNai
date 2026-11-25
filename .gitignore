@@ -12,14 +12,24 @@ models/*.gguf
 
 # Environment variables & secrets (chặn tuyệt đối .env, chỉ cho phép .env.example)
 .env
+.env.local
+.env.*.local
 .env.*
+**/.env
+**/.env.local
+**/.env.*.local
 !.env.example
+!**/.env.example
 backend/.env
 backend/.env.*
 !backend/.env.example
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+server/.env
+server/.env.*
+client/.env
+client/.env.*
 
 # Python cache & virtual environments
 __pycache__/

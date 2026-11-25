@@ -521,6 +521,58 @@ export async function runProductionSeed(
       });
     }
 
+    // 2B. Khởi tạo Idempotent 1 tài khoản Đội Cứu Hộ mẫu (RESCUE_TEAM: CUUHO-01) để test ngay cổng /rescue
+    const rescueStaffPw = hashPassword(process.env.INITIAL_STAFF_PASSWORD || 'DongNai@2026!');
+    const existingRescueUser = await User.findOne({
+      $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }, { phoneNumber: '0900000114' }],
+    }).lean();
+    if (!existingRescueUser) {
+      await User.create({
+        phoneNumber: '0900000114',
+        email: 'cuuho01@dongnai.gov.vn',
+        staffCode: 'CUUHO-01',
+        passwordHash: rescueStaffPw,
+        wardCode: 'DN-TB',
+        fullName: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
+        role: 'rescue_team',
+        assignedArea: { district: 'TP. Đồng Nai', ward: 'Phường Trấn Biên (Cơ động liên phường)' },
+        trustScore: 100,
+        otpVerification: {
+          isVerified: true,
+          lastVerifiedAt: new Date(),
+          dailyReportCount: 0,
+          lastReportDate: null,
+        },
+        clientOfflineId: 'seed-rescue-team-01',
+        syncStatus: 'synced',
+      });
+    }
+    const existingAppRescue = await UserModel.findOne({
+      $or: [{ staffCode: 'CUUHO-01' }, { email: 'cuuho01@dongnai.gov.vn' }],
+    }).lean();
+    if (!existingAppRescue) {
+      await UserModel.create({
+        id: 'u_rescue_01',
+        role: 'rescue_team',
+        name: 'Đội Cứu Hộ Phản Ứng Nhanh Trung Tâm (Trấn Biên)',
+        phone: '0900000114',
+        email: 'cuuho01@dongnai.gov.vn',
+        staffCode: 'CUUHO-01',
+        passwordHash: rescueStaffPw,
+        wardCode: 'DN-TB',
+        unitCode: 'RESCUE-TB-01',
+        defaultWardCode: 'DN-TB',
+        notificationsEnabled: true,
+        revoked: false,
+        trustScore: 100,
+        badges: ['Đội Cứu Hộ SOS 24/7'],
+        volunteerHours: 0,
+        points: 0,
+        notifications: [],
+        createdAt: new Date().toISOString(),
+      });
+    }
+
     // 3. Nạp Idempotent 64 sự cố thí điểm Phường Trấn Biên qua incidentRepository.upsertBySyncId()
     const pilotIncidents = buildTranBien64PilotIncidents(superAdminId);
     let insertedNewCount = 0;

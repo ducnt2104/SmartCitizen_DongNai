@@ -1,4 +1,4 @@
-import { DEPARTMENT_BY_CATEGORY } from '@shared/constants';
+import { computeSosPriorityScore, DEPARTMENT_BY_CATEGORY, toSeverityLabel } from '@shared/constants';
 import type { Category, VisionResult } from '@shared/types';
 import type { EdgeStatsMsg } from '../workers/edgeProcessor.worker';
 
@@ -37,11 +37,14 @@ export function localVision(category: Category | null, text: string, edge?: Edge
     if (edge.brightness < 18 || edge.brightness > 245) { flags.push('bad_exposure'); auth -= 12; }
   }
   const emergency = EMERGENCY.test(text);
+  const severity: VisionResult['severity'] = emergency ? 5 : 3;
   return {
     category: cat,
     title: TEXT[cat].title,
     description: TEXT[cat].desc,
-    severity: emergency ? 5 : 3,
+    severity,
+    severityLabel: toSeverityLabel(severity, emergency),
+    priorityScore: computeSosPriorityScore({ severity, isEmergency: emergency }),
     isEmergency: emergency,
     safetyHazards: emergency ? ['Từ khóa nguy hiểm trong mô tả — cần xác minh nhanh'] : [],
     suggestedDepartment: emergency && cat === 'den_duong' ? 'dien_luc' : DEPARTMENT_BY_CATEGORY[cat],

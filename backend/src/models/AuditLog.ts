@@ -29,7 +29,7 @@ const operationalAuditLogSchema = new Schema<IAuditLog>(
     metadata: { type: Schema.Types.Mixed, default: undefined },
   },
   {
-    collection: 'audit_logs',
+    collection: 'operational_audit_logs',
     timestamps: { createdAt: true, updatedAt: false },
     versionKey: false,
   },

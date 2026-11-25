@@ -14,7 +14,10 @@ const department = z.enum([...DEPARTMENTS] as [string, ...string[]]);
 const wardCode = z.string().regex(/^DN-[A-Z]{2,4}$/);
 const roleInput = z
   .string()
-  .refine((v) => normalizeRoleInput(v) !== null, 'Vai trò không hợp lệ (SUPER_ADMIN, ADMIN, OFFICER, YOUTH_UNION, CITIZEN)');
+  .refine(
+    (v) => normalizeRoleInput(v) !== null,
+    'Vai trò không hợp lệ (SUPER_ADMIN, ADMIN, OFFICER, RESCUE_TEAM, YOUTH_UNION, CITIZEN)',
+  );
 
 export const edgeStatsSchema = z.object({
   blurScore: z.number().min(0).max(1e6),
@@ -54,6 +57,10 @@ export const schemas = {
     staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/),
     password: z.string().min(1).max(128),
     unit: z.union([z.literal('city'), wardCode]).default('city'),
+  }),
+  rescueLogin: z.object({
+    identifier: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/),
+    password: z.string().min(1).max(128),
   }),
   updateProfile: z.object({
     name: z.string().min(2).max(80).optional(),
@@ -115,6 +122,18 @@ export const schemas = {
   verifyResolution: z.object({
     reportId: z.string().min(3).max(64),
     afterPhoto: photo,
+    edge: edgeStatsSchema.optional(),
+  }),
+  tacticalBriefing: z.object({
+    reportId: z.string().min(3).max(64).optional(),
+    category: category.optional(),
+    title: z.string().min(3).max(140).optional(),
+    description: z.string().max(800).optional(),
+    severity: z.number().int().min(1).max(5).optional(),
+    isEmergency: z.boolean().optional(),
+    wardCode: wardCode.optional(),
+    address: z.string().max(240).optional(),
+    forceRefresh: z.boolean().default(false),
   }),
   chat: z.object({
     messages: z
@@ -131,13 +150,13 @@ export const schemas = {
     aiSuggestedLabel: z.string().max(80).nullable().optional(),
     title: z.string().min(3).max(140),
     description: z.string().max(800).default(''),
-    lat: z.number().min(-90).max(90),
-    lng: z.number().min(-180).max(180),
+    lat: z.number().finite(),
+    lng: z.number().finite(),
     wardCode: wardCode.optional(),
     address: z.string().max(240).optional(),
     photo,
-    deviceLat: z.number().min(-90).max(90).optional(),
-    deviceLng: z.number().min(-180).max(180).optional(),
+    deviceLat: z.number().finite().optional(),
+    deviceLng: z.number().finite().optional(),
     leftScene: z.boolean().default(false),
     isProxyReport: z.boolean().default(false),
     seniorSubmitted: z.boolean().default(false),
@@ -164,6 +183,51 @@ export const schemas = {
     verdict: z.enum(['true', 'duplicate', 'fake']),
     note: z.string().max(400).default(''),
     photo: photo.optional(),
+  }),
+
+  rescueStatus: z
+    .object({
+      status: z
+        .enum([
+          'ACCEPTED',
+          'EN_ROUTE',
+          'ON_SITE',
+          'RESOLVED',
+          'accepted',
+          'en_route',
+          'on_site',
+          'resolved',
+          'completed',
+        ])
+        .optional(),
+      step: z
+        .enum([
+          'ACCEPTED',
+          'EN_ROUTE',
+          'ON_SITE',
+          'RESOLVED',
+          'accepted',
+          'en_route',
+          'on_site',
+          'resolved',
+          'completed',
+        ])
+        .optional(),
+      note: z.string().max(400).default(''),
+      lat: z.number().finite().optional(),
+      lng: z.number().finite().optional(),
+      afterPhoto: photo.optional(),
+      override: z.boolean().default(false),
+      edge: edgeStatsSchema.optional(),
+    })
+    .refine((d) => Boolean(d.status || d.step), 'Cần truyền trạng thái nhiệm vụ (ACCEPTED, EN_ROUTE, ON_SITE, RESOLVED).'),
+  rescueComplete: z.object({
+    afterPhoto: photo,
+    note: z.string().max(400).default(''),
+    override: z.boolean().default(false),
+    edge: edgeStatsSchema.optional(),
+    lat: z.number().finite().optional(),
+    lng: z.number().finite().optional(),
   }),
 } as const;
 

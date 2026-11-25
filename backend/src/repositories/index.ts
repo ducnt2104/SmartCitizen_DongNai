@@ -95,10 +95,15 @@ export async function createRepositories(
   };
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function createUnavailableEntityProxy<T extends object>(
-  entityName: string,
+  _entityName: string,
   getDelegate: () => T | null,
   getBootInfo: () => RepositoryBootInfo,
+  waitForReady?: () => Promise<void>,
 ): T {
   return new Proxy({} as T, {
     get(_target, prop, receiver) {
@@ -108,12 +113,26 @@ function createUnavailableEntityProxy<T extends object>(
         return typeof val === 'function' ? val.bind(delegate) : val;
       }
       if (prop === 'then') return undefined;
-      return async () => {
+      return async (...args: unknown[]) => {
+        // Nếu server đang trong vài trăm ms cold-start kết nối MongoDB Atlas, chờ kết nối hoàn tất thay vì trả 503 ngay
+        if (waitForReady) {
+          await waitForReady();
+          const readyDelegate = getDelegate();
+          if (readyDelegate) {
+            const fn = Reflect.get(readyDelegate, prop, receiver);
+            if (typeof fn === 'function') {
+              return (fn as (...a: unknown[]) => unknown).apply(readyDelegate, args);
+            }
+            return fn;
+          }
+        }
         const info = getBootInfo();
         const msg =
           info.dbState === 'unconfigured'
             ? 'Chưa cấu hình biến môi trường MONGODB_URI trên máy chủ.'
-            : 'Hệ thống đang kết nối tới MongoDB Atlas (cold-start / retry nền), vui lòng thử lại sau vài giây.';
+            : info.lastError
+              ? `Không thể kết nối MongoDB Atlas (${info.lastError}). Hãy kiểm tra Network Access IP Whitelist 0.0.0.0/0 trên MongoDB Atlas.`
+              : 'Hệ thống đang kết nối tới MongoDB Atlas (cold-start / retry nền), vui lòng thử lại sau vài giây.';
         throw new HttpError(503, msg, 'database_connecting', {
           dbState: info.dbState,
           diagnostic: info.lastError,
@@ -168,6 +187,14 @@ export function createNonBlockingServerRepositories(options?: CreateRepositories
   let activeRepos: Repositories | null = null;
   let stopped = false;
   let bgTimer: NodeJS.Timeout | null = null;
+  let inFlightConnect: Promise<boolean> | null = null;
+
+  const waitForColdStart = async (): Promise<void> => {
+    if (activeRepos) return;
+    if (inFlightConnect) {
+      await Promise.race([inFlightConnect.catch(() => false), sleepMs(8_500)]);
+    }
+  };
 
   const emptyStats = (): DbHealthStats => ({
     ok: false,
@@ -188,16 +215,22 @@ export function createNonBlockingServerRepositories(options?: CreateRepositories
     get mode() {
       return activeRepos ? activeRepos.mode : 'mongodb';
     },
-    reports: createUnavailableEntityProxy('reports', () => activeRepos?.reports ?? null, () => boot),
-    users: createUnavailableEntityProxy('users', () => activeRepos?.users ?? null, () => boot),
-    fingerprints: createUnavailableEntityProxy('fingerprints', () => activeRepos?.fingerprints ?? null, () => boot),
-    evaluations: createUnavailableEntityProxy('evaluations', () => activeRepos?.evaluations ?? null, () => boot),
-    aiConfig: createUnavailableEntityProxy('aiConfig', () => activeRepos?.aiConfig ?? null, () => boot),
-    audit: createUnavailableEntityProxy('audit', () => activeRepos?.audit ?? null, () => boot),
-    otps: createUnavailableEntityProxy('otps', () => activeRepos?.otps ?? null, () => boot),
-    sessions: createUnavailableEntityProxy('sessions', () => activeRepos?.sessions ?? null, () => boot),
-    ping: async () => (activeRepos ? activeRepos.ping() : false),
-    healthStats: async () => (activeRepos ? activeRepos.healthStats() : emptyStats()),
+    reports: createUnavailableEntityProxy('reports', () => activeRepos?.reports ?? null, () => boot, waitForColdStart),
+    users: createUnavailableEntityProxy('users', () => activeRepos?.users ?? null, () => boot, waitForColdStart),
+    fingerprints: createUnavailableEntityProxy('fingerprints', () => activeRepos?.fingerprints ?? null, () => boot, waitForColdStart),
+    evaluations: createUnavailableEntityProxy('evaluations', () => activeRepos?.evaluations ?? null, () => boot, waitForColdStart),
+    aiConfig: createUnavailableEntityProxy('aiConfig', () => activeRepos?.aiConfig ?? null, () => boot, waitForColdStart),
+    audit: createUnavailableEntityProxy('audit', () => activeRepos?.audit ?? null, () => boot, waitForColdStart),
+    otps: createUnavailableEntityProxy('otps', () => activeRepos?.otps ?? null, () => boot, waitForColdStart),
+    sessions: createUnavailableEntityProxy('sessions', () => activeRepos?.sessions ?? null, () => boot, waitForColdStart),
+    ping: async () => {
+      await waitForColdStart();
+      return activeRepos ? activeRepos.ping() : false;
+    },
+    healthStats: async () => {
+      await waitForColdStart();
+      return activeRepos ? activeRepos.healthStats() : emptyStats();
+    },
     close: async () => {
       if (activeRepos) await activeRepos.close();
     },
@@ -215,32 +248,40 @@ export function createNonBlockingServerRepositories(options?: CreateRepositories
     }
 
     const attemptMongoConnect = async (bootRetries: number): Promise<boolean> => {
-      try {
-        const mongoRepos = await createMongoRepositories(uri, {
-          bootRetries,
-          retryBaseDelayMs: options?.retryBaseDelayMs,
-        });
-        if (stopped) {
-          await mongoRepos.close();
+      const p = (async () => {
+        try {
+          const mongoRepos = await createMongoRepositories(uri, {
+            bootRetries,
+            retryBaseDelayMs: options?.retryBaseDelayMs,
+          });
+          if (stopped) {
+            await mongoRepos.close();
+            return false;
+          }
+          const prevRepos = activeRepos;
+          activeRepos = mongoRepos;
+          boot.dbState = 'connected';
+          boot.fallbackReason = null;
+          boot.lastError = null;
+          if (prevRepos && prevRepos.mode === 'json') {
+            await prevRepos.close().catch(() => undefined);
+          }
+          if (onReady) {
+            await onReady(proxyRepos);
+          }
+          console.log('[db] Đã kết nối MongoDB Atlas & đồng bộ dữ liệu sẵn sàng phục vụ!');
+          return true;
+        } catch (err) {
+          const diag = diagnoseMongoError(err);
+          boot.lastError = `[${diag.category} - ${diag.errorName}] ${diag.message} | Gợi ý: ${diag.hint}`;
           return false;
         }
-        const prevRepos = activeRepos;
-        activeRepos = mongoRepos;
-        boot.dbState = 'connected';
-        boot.fallbackReason = null;
-        boot.lastError = null;
-        if (prevRepos && prevRepos.mode === 'json') {
-          await prevRepos.close().catch(() => undefined);
-        }
-        if (onReady) {
-          await onReady(proxyRepos);
-        }
-        console.log('[db] Đã kết nối MongoDB Atlas & đồng bộ dữ liệu sẵn sàng phục vụ!');
-        return true;
-      } catch (err) {
-        const diag = diagnoseMongoError(err);
-        boot.lastError = `[${diag.category} - ${diag.errorName}] ${diag.message} | Gợi ý: ${diag.hint}`;
-        return false;
+      })();
+      inFlightConnect = p;
+      try {
+        return await p;
+      } finally {
+        if (inFlightConnect === p) inFlightConnect = null;
       }
     };
 

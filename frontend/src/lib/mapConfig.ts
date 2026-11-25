@@ -249,6 +249,18 @@ export function googleMapsPlaceUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat.toFixed(6)},${lng.toFixed(6)}`;
 }
 
+/** Liên kết 1-chạm mở ứng dụng Google Maps Dẫn đường trực tiếp tới hiện trường cho Đội Cứu Hộ & Cán bộ. */
+export function googleMapsDirectionsUrl(
+  destLat: number,
+  destLng: number,
+  origin?: { lat: number; lng: number } | null,
+  travelMode: 'driving' | 'two-wheeler' | 'walking' = 'driving',
+): string {
+  const dest = `${destLat.toFixed(6)},${destLng.toFixed(6)}`;
+  const origParam = origin ? `&origin=${origin.lat.toFixed(6)},${origin.lng.toFixed(6)}` : '';
+  return `https://www.google.com/maps/dir/?api=1${origParam}&destination=${dest}&travelmode=${travelMode}`;
+}
+
 export const OPENFREEMAP_VECTOR_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 export const OPENFREEMAP_DARK_STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
 

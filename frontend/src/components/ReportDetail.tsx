@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Camera, Clock, ExternalLink, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
+import { Camera, Clock, ExternalLink, Navigation, Radio, ShieldCheck, Star, ThumbsUp } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { hammingDistance } from '@shared/dhash';
 import type { ClientReport } from '@shared/types';
 import { WARD_BY_CODE } from '../data/dongNaiWards';
@@ -143,15 +144,28 @@ export function ReportDetail({
             <dd className="break-words font-semibold">{r.address}</dd>
             <dd className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="mono text-muted">{r.lat.toFixed(5)}, {r.lng.toFixed(5)} · {ward?.name}</span>
-              <a
-                href={googleMapsPlaceUrl(r.lat, r.lng)}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 font-semibold text-brand underline"
-              >
-                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-                {t('map.openGoogleMaps')}
-              </a>
+              <div className="flex flex-wrap items-center gap-2">
+                {session?.user &&
+                  ['ward_officer', 'rescue_team', 'city_admin', 'super_admin'].includes(session.user.role) && (
+                    <Link
+                      to={`/rescue?missionId=${encodeURIComponent(r.id)}`}
+                      onClick={onClose}
+                      className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-[#1A73E8] px-2.5 py-1 text-xs font-extrabold text-white shadow hover:bg-[#1557B0]"
+                    >
+                      <Navigation className="h-3.5 w-3.5 fill-current" aria-hidden />
+                      Chỉ đường tới hiện trường
+                    </Link>
+                  )}
+                <a
+                  href={googleMapsPlaceUrl(r.lat, r.lng)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-semibold text-brand underline"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                  {t('map.openGoogleMaps')}
+                </a>
+              </div>
             </dd>
           </div>
           {r.slaDueAt && r.status !== 'resolved' && (

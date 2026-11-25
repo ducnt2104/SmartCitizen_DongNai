@@ -7,7 +7,15 @@ import {
   type HybridSyncFields,
 } from './common';
 
-export const USER_ROLES = ['citizen', 'volunteer', 'ward_officer', 'city_admin', 'admin', 'super_admin'] as const;
+export const USER_ROLES = [
+  'citizen',
+  'volunteer',
+  'rescue_team',
+  'ward_officer',
+  'city_admin',
+  'admin',
+  'super_admin',
+] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export interface AssignedArea {
@@ -119,6 +127,17 @@ const userSchema = new Schema<IUser>(
     },
     role: {
       type: String,
+      set: (v: unknown) => {
+        if (typeof v !== 'string') return v;
+        const trimmed = v.trim();
+        const upper = trimmed.toUpperCase();
+        if (upper === 'RESCUE_TEAM' || upper === 'RESCUE') return 'rescue_team';
+        if (upper === 'SUPER_ADMIN' || upper === 'SUPERADMIN') return 'super_admin';
+        if (upper === 'OFFICER') return 'ward_officer';
+        if (upper === 'YOUTH_UNION') return 'volunteer';
+        if (upper === 'CITIZEN') return 'citizen';
+        return trimmed.toLowerCase();
+      },
       enum: {
         values: USER_ROLES,
         message: 'Vai trò người dùng không hợp lệ ({VALUE}).',

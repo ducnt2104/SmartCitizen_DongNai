@@ -1,20 +1,53 @@
+import { computeSosPriorityScore, toSeverityLabel } from './constants';
 import type { Category, ClientReport, Report, ReportSummary, ScopeStats } from './types';
 import { CATEGORIES } from './types';
 
 export function toClientReport(r: Report): ClientReport {
   const { reporterId: _rid, contributors, confirmations, ...rest } = r;
   void _rid;
-  return { ...rest, confirmCount: confirmations.length, contributorCount: contributors.length };
+  const priorityScore =
+    r.priorityScore ??
+    r.ai?.priorityScore ??
+    computeSosPriorityScore({
+      severity: r.severity,
+      isEmergency: r.isEmergency || r.emergencyLevel === 1,
+      onArterial: r.onArterial,
+      clusterCount: r.clusterCount,
+      confirmCount: confirmations.length,
+    });
+  const severityLabel =
+    r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
+  return {
+    ...rest,
+    priorityScore,
+    severityLabel,
+    confirmCount: confirmations.length,
+    contributorCount: contributors.length,
+  };
 }
 
 /** Bản tóm tắt nhẹ cho endpoint bản đồ bbox (loại bỏ payload ảnh base64 lớn). */
 export function toReportSummary(r: Report): ReportSummary {
+  const priorityScore =
+    r.priorityScore ??
+    r.ai?.priorityScore ??
+    computeSosPriorityScore({
+      severity: r.severity,
+      isEmergency: r.isEmergency || r.emergencyLevel === 1,
+      onArterial: r.onArterial,
+      clusterCount: r.clusterCount,
+      confirmCount: r.confirmations.length,
+    });
+  const severityLabel =
+    r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
   return {
     id: r.id,
     code: r.code,
     category: r.category,
     title: r.title,
     severity: r.severity,
+    severityLabel,
+    priorityScore,
     isEmergency: r.isEmergency,
     emergencyLevel: r.emergencyLevel,
     priority: r.priority,

@@ -4,15 +4,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-// Nạp .env từ cả thư mục gốc monorepo lẫn backend/.env để không bao giờ bị rơi mất MONGODB_URI do khác cwd
-for (const candidate of [
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), '../.env'),
-  path.resolve(__dirname, '../../.env'),
-  path.resolve(__dirname, '../../../.env'),
-]) {
-  if (fs.existsSync(candidate)) {
-    dotenv.config({ path: candidate, override: false });
+// Nạp .env từ cả thư mục gốc monorepo lẫn backend/.env (chỉ nạp ngoài môi trường unit test Vitest để cô lập DB test)
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  for (const candidate of [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '../.env'),
+    path.resolve(__dirname, '../../.env'),
+    path.resolve(__dirname, '../../../.env'),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      dotenv.config({ path: candidate, override: false });
+    }
   }
 }
 
@@ -146,8 +148,23 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   );
 
   const geminiApiKey = readTrimmed(source, 'GEMINI_API_KEY') ?? '';
-  const geminiModel = readTrimmed(source, 'GEMINI_MODEL') || 'gemini-3.5-flash';
-  const allowCloudAiFallback = parseBoolEnv(source, 'ALLOW_CLOUD_AI_FALLBACK', Boolean(source.RENDER), issues);
+  const rawGeminiModel = readTrimmed(source, 'GEMINI_MODEL') || 'gemini-2.5-flash';
+  // Tự động chuẩn hóa nếu môi trường đang cấu hình model không tồn tại (vd: gemini-3.5-flash trên Render)
+  const geminiModel = /^gemini-3\.5/i.test(rawGeminiModel) ? 'gemini-2.5-flash' : rawGeminiModel;
+  const hasAnyCloudAiKey = Boolean(
+    geminiApiKey ||
+      readTrimmed(source, 'GEMINI_API_KEYS') ||
+      readTrimmed(source, 'OPENROUTER_API_KEYS') ||
+      readTrimmed(source, 'OPENROUTER_API_KEY') ||
+      readTrimmed(source, 'GROQ_API_KEYS') ||
+      readTrimmed(source, 'GROQ_API_KEY'),
+  );
+  const allowCloudAiFallback = parseBoolEnv(
+    source,
+    'ALLOW_CLOUD_AI_FALLBACK',
+    Boolean(source.RENDER) || hasAnyCloudAiKey,
+    issues,
+  );
 
   // Local AI & High-Speed Rust CV Engine
   const cvEngineUrl = readTrimmed(source, 'CV_ENGINE_URL') || 'http://127.0.0.1:8001';

@@ -301,13 +301,19 @@ export default function ReportPage() {
     setLocalDup(null);
   };
 
-  if (session?.user && (session.user.role === 'ward_officer' || session.user.role === 'city_admin' || session.user.role === 'super_admin')) {
+  if (
+    session?.user &&
+    (session.user.role === 'ward_officer' ||
+      session.user.role === 'city_admin' ||
+      session.user.role === 'super_admin' ||
+      session.user.role === 'rescue_team')
+  ) {
     return (
       <div className="card p-6 text-center">
         <ShieldAlert className="mx-auto h-10 w-10 text-warn" aria-hidden />
         <p className="mt-2 font-bold">{t('report.staffBlocked')}</p>
-        <Link to="/admin" className="btn btn-primary mt-4">
-          {t('nav.admin')}
+        <Link to={session.user.role === 'rescue_team' ? '/rescue' : '/admin'} className="btn btn-primary mt-4">
+          {session.user.role === 'rescue_team' ? 'Vào Cổng Tác Chiến Đội Cứu Hộ' : t('nav.admin')}
         </Link>
       </div>
     );

@@ -148,8 +148,9 @@ export class KeyPoolManager {
     this.defaultMaxAttempts = Math.max(1, options.defaultMaxAttempts ?? 5);
     this.nowFn = options.nowFn ?? Date.now;
     this.logger = options.logger ?? DEFAULT_LOGGER;
-    this.defaultGeminiModel =
-      (options.defaultGeminiModel ?? this.envSource.GEMINI_MODEL ?? 'gemini-3.5-flash').trim();
+    const rawDefaultModel =
+      (options.defaultGeminiModel ?? this.envSource.GEMINI_MODEL ?? 'gemini-2.5-flash').trim();
+    this.defaultGeminiModel = /^gemini-3\.5/i.test(rawDefaultModel) ? 'gemini-2.5-flash' : rawDefaultModel;
     this.probeFn = options.probeFn ?? ((apiKey, meta) => this.defaultLiveProbe(apiKey, meta));
 
     this.loadEnvKeys();
@@ -1212,19 +1213,36 @@ export class KeyPoolManager {
       }
 
       const mod = await import('@google/genai');
-      const client = new mod.GoogleGenAI({ apiKey });
-      const res = await client.models.generateContent({
-        model: this.defaultGeminiModel,
-        contents: 'Trả lời duy nhất từ: OK',
-        config: {
-          maxOutputTokens: 5,
-          temperature: 0,
-        },
-      });
-      return {
-        ok: true,
-        detail: `Gemini (${this.defaultGeminiModel}) phản hồi thành công${res.text ? `: "${res.text.trim().slice(0, 24)}"` : ''}.`,
-      };
+      const cleanKey = apiKey.trim();
+      const client = new mod.GoogleGenAI(
+        /^AQ\./.test(cleanKey) ? { apiKey: cleanKey, vertexai: true } : { apiKey: cleanKey },
+      );
+      const modelsToTry = Array.from(new Set([this.defaultGeminiModel, 'gemini-2.5-flash', 'gemini-2.0-flash']));
+      let lastModelErr: unknown = null;
+      for (const modelId of modelsToTry) {
+        try {
+          const res = await client.models.generateContent({
+            model: modelId,
+            contents: 'Trả lời duy nhất từ: OK',
+            config: {
+              maxOutputTokens: 5,
+              temperature: 0,
+            },
+          });
+          return {
+            ok: true,
+            detail: `Gemini (${modelId}) phản hồi thành công${res.text ? `: "${res.text.trim().slice(0, 24)}"` : ''}.`,
+          };
+        } catch (err) {
+          lastModelErr = err;
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/404|not[_ ]found|not supported/i.test(msg)) {
+            continue;
+          }
+          throw err;
+        }
+      }
+      throw lastModelErr ?? new Error('Không tìm thấy model Gemini khả dụng.');
     } finally {
       clearTimeout(timer);
     }

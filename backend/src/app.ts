@@ -1,6 +1,7 @@
 import compression from 'compression';
 import cors from 'cors';
 import express, { type Express } from 'express';
+import mongoSanitize from 'express-mongo-sanitize';
 import fs from 'node:fs';
 import path from 'node:path';
 import helmet from 'helmet';
@@ -51,6 +52,10 @@ export function createApp(
             'https://*.tile.openstreetmap.org',
             'https://*.basemaps.cartocdn.com',
             'https://server.arcgisonline.com',
+            'https://geocode.arcgis.com',
+            'https://photon.komoot.io',
+            'https://tiles.openfreemap.org',
+            'https://router.project-osrm.org',
           ],
           'worker-src': ["'self'", 'blob:'],
           'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
@@ -82,6 +87,7 @@ export function createApp(
   app.use(express.json({ limit: '4mb' }));
   app.use(limits.global);
   app.use(sanitizeInput);
+  app.use(mongoSanitize({ replaceWith: '_' }));
 
   const { api, root } = buildRouter(s, bootInfo);
   app.use(root);

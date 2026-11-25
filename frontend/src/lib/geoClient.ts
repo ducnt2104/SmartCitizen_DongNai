@@ -1,6 +1,7 @@
 import { DONG_NAI_BBOX } from '@shared/constants';
+import { normalizeCoordinates, TRAN_BIEN_FALLBACK_COORDS } from '@shared/coordinates';
 import { searchWards, WARD_BY_CODE } from '@shared/dongNaiWards';
-import { inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
+import { haversineMeters, inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
 import type { ReverseGeocodeResult } from '@shared/types';
 import { api } from './api';
 import { DONG_NAI_GOOGLE_BOUNDS, isGoogleMapsHealthy } from './mapConfig';
@@ -9,6 +10,14 @@ export interface GpsFix {
   lat: number;
   lng: number;
   accuracy: number;
+  tier?: 1 | 2;
+}
+
+export interface DrivingRouteResult {
+  distanceKm: number;
+  durationMin: number;
+  path: Array<{ lat: number; lng: number }>;
+  source: 'osrm' | 'geodesic';
 }
 
 export type GpsErrorKind = 'denied' | 'unavailable' | 'timeout' | 'unsupported';
@@ -32,62 +41,122 @@ export interface PlaceSuggestion {
   upgradedOn2026?: boolean;
 }
 
-/** Lấy mẫu GPS chính xác bằng `watchPosition` (chọn mẫu sai số tốt nhất trong 4s, dừng ngay khi accuracy <= 18m). */
-export function getGps(timeoutMs = 12000): Promise<GpsFix> {
-  return new Promise((resolve, reject) => {
-    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      return reject(new GpsError('unsupported', 'Thiết bị không hỗ trợ định vị'));
-    }
-    let best: GpsFix | null = null;
-    let settled = false;
-    let sampleTimer: number | null = null;
-    let watchId: number | null = null;
+/**
+ * Chiến lược lấy GPS 2 tầng (Không bao giờ treo hay timeout trong nhà):
+ * - Tầng 1: `getCurrentPosition({ enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 })`
+ * - Tầng 2 (Fallback tự động khi trong nhà / yếu sóng): `getCurrentPosition({ enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 })`
+ * - Chuẩn hóa qua `normalizeCoordinates` chống `[0, 0]`, `NaN` và đảo ngược tọa độ.
+ */
+export async function getGps(): Promise<GpsFix> {
+  if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+    throw new GpsError('unsupported', 'Thiết bị không hỗ trợ định vị');
+  }
 
-    const cleanup = (): void => {
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      if (sampleTimer !== null) window.clearTimeout(sampleTimer);
+  const attempt = (opts: PositionOptions, tier: 1 | 2): Promise<{ fix?: GpsFix; err?: GpsError }> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const guard = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve({ err: new GpsError('timeout', 'Hết thời gian chờ tín hiệu GPS') });
+      }, (opts.timeout ?? 7000) + 500);
+
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(guard);
+          const norm = normalizeCoordinates(
+            { lat: p.coords.latitude, lng: p.coords.longitude },
+            { requireVietnam: false },
+          );
+          if (!norm.ok) {
+            resolve({ err: new GpsError('unavailable', norm.message) });
+            return;
+          }
+          resolve({
+            fix: {
+              lat: norm.lat,
+              lng: norm.lng,
+              accuracy: Math.max(1, Math.round(p.coords.accuracy || (tier === 1 ? 15 : 85))),
+              tier,
+            },
+          });
+        },
+        (e) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(guard);
+          resolve({
+            err: new GpsError(
+              e.code === e.PERMISSION_DENIED ? 'denied' : e.code === e.TIMEOUT ? 'timeout' : 'unavailable',
+              e.message,
+            ),
+          });
+        },
+        opts,
+      );
+    });
+
+  const t1 = await attempt({ enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 }, 1);
+  if (t1.fix) return t1.fix;
+  if (t1.err?.kind === 'denied') throw t1.err;
+
+  const t2 = await attempt({ enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }, 2);
+  if (t2.fix) return t2.fix;
+  throw t2.err ?? t1.err ?? new GpsError('unavailable', 'Không lấy được vị trí GPS');
+}
+
+/**
+ * Tìm tuyến đường lái xe thực tế cho Đội Cứu Hộ (OSRM Driving API miễn phí + Fallback đường thẳng đô thị 0% lỗi).
+ */
+export async function fetchDrivingRoute(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number },
+  signal?: AbortSignal,
+): Promise<DrivingRouteResult> {
+  const straightM = haversineMeters(origin.lat, origin.lng, destination.lat, destination.lng);
+  const fallbackKm = Math.max(0.1, Math.round(((straightM * 1.28) / 1000) * 100) / 100);
+  const fallbackMin = Math.max(2, Math.round((fallbackKm / 38) * 60 + 1));
+  const fallback: DrivingRouteResult = {
+    distanceKm: fallbackKm,
+    durationMin: fallbackMin,
+    path: [origin, destination],
+    source: 'geodesic',
+  };
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return fallback;
+
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), 4500);
+  signal?.addEventListener('abort', () => ctrl.abort());
+  try {
+    const coordsStr = `${origin.lng.toFixed(6)},${origin.lat.toFixed(6)};${destination.lng.toFixed(6)},${destination.lat.toFixed(6)}`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl.signal });
+    if (!res.ok) return fallback;
+    const json = (await res.json()) as {
+      code?: string;
+      routes?: Array<{
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: Array<[number, number]> };
+      }>;
     };
-
-    const done = (fix: GpsFix | null, err?: GpsError): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (fix) resolve(fix);
-      else reject(err ?? new GpsError('unavailable', 'Không lấy được vị trí GPS'));
+    const r0 = json.routes?.[0];
+    const coords = r0?.geometry?.coordinates;
+    if (!r0 || !coords || coords.length < 2) return fallback;
+    return {
+      distanceKm: Math.max(0.1, Math.round(((r0.distance ?? straightM) / 1000) * 100) / 100),
+      durationMin: Math.max(1, Math.round((r0.duration ?? fallbackMin * 60) / 60)),
+      path: coords.map(([lng, lat]) => ({ lat, lng })),
+      source: 'osrm',
     };
-
-    const hardTimer = window.setTimeout(() => {
-      done(best, new GpsError('timeout', 'Hết thời gian chờ tín hiệu GPS'));
-    }, timeoutMs);
-
-    watchId = navigator.geolocation.watchPosition(
-      (p) => {
-        window.clearTimeout(hardTimer);
-        const f: GpsFix = {
-          lat: p.coords.latitude,
-          lng: p.coords.longitude,
-          accuracy: Math.max(1, Math.round(p.coords.accuracy)),
-        };
-        if (!best || f.accuracy < best.accuracy) best = f;
-        if (f.accuracy <= 18) {
-          done(best);
-        } else if (sampleTimer === null) {
-          sampleTimer = window.setTimeout(() => done(best), 4000);
-        }
-      },
-      (e) => {
-        window.clearTimeout(hardTimer);
-        done(
-          best,
-          new GpsError(
-            e.code === e.PERMISSION_DENIED ? 'denied' : e.code === e.TIMEOUT ? 'timeout' : 'unavailable',
-            e.message,
-          ),
-        );
-      },
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
-    );
-  });
+  } catch {
+    return fallback;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function hasLoadedGoogleGeocoder(): boolean {
@@ -460,7 +529,7 @@ export async function resolvePlaceSuggestion(
 
 /** Địa danh đại diện phủ khắp 5 vùng toàn Thành phố Đồng Nai khi từ chối GPS. */
 export const QUICK_PLACES: ReadonlyArray<{ name: string; lat: number; lng: number; wardCode: string }> = [
-  { name: 'Phường Trấn Biên (Trung tâm)', lat: 10.9492, lng: 106.8225, wardCode: 'DN-TB' },
+  { name: 'Phường Trấn Biên (Trung tâm)', lat: TRAN_BIEN_FALLBACK_COORDS.lat, lng: TRAN_BIEN_FALLBACK_COORDS.lng, wardCode: 'DN-TB' },
   { name: 'Phường Long Thành (Sân bay)', lat: 10.7782, lng: 106.9462, wardCode: 'DN-LTH' },
   { name: 'Phường Nhơn Trạch (Cảng)', lat: 10.7458, lng: 106.9474, wardCode: 'DN-NTR' },
   { name: 'Phường Trảng Bom', lat: 10.9526, lng: 107.0104, wardCode: 'DN-TBO' },

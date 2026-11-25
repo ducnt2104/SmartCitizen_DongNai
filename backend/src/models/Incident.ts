@@ -322,7 +322,7 @@ const aiEvaluationSchema = new Schema<IncidentAiEvaluation>(
     matchedIncidentId: { type: Schema.Types.Mixed, default: null },
     sceneMatchScore: { type: Number, min: 0, max: 100, default: null },
     resolutionScore: { type: Number, min: 0, max: 100, default: null },
-    modelVersion: { type: String, trim: true, maxlength: 80, default: 'gemini-3.5-flash' },
+    modelVersion: { type: String, trim: true, maxlength: 80, default: 'gemini-2.5-flash' },
     evaluatedAt: { type: Date, default: Date.now },
   },
   { _id: false },

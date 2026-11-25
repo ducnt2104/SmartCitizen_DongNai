@@ -7,6 +7,9 @@
   "scripts": {
     "postinstall": "node ../scripts/render-compat.mjs install backend",
     "build": "node ../scripts/render-compat.mjs build backend",
+    "typecheck": "node ../scripts/render-compat.mjs typecheck backend",
+    "test": "node ../scripts/render-compat.mjs test backend",
+    "seed": "node ../scripts/render-compat.mjs seed backend",
     "start": "node ../scripts/render-compat.mjs start backend"
   }
 }

@@ -20,7 +20,7 @@ import {
   type MapPoint,
   type PinPriorityState,
 } from '../../lib/mapConfig';
-import type { SharedEngineProps } from './GoogleMapEngine';
+import type { DraggablePinSpec, RouteOverlaySpec, SharedEngineProps } from './GoogleMapEngine';
 
 interface Bucket<T extends MapPoint> {
   items: T[];
@@ -64,6 +64,7 @@ function buildOverlaysGeoJson(
   accuracyM: number | null | undefined,
   radiusM: number | null | undefined,
   showArterials: boolean | undefined,
+  routeOverlay: RouteOverlaySpec | null | undefined,
 ): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
   if (showArterials) {
@@ -77,6 +78,20 @@ function buildOverlaysGeoJson(
         },
       });
     }
+  }
+  if (routeOverlay) {
+    const pts =
+      routeOverlay.fallbackPath && routeOverlay.fallbackPath.length >= 2
+        ? routeOverlay.fallbackPath
+        : [routeOverlay.origin, routeOverlay.destination];
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'rescue_route' },
+      geometry: {
+        type: 'LineString',
+        coordinates: pts.map((pt) => [pt.lng, pt.lat]),
+      },
+    });
   }
   if (userPos && accuracyM && accuracyM > 0) {
     const f = createGeoJsonCircle(userPos.lat, userPos.lng, accuracyM);
@@ -120,6 +135,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const userMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const draggableMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const draggablePinRef = useRef<DraggablePinSpec | null | undefined>(p.draggablePin);
+  draggablePinRef.current = p.draggablePin;
   const [zoomTick, setZoomTick] = useState(0);
   const [styleReadySeq, setStyleReadySeq] = useState(0);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
@@ -132,6 +150,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   viewportRef.current = p.onViewportChange;
   const dragRef = useRef(p.onDraggingChange);
   dragRef.current = p.onDraggingChange;
+  const userPanRef = useRef(p.onUserPan);
+  userPanRef.current = p.onUserPan;
   const crosshairActiveRef = useRef(p.crosshairActive);
   crosshairActiveRef.current = p.crosshairActive;
 
@@ -233,6 +253,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
     });
 
+    map.on('dragstart', () => userPanRef.current?.());
     map.on('movestart', () => dragRef.current?.(true));
     map.on('moveend', () => {
       dragRef.current?.(false);
@@ -266,6 +287,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       markersRef.current = [];
       userMarkerRef.current?.remove();
       userMarkerRef.current = null;
+      draggableMarkerRef.current?.remove();
+      draggableMarkerRef.current = null;
       mapRef.current = null;
       map.remove();
     };
@@ -345,7 +368,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       return;
     }
 
-    const overlayData = buildOverlaysGeoJson(p.userPos, p.accuracyM, p.radiusM, p.showArterials);
+    const overlayData = buildOverlaysGeoJson(p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay);
     const existingOverlay = map.getSource('sc-overlays') as maplibregl.GeoJSONSource | undefined;
     if (existingOverlay) {
       existingOverlay.setData(overlayData);
@@ -391,6 +414,22 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           'line-dasharray': [4, 2],
         },
       });
+      map.addLayer({
+        id: 'sc-rescue-route-casing',
+        type: 'line',
+        source: 'sc-overlays',
+        filter: ['==', ['get', 'kind'], 'rescue_route'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#0D47A1', 'line-width': 9, 'line-opacity': 0.9 },
+      });
+      map.addLayer({
+        id: 'sc-rescue-route-line',
+        type: 'line',
+        source: 'sc-overlays',
+        filter: ['==', ['get', 'kind'], 'rescue_route'],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#1A73E8', 'line-width': 6, 'line-opacity': 0.98 },
+      });
     }
 
     const heatData = p.mode === 'heat' ? buildHeatmapGeoJson(p.reports) : { type: 'FeatureCollection' as const, features: [] };
@@ -426,20 +465,72 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         },
       });
     }
-  }, [styleReadySeq, p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.mode, p.reports]);
+  }, [styleReadySeq, p.userPos, p.accuracyM, p.radiusM, p.showArterials, p.routeOverlay, p.mode, p.reports]);
 
-  // 5) Chấm xanh vị trí người dùng
+  // Tự động fitBounds khi chọn sự cố mới (nếu không bật preserveViewport trong chế độ bám đuôi GPS)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !p.routeOverlay || p.routeOverlay.preserveViewport) return;
+    const bounds = new maplibregl.LngLatBounds();
+    bounds.extend([p.routeOverlay.origin.lng, p.routeOverlay.origin.lat]);
+    bounds.extend([p.routeOverlay.destination.lng, p.routeOverlay.destination.lat]);
+    if (p.routeOverlay.fallbackPath) {
+      for (const pt of p.routeOverlay.fallbackPath) bounds.extend([pt.lng, pt.lat]);
+    }
+    map.fitBounds(bounds, { padding: { top: 140, bottom: 230, left: 56, right: 56 }, maxZoom: 16.5, duration: 420 });
+  }, [
+    p.routeOverlay?.destination.lat,
+    p.routeOverlay?.destination.lng,
+    p.routeOverlay?.preserveViewport,
+    p.routeOverlay?.fallbackPath?.length,
+  ]);
+
+  // Ghim kéo thả trực tiếp (Interactive Pin Drop)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !p.draggablePin) {
+      draggableMarkerRef.current?.remove();
+      draggableMarkerRef.current = null;
+      return;
+    }
+    if (!draggableMarkerRef.current) {
+      const wrap = document.createElement('div');
+      wrap.style.cursor = 'grab';
+      wrap.title = 'Kéo thả ghim để chỉnh vị trí chính xác';
+      wrap.innerHTML =
+        '<div style="display:flex;flex-direction:column;align-items:center;"><div style="width:36px;height:36px;border-radius:9999px;background:#E11D48;border:2.5px solid #fff;color:#fff;font-weight:800;font-size:10px;display:grid;place-items:center;box-shadow:0 6px 16px rgba(0,0,0,0.32);">GHIM</div><div style="width:4px;height:10px;background:#E11D48;border-radius:0 0 4px 4px;"></div></div>';
+      const mk = new maplibregl.Marker({ element: wrap, anchor: 'bottom', draggable: true })
+        .setLngLat([p.draggablePin.lng, p.draggablePin.lat])
+        .addTo(map);
+      mk.on('dragend', () => {
+        const ll = mk.getLngLat();
+        draggablePinRef.current?.onDragEnd(ll.lat, ll.lng);
+      });
+      draggableMarkerRef.current = mk;
+    } else {
+      draggableMarkerRef.current.setLngLat([p.draggablePin.lng, p.draggablePin.lat]);
+    }
+  }, [p.draggablePin?.lat, p.draggablePin?.lng, styleReadySeq]);
+
+  // 5) Chấm xanh vị trí người dùng + mũi tên hướng di chuyển (Live Navigation Puck)
   useEffect(() => {
     const map = mapRef.current;
     userMarkerRef.current?.remove();
     userMarkerRef.current = null;
     if (!map || !p.userPos) return;
-    const dot = document.createElement('div');
-    dot.className = 'sc-user-dot';
-    userMarkerRef.current = new maplibregl.Marker({ element: dot, anchor: 'center' })
+    const el = document.createElement('div');
+    const hasHeading = p.navigationMode || (typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg));
+    if (hasHeading) {
+      const deg = typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg) ? p.userHeadingDeg : 0;
+      el.className = 'sc-nav-puck';
+      el.innerHTML = `<span class="sc-nav-puck-radar"></span><div style="position:relative;display:grid;place-items:center;transform:rotate(${deg}deg);"><span class="sc-nav-puck-cone"></span><span class="sc-nav-puck-arrow"><svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg></span></div>`;
+    } else {
+      el.className = 'sc-user-dot';
+    }
+    userMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'center' })
       .setLngLat([p.userPos.lng, p.userPos.lat])
       .addTo(map);
-  }, [p.userPos, styleReadySeq]);
+  }, [p.userPos?.lat, p.userPos?.lng, p.userHeadingDeg, p.navigationMode, styleReadySeq]);
 
   // 6) Các ghim sự cố và cụm gom nhóm thông minh
   useEffect(() => {

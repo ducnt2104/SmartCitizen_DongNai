@@ -31,6 +31,7 @@ const ROLE_OPTIONS: Array<{ value: Role; code: string; label: string }> = [
   { value: 'super_admin', code: 'SUPER_ADMIN', label: 'SUPER_ADMIN — Quản trị Tối cao' },
   { value: 'city_admin', code: 'ADMIN', label: 'ADMIN — Quản trị Cấp Thành phố' },
   { value: 'ward_officer', code: 'OFFICER', label: 'OFFICER — Cán bộ Phường/Xã' },
+  { value: 'rescue_team', code: 'RESCUE_TEAM', label: 'RESCUE_TEAM — Đội Cứu Hộ Hiện Trường' },
   { value: 'volunteer', code: 'YOUTH_UNION', label: 'YOUTH_UNION — Đoàn viên Tình nguyện' },
   { value: 'citizen', code: 'CITIZEN', label: 'CITIZEN — Người dân' },
 ];
@@ -205,7 +206,10 @@ export function SystemAdminView() {
         body: {
           name: cName.trim(),
           role: cRole,
-          wardCode: cRole === 'ward_officer' || cRole === 'volunteer' ? cWard : cWard || null,
+          wardCode:
+            cRole === 'ward_officer' || cRole === 'volunteer'
+              ? cWard || (WARDS_PHUONG[0]?.wardCode ?? 'DN-TB')
+              : cWard || null,
           staffCode: cStaffCode.trim() || null,
           email: cEmail.trim() || null,
           phone: cPhone.trim() || null,
@@ -472,7 +476,7 @@ export function SystemAdminView() {
               Quản lý Tài khoản & Phân quyền RBAC ({users.length} tài khoản)
             </h2>
             <p className="text-xs text-ioc-dim">
-              Hỗ trợ 5 vai trò: SUPER_ADMIN · ADMIN · OFFICER (95 Phường/Xã) · YOUTH_UNION · CITIZEN
+              Hỗ trợ 6 vai trò: SUPER_ADMIN · ADMIN · OFFICER (95 Phường/Xã) · RESCUE_TEAM (Đội cứu hộ) · YOUTH_UNION · CITIZEN
             </p>
           </div>
           <button type="button" className="ioc-btn ioc-btn-cyan" onClick={() => setCreateOpen(true)}>
@@ -492,7 +496,7 @@ export function SystemAdminView() {
             />
           </div>
           <select className="ioc-field" value={filterRole} onChange={(e) => setFilterRole(e.target.value)} aria-label="Lọc theo vai trò">
-            <option value="">Tất cả vai trò (5 cấp)</option>
+            <option value="">Tất cả vai trò (6 cấp)</option>
             {ROLE_OPTIONS.map((r) => (
               <option key={r.value} value={r.code}>{r.label}</option>
             ))}
@@ -550,9 +554,11 @@ export function SystemAdminView() {
                               ? 'border-purple-400/50 bg-purple-500/15 text-purple-300'
                               : u.role === 'city_admin'
                                 ? 'border-cyan-400/50 bg-cyan-500/15 text-ioc-cyan'
-                                : u.role === 'ward_officer'
-                                  ? 'border-amber-400/50 bg-amber-500/15 text-ioc-amber'
-                                  : 'border-ioc-line text-ioc-dim'
+                                : u.role === 'rescue_team'
+                                  ? 'border-rose-400/50 bg-rose-500/15 text-rose-300'
+                                  : u.role === 'ward_officer'
+                                    ? 'border-amber-400/50 bg-amber-500/15 text-ioc-amber'
+                                    : 'border-ioc-line text-ioc-dim'
                           }`}
                         >
                           {u.roleCode ?? u.role.toUpperCase()}
@@ -679,10 +685,15 @@ export function SystemAdminView() {
                 ))}
               </select>
             </div>
-            {(cRole === 'ward_officer' || cRole === 'volunteer') && (
+            {(cRole === 'ward_officer' || cRole === 'volunteer' || cRole === 'rescue_team') && (
               <div>
-                <label className="mb-1 block text-xs text-ioc-dim">Đơn vị Phường/Xã (95 ĐVHC) *</label>
+                <label className="mb-1 block text-xs text-ioc-dim">
+                  {cRole === 'rescue_team' ? 'Phạm vi trực chiến (Phường/Xã hoặc Cơ động toàn TP)' : 'Đơn vị Phường/Xã (95 ĐVHC) *'}
+                </label>
                 <select className="ioc-field w-full" value={cWard} onChange={(e) => setCWard(e.target.value)}>
+                  {cRole === 'rescue_team' && (
+                    <option value="">Cơ động liên khu vực — Toàn TP. Đồng Nai</option>
+                  )}
                   <optgroup label="33 Phường">{WARDS_PHUONG.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
                   <optgroup label="62 Xã">{WARDS_XA.map((w) => <option key={w.wardCode} value={w.wardCode}>{w.name}</option>)}</optgroup>
                 </select>
@@ -704,7 +715,7 @@ export function SystemAdminView() {
             </div>
             <div>
               <label className="mb-1 block text-xs text-ioc-dim">Mật khẩu khởi tạo (≥ 8 ký tự)</label>
-              <input type="password" className="ioc-field w-full" minLength={8} value={cPassword} onChange={(e) => setCPassword(e.target.value)} required={cRole === 'super_admin' || cRole === 'city_admin' || cRole === 'ward_officer'} />
+              <input type="password" className="ioc-field w-full" minLength={8} value={cPassword} onChange={(e) => setCPassword(e.target.value)} required={cRole === 'super_admin' || cRole === 'city_admin' || cRole === 'ward_officer' || cRole === 'rescue_team'} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="ioc-btn" onClick={() => setCreateOpen(false)}>Hủy</button>

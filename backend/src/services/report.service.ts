@@ -1,6 +1,13 @@
 import {
-  CLUSTER_RADIUS_M, DEPARTMENT_BY_CATEGORY, DUPLICATE_WINDOW_MS, GPS_WARN_M, normalizeCategoryInput,
+  CLUSTER_RADIUS_M,
+  computeSosPriorityScore,
+  DEPARTMENT_BY_CATEGORY,
+  DUPLICATE_WINDOW_MS,
+  GPS_WARN_M,
+  normalizeCategoryInput,
+  toSeverityLabel,
 } from '../shared/constants';
+import { normalizeCoordinates } from '../shared/coordinates';
 import { hammingDistance } from '../shared/dhash';
 import { WARD_BY_CODE } from '../shared/dongNaiWards';
 import { haversineMeters, inDongNaiBBox, matchArterial, maskPhone, nearestWard } from '../shared/geo';
@@ -158,13 +165,19 @@ export class ReportService {
       throw tooMany(`Bạn đã gửi tối đa ${limit} phản ánh trong 1 giờ. Vui lòng thử lại sau.`, 'report_rate_limited');
     }
 
-    if (!inDongNaiBBox(input.lat, input.lng)) {
+    const normPin = normalizeCoordinates({ lat: input.lat, lng: input.lng });
+    if (!normPin.ok) {
+      throw badRequest(normPin.message, 'invalid_coords');
+    }
+    const pinLat = normPin.lat;
+    const pinLng = normPin.lng;
+    if (!normPin.inDongNai || !inDongNaiBBox(pinLat, pinLng)) {
       throw badRequest('Vị trí nằm ngoài địa bàn Thành phố Đồng Nai.', 'out_of_bounds');
     }
     const { mime, base64 } = parsePhotoDataUrl(input.photo.dataUrl);
     const category = normalizeCategoryInput(input.category) ?? 'khac';
-    const ward = (input.wardCode && WARD_BY_CODE[input.wardCode]) || nearestWard(input.lat, input.lng);
-    const arterial = matchArterial(input.lat, input.lng);
+    const ward = (input.wardCode && WARD_BY_CODE[input.wardCode]) || nearestWard(pinLat, pinLng);
+    const arterial = matchArterial(pinLat, pinLng);
     const firstPhoto = mkPhoto(input.photo, 'before', user.id);
 
     const dynCfg = this.cvEngine ? await this.cvEngine.getConfig() : null;
@@ -179,6 +192,8 @@ export class ReportService {
         hintText: `${input.title}. ${input.description}`,
         edge: input.edge,
         reportId: id,
+        onArterial: arterial !== null,
+        wardCode: ward.wardCode,
       }),
       this.cvEngine
         ? this.cvEngine.checkAndRegisterDuplicate({
@@ -188,23 +203,24 @@ export class ReportService {
             photoId: firstPhoto.id,
             wardCode: ward.wardCode,
             category,
-            lat: input.lat,
-            lng: input.lng,
+            lat: pinLat,
+            lng: pinLng,
             registerOnPass: true,
           })
         : Promise.resolve(null),
     ]);
 
     const exempt = input.leftScene || isProxy || input.isProxyReport;
-    const gpsDistM =
+    const normDevice =
       input.deviceLat !== undefined && input.deviceLng !== undefined
-        ? haversineMeters(input.lat, input.lng, input.deviceLat, input.deviceLng)
+        ? normalizeCoordinates({ lat: input.deviceLat, lng: input.deviceLng })
         : null;
+    const gpsDistM = normDevice?.ok ? haversineMeters(pinLat, pinLng, normDevice.lat, normDevice.lng) : null;
     const gpsWarn = !exempt && gpsDistM !== null && gpsDistM > GPS_WARN_M;
 
     const nowIso = new Date().toISOString();
     const recent = (await this.repos.reports.findSince(new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString())).map(known);
-    const nearby = (await this.repos.reports.findNearby({ lat: input.lat, lng: input.lng, radiusM: CLUSTER_RADIUS_M, category }))
+    const nearby = (await this.repos.reports.findNearby({ lat: pinLat, lng: pinLng, radiusM: CLUSTER_RADIUS_M, category }))
       .filter((r) => ['received', 'verifying', 'processing'].includes(r.status))
       .map(known);
 
@@ -282,6 +298,31 @@ export class ReportService {
     if (quarantined) timeline.push({ stage: 'quarantined', at: nowIso, note: decision.detail });
     if (level1) timeline.push({ stage: 'escalated', at: nowIso, note: `AI gắn KHẨN CẤP CẤP ĐỘ 1 — trục huyết mạch ${arterial!.name}` });
 
+    const finalSeverity = (level1 ? 5 : analysis.severity) as Report['severity'];
+    const finalSeverityLabel = analysis.severityLabel ?? toSeverityLabel(finalSeverity, emergency || level1);
+    const finalPriorityScore =
+      analysis.priorityScore ??
+      computeSosPriorityScore({
+        severity: finalSeverity,
+        isEmergency: emergency || level1,
+        onArterial: arterial !== null,
+      });
+    const tacticalBriefing =
+      analysis.tacticalBriefing ??
+      this.gemini.deterministicTacticalBriefing({
+        reportId: id,
+        category,
+        title: input.title,
+        description: input.description || analysis.description,
+        severity: finalSeverity,
+        isEmergency: emergency || level1,
+        wardCode: ward.wardCode,
+        address: input.address ?? `${ward.name}, TP. Đồng Nai`,
+        roadName: arterial?.name ?? null,
+        onArterial: arterial !== null,
+        safetyHazards: analysis.safetyHazards,
+      });
+
     const report: Report = {
       id,
       code: await this.nextCode(ward.wardCode),
@@ -289,7 +330,9 @@ export class ReportService {
       aiSuggestedLabel,
       title: input.title,
       description: input.description || analysis.description,
-      severity: level1 ? 5 : analysis.severity,
+      severity: finalSeverity,
+      severityLabel: finalSeverityLabel,
+      priorityScore: finalPriorityScore,
       isEmergency: emergency,
       emergencyLevel: level1 && !quarantined ? 1 : 0,
       priority: quarantined ? 'normal' : priority,
@@ -298,8 +341,8 @@ export class ReportService {
       address: input.address ?? `${ward.name}, TP. Đồng Nai`,
       roadName: arterial?.name ?? null,
       onArterial: arterial !== null,
-      lat: input.lat,
-      lng: input.lng,
+      lat: pinLat,
+      lng: pinLng,
       photos: [firstPhoto],
       afterPhoto: null,
       clusterCount: 1,
@@ -320,6 +363,9 @@ export class ReportService {
         safetyHazards: analysis.safetyHazards,
         suggestedDepartment: dept,
         aiSuggestedLabel,
+        priorityScore: finalPriorityScore,
+        severityLabel: finalSeverityLabel,
+        tacticalBriefing,
         isDuplicateCrop: Boolean(rustDup?.is_duplicate),
         duplicateSimilarity: rustDup?.similarity_score ?? null,
         inlierCount: rustDup?.inlier_count ?? null,

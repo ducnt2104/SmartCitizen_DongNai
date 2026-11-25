@@ -3,19 +3,24 @@ import type { UserRecord } from '../repositories/types';
 import { badRequest, forbidden } from '../utils/errors';
 
 export const STAFF_ROLES: readonly Role[] = ['ward_officer', 'city_admin', 'super_admin'];
+export const RESCUE_CAPABLE_ROLES: readonly Role[] = ['rescue_team', 'ward_officer', 'city_admin', 'super_admin'];
 export const ADMIN_ROLES: readonly Role[] = ['city_admin', 'super_admin'];
 
 export function isStaff(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
   return !!u && STAFF_ROLES.includes(u.role);
 }
 
+export function isRescueCapable(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
+  return !!u && RESCUE_CAPABLE_ROLES.includes(u.role);
+}
+
 export function isAdminRole(u: Pick<UserRecord, 'role'> | null | undefined): boolean {
   return !!u && ADMIN_ROLES.includes(u.role);
 }
 
-/** Cán bộ phường chỉ thao tác trong wardCode của mình; cấp thành phố & Super Admin toàn quyền. */
+/** Cán bộ phường chỉ thao tác trong wardCode của mình; Đội cứu hộ SOS, cấp Thành phố & Super Admin cơ động liên phường. */
 export function inScope(u: Pick<UserRecord, 'role' | 'wardCode'>, wardCode: string): boolean {
-  if (u.role === 'super_admin' || u.role === 'city_admin') return true;
+  if (u.role === 'super_admin' || u.role === 'city_admin' || u.role === 'rescue_team') return true;
   if (u.role === 'ward_officer') return u.wardCode === wardCode;
   return false;
 }
@@ -32,7 +37,7 @@ export function canSee(u: UserRecord | null, r: Report): boolean {
   if (r.status !== 'quarantined' && r.status !== 'rejected') return true;
   if (!u) return false;
   if (isOwner(u, r)) return true;
-  if (isStaff(u)) return inScope(u, r.wardCode);
+  if (isRescueCapable(u)) return inScope(u, r.wardCode);
   if (u.role === 'volunteer') return r.needsFieldVerification && (u.wardCode === r.wardCode || r.assignedVolunteerId === u.id);
   return false;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hammingDistance } from '@shared/dhash';
+import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint, TRAN_BIEN_FALLBACK_COORDS } from '@shared/coordinates';
 import { computeStats, toClientReport } from '@shared/report';
 import { buildSeedReports } from '@shared/seed';
 import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, searchWards, UPGRADED_2026_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
@@ -19,6 +20,13 @@ import {
   markGoogleMapsFailed,
 } from '../lib/mapConfig';
 import { searchPlacesDongNai } from '../lib/geoClient';
+import {
+  buildFallbackSteps,
+  buildVietnameseOsrmInstruction,
+  computeActiveStepProgress,
+  computeBearingDeg,
+  formatDistanceVi,
+} from '../lib/navigationEngine';
 
 const extractPlaceholders = (s: string): string[] =>
   [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -92,7 +100,28 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
     const emergency = localVision('den_duong', 'Cây đổ đè dây điện võng xuống đường', { blurScore: 150, brightness: 130, flatRatio: 0.2, aspect: 1.33 });
     expect(emergency.isEmergency).toBe(true);
     expect(emergency.severity).toBe(5);
+    expect(emergency.severityLabel).toBe('CRITICAL');
+    expect(emergency.priorityScore).toBeGreaterThanOrEqual(85);
     expect(emergency.suggestedDepartment).toBe('dien_luc');
+  });
+
+  it('chuẩn hóa tọa độ GPS (chặn [0,0], NaN, tự động sửa đảo ngược [lng, lat] và chuẩn hóa GeoJSON 2dsphere)', () => {
+    expect(normalizeCoordinates({ lat: 0, lng: 0 }).ok).toBe(false);
+    expect(normalizeCoordinates({ lat: Number.NaN, lng: 106.82 }).ok).toBe(false);
+    expect(normalizeCoordinates({ lat: 48.8566, lng: 2.3522 }).ok).toBe(false); // Ngoài lãnh thổ VN
+
+    // Đảo ngược [lng, lat] -> tự động sửa về { lat: 10.9465, lng: 106.8235, swapped: true }
+    const swapped = normalizeCoordinates({ lat: 106.8235, lng: 10.9465 });
+    expect(swapped.ok).toBe(true);
+    if (swapped.ok) {
+      expect(swapped.swapped).toBe(true);
+      expect(swapped.lat).toBeCloseTo(10.9465, 4);
+      expect(swapped.lng).toBeCloseTo(106.8235, 4);
+    }
+
+    const geo = toGeoJsonPoint(TRAN_BIEN_FALLBACK_COORDS.lat, TRAN_BIEN_FALLBACK_COORDS.lng);
+    expect(geo).toEqual({ type: 'Point', coordinates: [106.8235, 10.9465] });
+    expect(fromGeoJsonPoint(geo)).toEqual({ lat: 10.9465, lng: 106.8235 });
   });
 
   it('Outbox Exponential Backoff tăng dần và bị chặn trần ở 300s + jitter', () => {
@@ -143,5 +172,37 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
 
     expect(isChunkLoadError(new TypeError('Failed to fetch dynamically imported module: /assets/Report-abc.js'))).toBe(true);
     expect(isChunkLoadError(new Error('Normal validation error'))).toBe(false);
+  });
+
+  it('Navigation Engine: biên dịch chuẩn bước rẽ OSRM tiếng Việt, định dạng khoảng cách & tính tiến độ Turn-by-Turn', () => {
+    expect(formatDistanceVi(84)).toBe('85 m');
+    expect(formatDistanceVi(248)).toBe('250 m');
+    expect(formatDistanceVi(1420)).toBe('1,4 km');
+    expect(computeBearingDeg({ lat: 10.94, lng: 106.82 }, { lat: 10.95, lng: 106.82 })).toBeCloseTo(0, 0);
+
+    const turnRight = buildVietnameseOsrmInstruction({
+      name: 'Đường Phạm Văn Thuận',
+      maneuver: { type: 'turn', modifier: 'right' },
+    });
+    expect(turnRight.instructionVi).toBe('Rẽ phải vào Đường Phạm Văn Thuận');
+
+    const roundabout = buildVietnameseOsrmInstruction({
+      name: 'Đường Đồng Khởi',
+      maneuver: { type: 'roundabout', modifier: 'right', exit: 2 },
+    });
+    expect(roundabout.instructionVi).toBe('Đi vào vòng xoay và ra ở lối thứ 2 vào Đường Đồng Khởi');
+
+    const fbRoute = buildFallbackSteps(
+      { lat: 10.9465, lng: 106.8243 },
+      { lat: 10.9452, lng: 106.8342 },
+      'rescue_truck',
+    );
+    expect(fbRoute.steps.length).toBeGreaterThanOrEqual(3);
+    expect(fbRoute.path.length).toBeGreaterThanOrEqual(3);
+
+    const prog = computeActiveStepProgress(fbRoute, { lat: 10.9465, lng: 106.8243 });
+    expect(prog.currentStep.instructionVi.length).toBeGreaterThan(5);
+    expect(prog.remainingDistanceKm).toBeGreaterThan(0);
+    expect(prog.remainingDurationMin).toBeGreaterThanOrEqual(1);
   });
 });

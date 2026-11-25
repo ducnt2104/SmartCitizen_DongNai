@@ -295,6 +295,7 @@ export const vi = {
   'role.citizen': 'Người dân',
   'role.volunteer': 'Tình nguyện viên',
   'role.ward_officer': 'Cán bộ phường/xã',
+  'role.rescue_team': 'Đội Cứu Hộ Hiện trường',
   'role.city_admin': 'Điều hành cấp Thành phố',
   'role.super_admin': 'Quản trị Tối cao (Super Admin)',
   'badge.emergency1': 'KHẨN CẤP CẤP 1',

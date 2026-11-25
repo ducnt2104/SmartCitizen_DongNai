@@ -42,6 +42,7 @@ export function aiController(s: Services) {
             afterHash: b.afterPhoto.dHash,
             category: r.category,
             title: r.title,
+            afterEdge: b.edge,
           })
         : await s.gemini.verifyResolution({
             reportId: r.id,
@@ -59,11 +60,60 @@ export function aiController(s: Services) {
             beforeLng: r.lng,
             afterLat: r.lat,
             afterLng: r.lng,
+            afterEdge: b.edge,
           });
       res.json(out);
     },
 
-    /** SSE Streaming tốc độ cao (Ollama / llama.cpp + Local BM25 RAG + LRU Cache). */
+    /** Sinh thẻ "Gợi ý tác chiến 3 dòng" cho Đội Cứu Hộ & Cán bộ IOC (lưu lại vào hồ sơ nếu có reportId). */
+    tacticalBriefing: async (req: Request, res: Response) => {
+      const b = req.body as z.infer<typeof schemas.tacticalBriefing>;
+      if (b.reportId) {
+        const r = await s.repos.reports.get(b.reportId);
+        if (!r) throw notFound('Không tìm thấy hồ sơ.');
+        assertScope(req.user!, r);
+        if (!b.forceRefresh && r.ai?.tacticalBriefing) {
+          res.json(r.ai.tacticalBriefing);
+          return;
+        }
+        const briefing = await s.gemini.generateTacticalBriefing({
+          reportId: r.id,
+          category: r.category,
+          title: r.title,
+          description: r.description,
+          severity: r.severity,
+          isEmergency: r.isEmergency || r.emergencyLevel === 1,
+          wardCode: r.wardCode,
+          address: r.address,
+          roadName: r.roadName,
+          onArterial: r.onArterial,
+          safetyHazards: r.ai.safetyHazards,
+          forceRefresh: b.forceRefresh,
+        });
+        r.ai = { ...r.ai, tacticalBriefing: briefing };
+        r.updatedAt = new Date().toISOString();
+        await s.repos.reports.update(r).catch(() => undefined);
+        res.json(briefing);
+        return;
+      }
+
+      if (!b.category || !b.title) {
+        throw badRequest('Cần truyền reportId hoặc cặp { category, title }.');
+      }
+      const briefing = await s.gemini.generateTacticalBriefing({
+        category: b.category,
+        title: b.title,
+        description: b.description,
+        severity: b.severity,
+        isEmergency: b.isEmergency,
+        wardCode: b.wardCode,
+        address: b.address,
+        forceRefresh: b.forceRefresh,
+      });
+      res.json(briefing);
+    },
+
+    /** SSE Streaming tốc độ cao (Ollama / llama.cpp + Local BM25 RAG + LRU Cache + Gemini Multi-Key). */
     chat: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.chat>;
       const last = b.messages[b.messages.length - 1];
@@ -100,7 +150,9 @@ export function aiController(s: Services) {
         send({ done: true, mode });
       } catch (err) {
         console.error('[chat] stream lỗi:', err);
-        send({ error: 'Trợ lý đang bận, vui lòng thử lại.', done: true, mode: 'fallback' });
+        const safeFallback = s.chat.localAnswer(ctx, last.text, b.locale);
+        send({ delta: safeFallback, mode: 'fallback' });
+        send({ done: true, mode: 'fallback' });
       }
       res.end();
     },

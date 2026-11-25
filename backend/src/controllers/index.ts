@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { normalizeCoordinates } from '../shared/coordinates';
 import { DONG_NAI_WARDS } from '../shared/dongNaiWards';
 import { toClientReport } from '../shared/report';
 import type { ReportStatus } from '../shared/types';
@@ -78,6 +79,12 @@ export function authController(s: Services) {
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
+    rescueLogin: async (req: Request, res: Response) => {
+      const { identifier, password } = body(req, 'rescueLogin');
+      const issued = await s.auth.rescueLogin(identifier, password, req.get('user-agent') ?? '');
+      setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
+      res.json(issued.session);
+    },
     refresh: async (req: Request, res: Response) => {
       const token = readCookie(req, REFRESH_COOKIE);
       try {
@@ -135,12 +142,14 @@ export function reportController(s: Services) {
       res.json(DONG_NAI_WARDS);
     },
     reverseGeocode: async (req: Request, res: Response) => {
-      const lat = Number(req.query.lat);
-      const lng = Number(req.query.lng);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-        throw badRequest('Tọa độ lat/lng không hợp lệ.', 'invalid_coords');
+      const norm = normalizeCoordinates(
+        { lat: req.query.lat, lng: req.query.lng },
+        { requireVietnam: false },
+      );
+      if (!norm.ok) {
+        throw badRequest(norm.message, 'invalid_coords');
       }
-      const result = await s.geo.reverseGeocode(lat, lng);
+      const result = await s.geo.reverseGeocode(norm.lat, norm.lng);
       res.set('Cache-Control', 'public, max-age=3600').json(result);
     },
     stats: async (req: Request, res: Response) => {
@@ -179,7 +188,9 @@ export function reportController(s: Services) {
     },
     create: async (req: Request, res: Response) => {
       const u = req.user!;
-      if (u.role !== 'citizen' && u.role !== 'volunteer') throw forbidden('Tài khoản cán bộ không gửi phản ánh trực tiếp.');
+      if (u.role !== 'citizen' && u.role !== 'volunteer') {
+        throw forbidden('Tài khoản cán bộ / đội cứu hộ không gửi phản ánh công dân trực tiếp.');
+      }
       const result = await s.reports.create(u, body(req, 'createReport') as CreateReportInput);
       res.status(result.outcome === 'duplicate_submit' ? 200 : 201).json(result);
     },
@@ -219,6 +230,64 @@ export function volunteerController(s: Services) {
     },
     logbook: async (req: Request, res: Response) => {
       res.json(await s.staff.logbook(req.user!));
+    },
+  };
+}
+
+export function rescueController(s: Services) {
+  return {
+    missions: async (req: Request, res: Response) => {
+      const lat = req.query.lat !== undefined ? Number(req.query.lat) : undefined;
+      const lng = req.query.lng !== undefined ? Number(req.query.lng) : undefined;
+      const radiusKm = req.query.radiusKm !== undefined ? Number(req.query.radiusKm) : undefined;
+      const wardCode = typeof req.query.wardCode === 'string' && req.query.wardCode ? req.query.wardCode : undefined;
+      const includeResolved = req.query.includeResolved === '1' || req.query.includeResolved === 'true';
+      res.json(
+        await s.staff.rescueMissions(req.user!, {
+          lat,
+          lng,
+          radiusKm,
+          wardCode,
+          includeResolved,
+        }),
+      );
+    },
+    updateStatus: async (req: Request, res: Response) => {
+      const b = body(req, 'rescueStatus');
+      const rawStep = (b.status ?? b.step ?? 'accepted').toLowerCase();
+      const normalizedStep = (rawStep === 'completed' ? 'resolved' : rawStep) as
+        | 'accepted'
+        | 'en_route'
+        | 'on_site'
+        | 'resolved';
+      res.json(
+        await s.staff.updateRescueMissionStatus(
+          req.user!,
+          String(req.params.id),
+          normalizedStep,
+          b.note,
+          b.lat,
+          b.lng,
+          b.afterPhoto,
+          b.override,
+          b.edge,
+        ),
+      );
+    },
+    complete: async (req: Request, res: Response) => {
+      const b = body(req, 'rescueComplete');
+      res.json(
+        await s.staff.completeRescueMission(
+          req.user!,
+          String(req.params.id),
+          b.afterPhoto,
+          b.note,
+          b.override,
+          b.edge,
+          b.lat,
+          b.lng,
+        ),
+      );
     },
   };
 }

@@ -12,7 +12,7 @@ import {
 } from '../../lib/mapConfig';
 import { useSettings } from '../../state/settings';
 import { lazyWithRetry } from '../../utils/lazyWithRetry';
-import type { CameraCommand, SharedEngineProps } from './GoogleMapEngine';
+import type { CameraCommand, DraggablePinSpec, RouteOverlaySpec, SharedEngineProps } from './GoogleMapEngine';
 import { MapErrorBoundary, MapSkeleton } from './MapErrorBoundary';
 
 const LazyGoogleMapEngine = lazyWithRetry(
@@ -41,16 +41,22 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   cameraCommand?: CameraCommand | null;
   onRequestCamera?: (cmd: Omit<CameraCommand, 'seq'>) => void;
   userPos?: { lat: number; lng: number } | null;
+  userHeadingDeg?: number | null;
+  navigationMode?: boolean;
   accuracyM?: number | null;
   radiusM?: number | null;
   showArterials?: boolean;
   onSelect?: (r: T) => void;
   onViewportChange?: (bbox: MapBbox) => void;
+  onUserPan?: () => void;
   crosshairPin?: { onChange: (lat: number, lng: number) => void } | null;
+  draggablePin?: DraggablePinSpec | null;
+  routeOverlay?: RouteOverlaySpec | null;
   onLocate?: () => void;
   locating?: boolean;
   tone?: 'default' | 'ioc';
   className?: string;
+  controlsBottomClassName?: string;
   showLayerSwitcher?: boolean;
   showFitCityButton?: boolean;
   showZoomButtons?: boolean;
@@ -114,6 +120,8 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     fitPointsOnMount: p.fitPointsOnMount,
     cameraCommand: activeCommand,
     userPos: p.userPos,
+    userHeadingDeg: p.userHeadingDeg,
+    navigationMode: p.navigationMode,
     accuracyM: p.accuracyM,
     radiusM: p.radiusM,
     showArterials: p.showArterials,
@@ -122,6 +130,9 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     crosshairActive: Boolean(p.crosshairPin),
     onCrosshairMove: p.crosshairPin?.onChange,
     onDraggingChange: setDragging,
+    onUserPan: p.onUserPan,
+    draggablePin: p.draggablePin,
+    routeOverlay: p.routeOverlay,
   };
 
   return (
@@ -208,7 +219,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
       )}
 
       {/* Cụm nút điều khiển nổi bên phải (Zoom +/-, Toàn TP. Đồng Nai, Vị trí của tôi) */}
-      <div className="absolute bottom-3 right-3 z-[35] flex flex-col items-end gap-2">
+      <div className={`absolute ${p.controlsBottomClassName ?? 'bottom-3'} right-3 z-[35] flex flex-col items-end gap-2`}>
         {p.showZoomButtons !== false && (
           <div className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface/95 shadow-lift backdrop-blur-sm">
             <button

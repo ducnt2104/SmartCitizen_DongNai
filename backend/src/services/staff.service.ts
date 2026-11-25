@@ -1,16 +1,31 @@
-import { DEPARTMENTS, normalizeRoleInput, toRoleCode } from '../shared/constants';
+import {
+  computeSosPriorityScore,
+  DEPARTMENTS,
+  normalizeRoleInput,
+  toRoleCode,
+  toSeverityLabel,
+} from '../shared/constants';
+import { normalizeCoordinates } from '../shared/coordinates';
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../shared/dongNaiWards';
-import { normalizeEmail, normalizePhone } from '../shared/geo';
+import { haversineMeters, normalizeEmail, normalizePhone } from '../shared/geo';
 import { computeStats, toClientReport } from '../shared/report';
 import type {
-  AuditEntry, ClientReport, Department, DispatchOrder, Report, Role, ScopeStats, UserProfile,
+  AuditEntry,
+  ClientReport,
+  Department,
+  DispatchOrder,
+  Report,
+  RescueMissionState,
+  Role,
+  ScopeStats,
+  UserProfile,
 } from '../shared/types';
 import type { Repositories, UserFilterQuery, UserRecord } from '../repositories/types';
 import { badRequest, forbidden, notFound } from '../utils/errors';
 import { hashPassword, newId } from '../utils/crypto';
 import { assertScope, isAdminRole, parsePhotoDataUrl, type PhotoInput } from './access';
 import type { AuditService } from './audit.service';
-import type { GeminiService } from './gemini.service';
+import type { EdgeStats, GeminiService } from './gemini.service';
 import { slaHoursFor } from './report.service';
 import { toProfile, type TrustService } from './trust.service';
 
@@ -280,12 +295,13 @@ export class StaffService {
   }
 
   async staffList(): Promise<UserProfile[]> {
-    const [s, b, a] = await Promise.all([
+    const [s, b, a, r] = await Promise.all([
       this.repos.users.list('super_admin'),
       this.repos.users.list('city_admin'),
       this.repos.users.list('ward_officer'),
+      this.repos.users.list('rescue_team'),
     ]);
-    return [...s, ...b, ...a].map(toProfile);
+    return [...s, ...b, ...a, ...r].map(toProfile);
   }
 
   // ── Super Admin & RBAC User CRUD (`/api/admin/users`) ──────────────────────
@@ -337,11 +353,14 @@ export class StaffService {
     const phone = input.phone ? normalizePhone(input.phone) : null;
     if (input.phone && !phone) throw badRequest('Số điện thoại Việt Nam không hợp lệ (10 số bắt đầu bằng 0).', 'invalid_phone');
 
-    const isStaffType = role === 'super_admin' || role === 'city_admin' || role === 'ward_officer';
+    const isStaffType =
+      role === 'super_admin' || role === 'city_admin' || role === 'ward_officer' || role === 'rescue_team';
+    const prefix =
+      role === 'super_admin' ? 'SA' : role === 'city_admin' ? 'TP' : role === 'rescue_team' ? 'CUUHO' : 'CB';
     const staffCode = input.staffCode?.trim()
       ? input.staffCode.trim().toUpperCase()
       : isStaffType
-        ? `${role === 'super_admin' ? 'SA' : role === 'city_admin' ? 'TP' : 'CB'}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+        ? `${prefix}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
         : null;
 
     if (staffCode && (await this.repos.users.getByStaffCode(staffCode))) {
@@ -715,5 +734,392 @@ export class StaffService {
   async logbook(u: UserRecord): Promise<AuditEntry[]> {
     const all = await this.repos.audit.all();
     return all.filter((e) => e.actorId === u.id && e.action.startsWith('volunteer.')).reverse().slice(0, 50);
+  }
+
+  // ── Cổng Điều phối & Tác chiến Hiện trường Đội Cứu Hộ (`/api/rescue/...`) ──
+  async rescueMissions(
+    u: UserRecord,
+    opts: { lat?: number; lng?: number; radiusKm?: number; wardCode?: string; includeResolved?: boolean } = {},
+  ): Promise<Array<ClientReport & { distanceKm: number | null; etaMinutes: number | null }>> {
+    let teamCoords: { lat: number; lng: number } | null = null;
+    if (opts.lat !== undefined && opts.lng !== undefined) {
+      const norm = normalizeCoordinates({ lat: opts.lat, lng: opts.lng });
+      if (!norm.ok) throw badRequest(norm.message, 'invalid_coords');
+      teamCoords = { lat: norm.lat, lng: norm.lng };
+    } else if (u.wardCode && WARD_BY_CODE[u.wardCode]) {
+      teamCoords = { lat: WARD_BY_CODE[u.wardCode].centerLat, lng: WARD_BY_CODE[u.wardCode].centerLng };
+    }
+
+    const radiusM = Math.min(200_000, Math.max(1_000, Math.round((opts.radiusKm ?? 80) * 1000)));
+    let candidateReports: Report[];
+
+    // Cán bộ phường chỉ xem nhiệm vụ thuộc phường mình phụ trách; Đội cứu hộ & Admin cơ động liên phường
+    const effectiveWardCode =
+      u.role === 'ward_officer' ? (u.wardCode ?? opts.wardCode) : opts.wardCode;
+
+    if (teamCoords && !effectiveWardCode) {
+      // Ưu tiên truy vấn không gian $nearSphere trên 2dsphere index + gộp thêm sự cố SOS Khẩn cấp toàn thành phố
+      const [nearRows, allRows] = await Promise.all([
+        this.repos.reports.findNearby({ lat: teamCoords.lat, lng: teamCoords.lng, radiusM }),
+        this.repos.reports.list({}),
+      ]);
+      const mergedMap = new Map<string, Report>();
+      for (const r of nearRows) mergedMap.set(r.id, r);
+      for (const r of allRows) {
+        if (r.isEmergency || r.emergencyLevel === 1 || r.rescueMission?.assignedTeamId === u.id) {
+          mergedMap.set(r.id, r);
+        }
+      }
+      candidateReports = [...mergedMap.values()];
+    } else {
+      const wardCodes = effectiveWardCode && WARD_BY_CODE[effectiveWardCode] ? [effectiveWardCode] : undefined;
+      candidateReports = await this.repos.reports.list({ wardCodes });
+    }
+
+    const visible = candidateReports.filter((r) => {
+      if (r.status === 'quarantined' || r.status === 'rejected') return false;
+      if (!opts.includeResolved && r.status === 'resolved') return false;
+      return true;
+    });
+
+    const enriched = visible.map((r) => {
+      const client = toClientReport(r);
+      const priorityScore =
+        client.priorityScore ??
+        computeSosPriorityScore({
+          severity: r.severity,
+          isEmergency: r.isEmergency || r.emergencyLevel === 1,
+          onArterial: r.onArterial,
+          clusterCount: r.clusterCount,
+          confirmCount: r.confirmations.length,
+        });
+      const severityLabel =
+        client.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
+      const tacticalBriefing =
+        client.ai.tacticalBriefing ??
+        this.gemini.deterministicTacticalBriefing({
+          reportId: r.id,
+          category: r.category,
+          title: r.title,
+          description: r.description,
+          severity: r.severity,
+          isEmergency: r.isEmergency || r.emergencyLevel === 1,
+          wardCode: r.wardCode,
+          address: r.address,
+          roadName: r.roadName,
+          onArterial: r.onArterial,
+          safetyHazards: r.ai.safetyHazards,
+        });
+
+      const distanceKm = teamCoords
+        ? Math.round((haversineMeters(teamCoords.lat, teamCoords.lng, r.lat, r.lng) / 1000) * 100) / 100
+        : null;
+      // Ước tính thời gian di chuyển đường bộ thực tế (~1.28x khoảng cách chim bay, tốc độ trung bình 38 km/h trong đô thị)
+      const etaMinutes =
+        distanceKm !== null ? Math.max(2, Math.round(((distanceKm * 1.28) / 38) * 60 + 1)) : null;
+
+      return {
+        ...client,
+        priorityScore,
+        severityLabel,
+        ai: {
+          ...client.ai,
+          priorityScore,
+          severityLabel,
+          tacticalBriefing,
+        },
+        distanceKm,
+        etaMinutes,
+      };
+    });
+
+    enriched.sort((a, b) => {
+      const aMine = a.rescueMission?.assignedTeamId === u.id && a.status !== 'resolved' ? 1 : 0;
+      const bMine = b.rescueMission?.assignedTeamId === u.id && b.status !== 'resolved' ? 1 : 0;
+      if (aMine !== bMine) return bMine - aMine;
+
+      const aSos = a.severityLabel === 'CRITICAL' || a.isEmergency || a.emergencyLevel === 1 ? 1 : 0;
+      const bSos = b.severityLabel === 'CRITICAL' || b.isEmergency || b.emergencyLevel === 1 ? 1 : 0;
+      if (aSos !== bSos) return bSos - aSos;
+
+      // Kết hợp điểm khẩn cấp AI (0..100) và ưu tiên khoảng cách gần nhất tới Đội Cứu Hộ
+      const aRank = (a.priorityScore ?? 50) * 1.6 - Math.min(45, (a.distanceKm ?? 25) * 2.2);
+      const bRank = (b.priorityScore ?? 50) * 1.6 - Math.min(45, (b.distanceKm ?? 25) * 2.2);
+      return bRank - aRank;
+    });
+
+    return enriched;
+  }
+
+  async updateRescueMissionStatus(
+    u: UserRecord,
+    id: string,
+    step: 'accepted' | 'en_route' | 'on_site' | 'resolved',
+    note: string,
+    lat?: number,
+    lng?: number,
+    afterPhoto?: PhotoInput,
+    override = false,
+    edge?: EdgeStats,
+  ): Promise<ClientReport> {
+    if (step === 'resolved' && afterPhoto) {
+      const completed = await this.completeRescueMission(u, id, afterPhoto, note, override, edge, lat, lng);
+      if (!completed.accepted && !override) {
+        throw badRequest(
+          completed.report.resolution?.summary ?? 'AI chưa xác nhận hiện trường đã khắc phục.',
+          'ai_verify_rejected',
+        );
+      }
+      return completed.report;
+    }
+
+    const r = await this.load(u, id);
+    if (r.status === 'resolved' || r.status === 'rejected' || r.status === 'quarantined') {
+      throw badRequest('Hồ sơ không ở trạng thái có thể điều động hiện trường.', 'invalid_state');
+    }
+    const existing = r.rescueMission;
+    if (
+      existing?.assignedTeamId &&
+      existing.assignedTeamId !== u.id &&
+      existing.status !== 'unassigned' &&
+      existing.status !== 'completed' &&
+      !isAdminRole(u)
+    ) {
+      throw badRequest(
+        `Sự cố này đang được xử lý bởi ${existing.assignedTeamName ?? 'đội cứu hộ khác'}.`,
+        'mission_taken',
+      );
+    }
+
+    let safeCoords: { lat: number; lng: number } | null = null;
+    if (lat !== undefined && lng !== undefined) {
+      const norm = normalizeCoordinates({ lat, lng });
+      if (norm.ok) safeCoords = { lat: norm.lat, lng: norm.lng };
+    }
+
+    const before = { status: r.status, rescueMission: r.rescueMission ?? null };
+    const now = new Date().toISOString();
+
+    if (step === 'resolved') {
+      r.status = 'resolved';
+      r.resolvedAt = now;
+      r.rescueMission = {
+        status: 'completed',
+        assignedTeamId: u.id,
+        assignedTeamName: u.name,
+        assignedTeamCode: u.staffCode,
+        acceptedAt: existing?.acceptedAt ?? now,
+        enRouteAt: existing?.enRouteAt ?? now,
+        onSiteAt: existing?.onSiteAt ?? now,
+        completedAt: now,
+        lastLat: safeCoords?.lat ?? existing?.lastLat ?? r.lat,
+        lastLng: safeCoords?.lng ?? existing?.lastLng ?? r.lng,
+        note: note.trim() || existing?.note || '',
+      };
+      if (!r.department) {
+        r.department = r.ai.suggestedDepartment ?? 'ubnd_khu_pho';
+      }
+      r.timeline.push({
+        stage: 'resolved',
+        at: now,
+        note: `[Đội Cứu Hộ ${u.staffCode ?? u.name}] Đã hoàn tất xử lý hiện trường.${note.trim() ? ` ${note.trim()}` : ''}`,
+      });
+      r.updatedAt = now;
+
+      await this.repos.reports.update(r);
+      await this.audit.log(this.actor(u), 'rescue.resolved', r.id, before, {
+        status: r.status,
+        rescueMission: r.rescueMission,
+      });
+      await Promise.all(
+        r.contributors.map((c) =>
+          this.trust.notify(
+            c.userId,
+            `Đội Cứu Hộ đã xử lý hoàn tất sự cố ${r.code} "${r.title}" tại khu vực của bạn.`,
+            r.code,
+          ),
+        ),
+      );
+      return toClientReport(r);
+    }
+
+    const nextMission: RescueMissionState = {
+      status: step,
+      assignedTeamId: u.id,
+      assignedTeamName: u.name,
+      assignedTeamCode: u.staffCode,
+      acceptedAt: existing?.acceptedAt ?? now,
+      enRouteAt: step === 'en_route' || step === 'on_site' ? (existing?.enRouteAt ?? now) : (existing?.enRouteAt ?? null),
+      onSiteAt: step === 'on_site' ? (existing?.onSiteAt ?? now) : (existing?.onSiteAt ?? null),
+      completedAt: null,
+      lastLat: safeCoords?.lat ?? existing?.lastLat ?? null,
+      lastLng: safeCoords?.lng ?? existing?.lastLng ?? null,
+      note: note.trim() || existing?.note || '',
+    };
+
+    r.rescueMission = nextMission;
+    if (r.status === 'received' || r.status === 'verifying') {
+      r.status = 'processing';
+    }
+    if (!r.department) {
+      r.department = r.ai.suggestedDepartment ?? 'ubnd_khu_pho';
+    }
+
+    const stepNoteMap: Record<'accepted' | 'en_route' | 'on_site', string> = {
+      accepted: `[Đội Cứu Hộ ${u.staffCode ?? u.name}] Đã nhận nhiệm vụ ứng cứu.`,
+      en_route: `[Đội Cứu Hộ ${u.staffCode ?? u.name}] Đang cơ động di chuyển tới hiện trường.`,
+      on_site: `[Đội Cứu Hộ ${u.staffCode ?? u.name}] Đã tới hiện trường, bắt đầu xử lý sự cố.`,
+    };
+    r.timeline.push({
+      stage: 'processing',
+      at: now,
+      note: `${stepNoteMap[step]}${note.trim() ? ` ${note.trim()}` : ''}`,
+    });
+    r.updatedAt = now;
+
+    await this.repos.reports.update(r);
+    await this.audit.log(this.actor(u), `rescue.${step}`, r.id, before, {
+      status: r.status,
+      rescueMission: r.rescueMission,
+    });
+    return toClientReport(r);
+  }
+
+  async completeRescueMission(
+    u: UserRecord,
+    id: string,
+    afterPhoto: PhotoInput,
+    note: string,
+    override: boolean,
+    edge?: EdgeStats,
+    lat?: number,
+    lng?: number,
+  ): Promise<{ report: ClientReport; accepted: boolean }> {
+    const r = await this.load(u, id);
+    if (r.status === 'resolved' || r.status === 'quarantined' || r.status === 'rejected') {
+      throw badRequest('Không thể hoàn tất nghiệm thu ở trạng thái hiện tại.', 'invalid_state');
+    }
+
+    let afterLat = r.lat;
+    let afterLng = r.lng;
+    if (lat !== undefined && lng !== undefined) {
+      const norm = normalizeCoordinates({ lat, lng });
+      if (norm.ok) {
+        afterLat = norm.lat;
+        afterLng = norm.lng;
+      }
+    }
+
+    const before = r.photos[0];
+    const a = parsePhotoDataUrl(afterPhoto.dataUrl);
+    const svgBefore = before.url.startsWith('data:image/svg');
+    const b = svgBefore ? { mime: a.mime, base64: '' } : parsePhotoDataUrl(before.url);
+
+    const verdict = svgBefore
+      ? this.gemini.fallbackVerify({
+          reportId: r.id,
+          beforeBase64: '',
+          beforeMime: a.mime,
+          beforeHash: before.dHash,
+          afterBase64: a.base64,
+          afterMime: a.mime,
+          afterHash: afterPhoto.dHash,
+          category: r.category,
+          title: r.title,
+          afterEdge: edge,
+        })
+      : await this.gemini.verifyResolution({
+          reportId: r.id,
+          beforeBase64: b.base64,
+          beforeMime: b.mime,
+          beforeHash: before.dHash,
+          afterBase64: a.base64,
+          afterMime: a.mime,
+          afterHash: afterPhoto.dHash,
+          category: r.category,
+          title: r.title,
+          beforeLat: r.lat,
+          beforeLng: r.lng,
+          afterLat,
+          afterLng,
+          afterEdge: edge,
+        });
+
+    const now = new Date().toISOString();
+    const prev = snap(r);
+    r.resolution = {
+      resolutionVerified: verdict.resolutionVerified,
+      matchConfidence: verdict.matchConfidence,
+      sceneMatchScore: verdict.sceneMatchScore,
+      resolutionScore: verdict.resolutionScore,
+      inlierKeypoints: verdict.inlierKeypoints,
+      summary: verdict.summary,
+      mode: verdict.mode,
+      at: now,
+    };
+    r.afterPhoto = {
+      id: newId('ph'),
+      url: afterPhoto.dataUrl,
+      dHash: afterPhoto.dHash,
+      kind: 'after',
+      takenBy: u.id,
+      createdAt: now,
+    };
+
+    const accepted = verdict.resolutionVerified || override;
+    if (!accepted) {
+      r.timeline.push({
+        stage: 'processing',
+        at: now,
+        note: `[AI Kiểm định Trước/Sau chưa đạt] ${verdict.summary}`,
+      });
+      r.updatedAt = now;
+      await this.repos.reports.update(r);
+      await this.audit.log(this.actor(u), 'rescue.complete_rejected', r.id, prev, {
+        ...snap(r),
+        resolution: r.resolution,
+      });
+      return { report: toClientReport(r), accepted: false };
+    }
+
+    r.status = 'resolved';
+    r.resolvedAt = now;
+    r.rescueMission = {
+      status: 'completed',
+      assignedTeamId: u.id,
+      assignedTeamName: u.name,
+      assignedTeamCode: u.staffCode,
+      acceptedAt: r.rescueMission?.acceptedAt ?? now,
+      enRouteAt: r.rescueMission?.enRouteAt ?? now,
+      onSiteAt: r.rescueMission?.onSiteAt ?? now,
+      completedAt: now,
+      lastLat: afterLat,
+      lastLng: afterLng,
+      note: note.trim() || r.rescueMission?.note || '',
+    };
+    r.timeline.push({
+      stage: 'resolved',
+      at: now,
+      note: `[Đội Cứu Hộ ${u.staffCode ?? u.name}] Đã xử lý xong hiện trường & vượt qua kiểm định AI Trước/Sau.${
+        note.trim() ? ` ${note.trim()}` : ''
+      }`,
+    });
+    r.updatedAt = now;
+    await this.repos.reports.update(r);
+    await this.audit.log(this.actor(u), 'rescue.complete', r.id, prev, {
+      ...snap(r),
+      resolution: r.resolution,
+      rescueMission: r.rescueMission,
+    });
+    await Promise.all(
+      r.contributors.map((c) =>
+        this.trust.notify(
+          c.userId,
+          `Đội Cứu Hộ đã xử lý hoàn tất sự cố ${r.code} "${r.title}" tại khu vực của bạn.`,
+          r.code,
+        ),
+      ),
+    );
+    return { report: toClientReport(r), accepted: true };
   }
 }

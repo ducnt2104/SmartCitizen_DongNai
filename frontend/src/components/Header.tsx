@@ -1,4 +1,4 @@
-import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, UserCog, UserRound, Users } from 'lucide-react';
+import { CircleHelp, Globe2, LogIn, LogOut, MapPin, Settings as SettingsIcon, ShieldCheck, Siren, UserCog, UserRound, Users } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
@@ -98,6 +98,11 @@ function UserMenu() {
           {u.role === 'volunteer' && (
             <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/volunteer'); }}>
               <Users className="h-4 w-4" aria-hidden /> {t('nav.volunteer')}
+            </button>
+          )}
+          {u.role === 'rescue_team' && (
+            <button role="menuitem" type="button" className="btn btn-ghost mb-1 w-full !justify-start" onClick={() => { setOpen(false); nav('/rescue'); }}>
+              <Siren className="h-4 w-4 text-danger" aria-hidden /> Cổng Điều phối Cứu hộ (/rescue)
             </button>
           )}
           {(u.role === 'ward_officer' || u.role === 'city_admin' || u.role === 'super_admin') && (

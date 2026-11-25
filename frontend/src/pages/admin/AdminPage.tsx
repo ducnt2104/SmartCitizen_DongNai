@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   ChevronsLeft,
   ChevronsRight,
@@ -8,11 +9,13 @@ import {
   Map as MapIcon,
   Settings as SettingsIcon,
   ShieldAlert,
+  Siren,
   Wifi,
   WifiOff,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { DiagnosticsDrawer } from '../../components/DiagnosticsDrawer';
 import { Logo } from '../../components/Logo';
 import { CityIncidentMap, type MapMode } from '../../components/map';
 import { OfflineBanner } from '../../components/OfflineBanner';
@@ -51,6 +54,7 @@ export default function AdminPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [mapMode, setMapMode] = useState<MapMode>('pins');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   if (!session) return <Navigate to="/auth" replace />;
   const u = session.user;
@@ -85,6 +89,25 @@ export default function AdminPage() {
             <p className="max-w-[12rem] truncate text-xs font-semibold">{u.name}</p>
             <p className="mono text-[10px] text-ioc-dim">{u.staffCode ?? u.roleCode} · {t(`role.${u.role}`)}</p>
           </div>
+          {isCity && (
+            <Link
+              to="/rescue"
+              className="ioc-btn !border-rose-500/40 !text-rose-300"
+              title="Mở Cổng Điều phối Đội Cứu Hộ (/rescue)"
+            >
+              <Siren className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden lg:inline">Cứu Hộ SOS</span>
+            </Link>
+          )}
+          <button
+            type="button"
+            className="ioc-btn ioc-btn-cyan"
+            onClick={() => setDiagOpen(true)}
+            title="Kiểm tra kết nối MongoDB Atlas, AI Brain & Self-Test"
+          >
+            <Activity className="h-3.5 w-3.5" aria-hidden />
+            <span className="hidden sm:inline">Chẩn đoán</span>
+          </button>
           <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
             <SettingsIcon className="h-4 w-4" />
           </button>
@@ -159,6 +182,7 @@ export default function AdminPage() {
           <p className="mt-6 text-center text-[11px] text-ioc-dim">{t('footer.credit')}</p>
         </main>
       </div>
+      <DiagnosticsDrawer open={diagOpen} onClose={() => setDiagOpen(false)} />
     </div>
   );
 }

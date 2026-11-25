@@ -11,7 +11,7 @@ import {
   useMap,
   useMapsLibrary,
 } from '@vis.gl/react-google-maps';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ARTERIAL_ROADS } from '@shared/geo';
 import { useI18n } from '../../i18n';
 import {
@@ -41,6 +41,22 @@ export interface CameraCommand {
   delta?: number;
 }
 
+export interface RouteOverlaySpec {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  fallbackPath?: Array<{ lat: number; lng: number }>;
+  travelMode?: 'rescue_truck' | 'motorcycle' | 'walking';
+  strokeColor?: string;
+  preserveViewport?: boolean;
+  onRouteResolved?: (info: { distanceKm: number; durationMin: number; source: 'google_directions' | 'osrm' | 'geodesic' }) => void;
+}
+
+export interface DraggablePinSpec {
+  lat: number;
+  lng: number;
+  onDragEnd: (lat: number, lng: number) => void;
+}
+
 export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   id: string;
   reports: T[];
@@ -52,6 +68,8 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   fitPointsOnMount?: boolean;
   cameraCommand?: CameraCommand | null;
   userPos?: { lat: number; lng: number } | null;
+  userHeadingDeg?: number | null;
+  navigationMode?: boolean;
   accuracyM?: number | null;
   radiusM?: number | null;
   showArterials?: boolean;
@@ -60,9 +78,12 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   crosshairActive?: boolean;
   onCrosshairMove?: (lat: number, lng: number) => void;
   onDraggingChange?: (dragging: boolean) => void;
+  onUserPan?: () => void;
+  draggablePin?: DraggablePinSpec | null;
+  routeOverlay?: RouteOverlaySpec | null;
 }
 
-const GOOGLE_LIBRARIES = ['places', 'geocoding', 'marker'];
+const GOOGLE_LIBRARIES = ['places', 'geocoding', 'marker', 'routes'];
 
 /** Bảng màu chuẩn 256 mức cho Canvas Heatmap (tương thích vĩnh viễn với Google Maps v3.67+ không phụ thuộc visualization cũ). */
 const HEAT_PALETTE: Uint8ClampedArray = (() => {
@@ -349,6 +370,92 @@ function GoogleHeatmapLayer<T extends MapPoint>({ mapId, reports }: { mapId: str
   return null;
 }
 
+/** Lớp dẫn đường trực tiếp Google DirectionsService + DirectionsRenderer chuẩn màu Google Maps (#1A73E8). */
+function GoogleDirectionsLayer({
+  mapId,
+  route,
+  onDirectionsActive,
+}: {
+  mapId: string;
+  route: RouteOverlaySpec;
+  onDirectionsActive?: (active: boolean) => void;
+}) {
+  const map = useMap(mapId);
+  const routesLib = useMapsLibrary('routes');
+  const cbRef = useRef(route.onRouteResolved);
+  cbRef.current = route.onRouteResolved;
+  const activeRef = useRef(onDirectionsActive);
+  activeRef.current = onDirectionsActive;
+
+  useEffect(() => {
+    if (!map || !routesLib) return;
+    let cancelled = false;
+    const primaryColor = route.strokeColor ?? '#1A73E8';
+    const renderer = new routesLib.DirectionsRenderer({
+      map,
+      suppressMarkers: true,
+      preserveViewport: Boolean(route.preserveViewport),
+      polylineOptions: {
+        strokeColor: primaryColor,
+        strokeOpacity: 0.96,
+        strokeWeight: 6,
+        zIndex: 420,
+      },
+    });
+    const svc = new routesLib.DirectionsService();
+    const tm = google.maps.TravelMode as unknown as Record<string, google.maps.TravelMode>;
+    const travelMode =
+      route.travelMode === 'walking'
+        ? google.maps.TravelMode.WALKING
+        : route.travelMode === 'motorcycle' && tm.TWO_WHEELER
+          ? tm.TWO_WHEELER
+          : google.maps.TravelMode.DRIVING;
+
+    svc
+      .route({
+        origin: route.origin,
+        destination: route.destination,
+        travelMode,
+        region: 'VN',
+        language: 'vi',
+      })
+      .then((res) => {
+        if (cancelled) return;
+        renderer.setDirections(res);
+        activeRef.current?.(true);
+        const leg = res.routes?.[0]?.legs?.[0];
+        if (leg?.distance?.value && leg?.duration?.value) {
+          cbRef.current?.({
+            distanceKm: Math.round((leg.distance.value / 1000) * 100) / 100,
+            durationMin: Math.max(1, Math.round(leg.duration.value / 60)),
+            source: 'google_directions',
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) activeRef.current?.(false);
+      });
+
+    return () => {
+      cancelled = true;
+      activeRef.current?.(false);
+      renderer.setMap(null);
+    };
+  }, [
+    map,
+    routesLib,
+    route.origin.lat,
+    route.origin.lng,
+    route.destination.lat,
+    route.destination.lng,
+    route.travelMode,
+    route.strokeColor,
+    route.preserveViewport,
+  ]);
+
+  return null;
+}
+
 export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEngineProps<T>) {
   const { lang } = useI18n();
   const crosshairRef = useRef(p.onCrosshairMove);
@@ -357,6 +464,9 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
   viewportRef.current = p.onViewportChange;
   const dragRef = useRef(p.onDraggingChange);
   dragRef.current = p.onDraggingChange;
+  const userPanRef = useRef(p.onUserPan);
+  userPanRef.current = p.onUserPan;
+  const [googleDirActive, setGoogleDirActive] = useState(false);
 
   const mapTypeId = p.surface === 'hybrid' ? 'hybrid' : 'roadmap';
   const colorScheme = p.surface === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
@@ -403,7 +513,10 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
           strictBounds: false,
         }}
         className="h-full w-full"
-        onDragstart={() => dragRef.current?.(true)}
+        onDragstart={() => {
+          dragRef.current?.(true);
+          userPanRef.current?.();
+        }}
         onIdle={(ev) => {
           dragRef.current?.(false);
           const m = ev.map;
@@ -484,9 +597,76 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
         )}
 
         {p.userPos && (
-          <AdvancedMarker position={p.userPos} zIndex={950} clickable={false}>
-            <div className="sc-user-dot" aria-hidden />
+          <AdvancedMarker position={p.userPos} zIndex={960} clickable={false}>
+            {p.navigationMode || (typeof p.userHeadingDeg === 'number' && Number.isFinite(p.userHeadingDeg)) ? (
+              <div className="sc-nav-puck" aria-hidden>
+                <span className="sc-nav-puck-radar" />
+                <div
+                  style={{
+                    transform: `rotate(${typeof p.userHeadingDeg === 'number' ? p.userHeadingDeg : 0}deg)`,
+                  }}
+                  className="relative grid place-items-center"
+                >
+                  <span className="sc-nav-puck-cone" />
+                  <span className="sc-nav-puck-arrow">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="#ffffff" aria-hidden="true">
+                      <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
+                    </svg>
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="sc-user-dot" aria-hidden />
+            )}
           </AdvancedMarker>
+        )}
+
+        {p.draggablePin && (
+          <AdvancedMarker
+            position={{ lat: p.draggablePin.lat, lng: p.draggablePin.lng }}
+            draggable
+            zIndex={980}
+            title="Kéo thả ghim để chỉnh vị trí chính xác"
+            onDragEnd={(ev) => {
+              const ll = ev.latLng;
+              if (ll) p.draggablePin?.onDragEnd(ll.lat(), ll.lng());
+            }}
+          >
+            <div className="flex flex-col items-center">
+              <div className="grid h-10 w-10 place-items-center rounded-full border-2 border-white bg-rose-600 text-xs font-extrabold text-white shadow-lift">
+                SOS
+              </div>
+              <div className="h-3 w-1 rounded-b-full bg-rose-600 shadow" />
+            </div>
+          </AdvancedMarker>
+        )}
+
+        {p.routeOverlay && (
+          <>
+            <GoogleDirectionsLayer
+              mapId={p.id}
+              route={p.routeOverlay}
+              onDirectionsActive={setGoogleDirActive}
+            />
+            {!googleDirActive && p.routeOverlay.fallbackPath && p.routeOverlay.fallbackPath.length >= 2 && (
+              <>
+                <Polyline
+                  path={p.routeOverlay.fallbackPath}
+                  strokeColor="#0D47A1"
+                  strokeOpacity={0.88}
+                  strokeWeight={9}
+                  clickable={false}
+                />
+                <Polyline
+                  path={p.routeOverlay.fallbackPath}
+                  strokeColor={p.routeOverlay.strokeColor ?? '#1A73E8'}
+                  strokeOpacity={0.98}
+                  strokeWeight={6}
+                  clickable={false}
+                />
+              </>
+            )}
+          </>
         )}
       </GoogleMap>
     </APIProvider>
