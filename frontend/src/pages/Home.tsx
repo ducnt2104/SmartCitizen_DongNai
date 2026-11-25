@@ -179,7 +179,7 @@ export default function HomePage() {
           src={heroPhoto}
           alt={t('home.heroImgAlt')}
           decoding="async"
-          className="absolute inset-0 h-full w-full object-cover object-[68%_42%] transition-transform duration-700 ease-out group-hover:scale-[1.02]"
+          className="absolute inset-0 h-full w-full object-cover object-[55%_48%] transition-transform duration-700 ease-out group-hover:scale-[1.02]"
         />
         <div className="hero-scrim pointer-events-none absolute inset-0" aria-hidden />
         <div className="pointer-events-none absolute inset-0 rounded-[1.75rem] ring-1 ring-inset ring-white/15" aria-hidden />
