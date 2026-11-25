@@ -229,7 +229,6 @@ export const vi = {
   'map.heat': 'Bản đồ nhiệt',
   'map.baseLayer': 'Chọn lớp nền bản đồ',
   'map.layer.light': 'Đường phố',
-  'map.layer.dark': 'Địa hình / Tối',
   'map.layer.satellite': 'Vệ tinh + Đường',
   'map.fallbackBadge': 'Dự phòng Vector',
   'map.fallbackHint': 'Chế độ bản đồ dự phòng MapLibre (chưa cấu hình hoặc giới hạn VITE_GOOGLE_MAPS_API_KEY)',

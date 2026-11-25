@@ -1,4 +1,4 @@
-import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
+import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Plus, ShieldCheck } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useId, useState, type ComponentType, type ReactNode } from 'react';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import { useI18n } from '../../i18n';
@@ -10,7 +10,6 @@ import {
   type MapPoint,
   type MapSurfaceStyle,
 } from '../../lib/mapConfig';
-import { useSettings } from '../../state/settings';
 import { lazyWithRetry } from '../../utils/lazyWithRetry';
 import type { CameraCommand, SharedEngineProps } from './GoogleMapEngine';
 import { MapErrorBoundary, MapSkeleton } from './MapErrorBoundary';
@@ -67,22 +66,18 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
  */
 export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCanvasProps<T>) {
   const { t } = useI18n();
-  const { settings } = useSettings();
   const rawId = useId();
   const mapInstanceId = `sc-map-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const googleAvailable = useGoogleMapsAvailable();
 
-  const defaultSurface: MapSurfaceStyle =
-    p.tone === 'ioc' || settings.mode === 'dark' ? 'dark' : 'roadmap';
+  const defaultSurface: MapSurfaceStyle = p.tone === 'ioc' ? 'dark' : 'roadmap';
   const [surface, setSurface] = useState<MapSurfaceStyle>(defaultSurface);
   const [dragging, setDragging] = useState(false);
   const [internalCmd, setInternalCmd] = useState<CameraCommand | null>(null);
 
   useEffect(() => {
-    setSurface((cur) =>
-      cur === 'hybrid' ? 'hybrid' : p.tone === 'ioc' || settings.mode === 'dark' ? 'dark' : 'roadmap',
-    );
-  }, [p.tone, settings.mode]);
+    setSurface((cur) => (cur === 'hybrid' ? 'hybrid' : p.tone === 'ioc' ? 'dark' : 'roadmap'));
+  }, [p.tone]);
 
   const dispatchCamera = useCallback(
     (cmd: Omit<CameraCommand, 'seq'>) => {
@@ -186,7 +181,6 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
                 [
                   ['roadmap', t('map.layer.light'), Layers],
                   ['hybrid', t('map.layer.satellite'), Compass],
-                  ['dark', t('map.layer.dark'), Moon],
                 ] as const
               ).map(([id, label, Icon]) => (
                 <button

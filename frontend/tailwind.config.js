@@ -13,6 +13,7 @@ export default {
         muted: token('muted'),
         line: token('line'),
         brand: token('brand'),
+        'brand-2': token('brand-2'),
         'brand-ink': token('brand-ink'),
         'brand-soft': token('brand-soft'),
         accent: token('accent'),
@@ -41,8 +42,8 @@ export default {
         mono: ['"JetBrains Mono"', 'ui-monospace', 'Consolas', 'monospace'],
       },
       boxShadow: {
-        card: '0 1px 2px rgb(15 23 42 / 0.06), 0 4px 14px rgb(15 23 42 / 0.05)',
-        lift: '0 8px 24px rgb(15 23 42 / 0.12)',
+        card: '0 1px 2px rgb(15 23 42 / 0.04), 0 6px 20px -4px rgb(29 78 216 / 0.07)',
+        lift: '0 12px 32px -6px rgb(15 23 42 / 0.14), 0 4px 12px -2px rgb(29 78 216 / 0.08)',
       },
       keyframes: {
         shimmer: { '100%': { transform: 'translateX(100%)' } },

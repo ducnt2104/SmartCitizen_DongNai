@@ -148,9 +148,11 @@ export function ChatWidget() {
         aria-label={t('chat.title')}
       >
         <div className="mx-auto mt-2 h-1.5 w-10 shrink-0 rounded-full bg-line sm:hidden" aria-hidden />
-        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <Bot className="h-5 w-5 shrink-0 text-brand" aria-hidden />
-          <h2 className="min-w-0 flex-1 truncate font-bold">{t('chat.title')}</h2>
+        <div className="flex items-center gap-2.5 border-b border-line/80 px-4 py-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-brand-soft text-brand">
+            <Bot className="h-5 w-5" aria-hidden />
+          </span>
+          <h2 className="min-w-0 flex-1 truncate font-bold text-ink">{t('chat.title')}</h2>
           <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2" aria-pressed={tts} onClick={() => { setTts((v) => !v); stopSpeaking(); }} aria-label={t('chat.tts')} title={t('chat.tts')}>
             {tts ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
           </button>
@@ -159,10 +161,10 @@ export function ChatWidget() {
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3" aria-live="polite">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3.5" aria-live="polite">
           {msgs.length === 0 && (
-            <div className="rounded-2xl bg-brand-soft p-3 text-sm">
-              <p className="font-semibold text-brand">{t('chat.welcome')}</p>
+            <div className="rounded-2xl border border-brand/15 bg-brand-soft/80 p-3.5 text-sm">
+              <p className="font-bold text-brand">{t('chat.welcome')}</p>
               <p className="mt-1 text-ink">{t('chat.welcomeText')}</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {chips.map((k) => (
@@ -174,8 +176,12 @@ export function ChatWidget() {
           {msgs.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div
-                className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[15px] ${
-                  m.role === 'user' ? 'bg-brand text-brand-ink' : m.error ? 'border border-danger/40 bg-danger-soft text-danger' : 'bg-surface-2 text-ink'
+                className={`max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2.5 text-[15px] shadow-sm ${
+                  m.role === 'user'
+                    ? 'rounded-br-md btn-primary'
+                    : m.error
+                      ? 'rounded-bl-md border border-danger/40 bg-danger-soft text-danger'
+                      : 'rounded-bl-md border border-line/70 bg-surface-2 text-ink'
                 }`}
               >
                 {m.text || <span className="inline-flex gap-1" aria-label={t('chat.thinking')}><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /></span>}

@@ -18,48 +18,52 @@
 
 /* ───────────── Design tokens: Cổng Cộng đồng ───────────── */
 :root {
-  --bg: 248 250 252;
+  --bg: 243 247 254;
   --surface: 255 255 255;
-  --surface-2: 241 245 249;
+  --surface-2: 238 243 252;
   --ink: 15 23 42;
   --muted: 71 85 105;
-  --line: 226 232 240;
-  --brand: 11 87 208;
+  --line: 219 227 242;
+  --brand: 29 78 216;
+  --brand-2: 14 165 233;
   --brand-ink: 255 255 255;
-  --brand-soft: 232 240 254;
+  --brand-soft: 232 241 255;
   --accent: 245 158 11;
-  --danger: 185 28 28;
+  --danger: 220 38 38;
   --danger-soft: 254 226 226;
-  --ok: 21 128 61;
-  --ok-soft: 220 252 231;
+  --ok: 5 150 105;
+  --ok-soft: 220 252 240;
   --warn: 180 83 9;
-  --warn-soft: 254 243 199;
+  --warn-soft: 254 243 210;
   color-scheme: light;
 }
 [data-theme='youth'] {
   --brand: 2 132 199;
-  --brand-soft: 224 242 254;
+  --brand-2: 6 182 212;
+  --brand-soft: 224 244 254;
 }
 [data-mode='dark'] {
-  --bg: 11 18 32;
-  --surface: 17 26 46;
-  --surface-2: 24 36 60;
-  --ink: 229 236 246;
-  --muted: 160 174 196;
-  --line: 38 52 80;
+  --bg: 9 14 28;
+  --surface: 16 25 46;
+  --surface-2: 24 36 64;
+  --ink: 232 238 248;
+  --muted: 158 174 198;
+  --line: 38 53 84;
   --brand: 96 165 250;
+  --brand-2: 56 189 248;
   --brand-ink: 6 18 40;
-  --brand-soft: 23 37 70;
+  --brand-soft: 23 39 74;
   --danger: 248 113 113;
   --danger-soft: 69 20 25;
-  --ok: 74 222 128;
-  --ok-soft: 18 55 33;
+  --ok: 52 211 153;
+  --ok-soft: 18 55 36;
   --warn: 251 191 36;
   --warn-soft: 66 45 10;
   color-scheme: dark;
 }
 [data-mode='dark'][data-theme='youth'] {
   --brand: 56 189 248;
+  --brand-2: 34 211 238;
   --brand-soft: 12 45 66;
 }
 /* Tương phản cao ngoài trời */
@@ -71,6 +75,7 @@
   --muted: 33 33 33;
   --line: 0 0 0;
   --brand: 0 51 153;
+  --brand-2: 0 51 153;
   --brand-ink: 255 255 255;
   --brand-soft: 222 233 255;
   --danger: 150 0 0;
@@ -85,18 +90,21 @@
   --muted: 15 23 42;
   --line: 100 116 139;
   --brand: 8 61 150;
+  --brand-2: 12 96 196;
   --danger: 153 27 27;
   --ok: 20 83 45;
   --warn: 124 45 18;
 }
 [data-senior='true'][data-theme='youth'] {
   --brand: 3 82 130;
+  --brand-2: 8 118 175;
 }
 [data-senior='true'][data-mode='dark'] {
   --ink: 255 255 255;
   --muted: 226 232 240;
   --line: 148 163 184;
   --brand: 147 197 253;
+  --brand-2: 103 232 249;
   --danger: 252 165 165;
   --ok: 134 239 172;
   --warn: 253 224 71;
@@ -104,6 +112,7 @@
 [data-senior='true'][data-mode='contrast'] {
   --line: 0 0 0;
   --brand: 0 40 120;
+  --brand-2: 0 40 120;
 }
 
 html {
@@ -113,12 +122,19 @@ html {
 }
 body {
   margin: 0;
-  background: rgb(var(--bg));
+  background-color: rgb(var(--bg));
+  background-image:
+    radial-gradient(60rem 30rem at 15% -6%, rgb(var(--brand) / 0.08), transparent 65%),
+    radial-gradient(50rem 26rem at 88% 4%, rgb(var(--brand-2) / 0.07), transparent 65%);
+  background-attachment: fixed;
   color: rgb(var(--ink));
   font-family: 'Be Vietnam Pro', system-ui, 'Segoe UI', sans-serif;
   line-height: 1.55;
   min-height: 100dvh;
   overflow-x: hidden;
+}
+[data-mode='contrast'] body {
+  background-image: none;
 }
 h1, h2, h3, h4 { line-height: 1.35; }
 .mono { font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
@@ -133,26 +149,49 @@ h1, h2, h3, h4 { line-height: 1.35; }
 @layer components {
   .btn {
     @apply inline-flex min-h-12 min-w-12 select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-base font-semibold;
-    transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 140ms, opacity 140ms;
+    transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 140ms, box-shadow 160ms, border-color 140ms, opacity 140ms;
   }
   .btn:active:not(:disabled) { transform: scale(0.97); }
   .btn:disabled { @apply cursor-not-allowed opacity-50; }
-  .btn-primary { @apply bg-brand text-brand-ink; }
-  .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-  .btn-soft { @apply bg-brand-soft text-brand; }
-  .btn-ghost { @apply border border-line bg-surface text-ink; }
-  .btn-ghost:hover:not(:disabled) { @apply bg-surface-2; }
-  .btn-danger { @apply bg-danger text-white; }
-  .btn-ok { @apply bg-ok text-white; }
-  .card { @apply rounded-2xl border border-line bg-surface shadow-card; }
+  .btn-primary {
+    @apply text-brand-ink;
+    background: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+    box-shadow: 0 6px 16px -4px rgb(var(--brand) / 0.35);
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+    box-shadow: 0 8px 20px -4px rgb(var(--brand) / 0.44);
+  }
+  [data-mode='contrast'] .btn-primary {
+    background: rgb(var(--brand));
+    box-shadow: none;
+  }
+  .btn-soft { @apply border border-brand/15 bg-brand-soft text-brand; }
+  .btn-soft:hover:not(:disabled) { background: rgb(var(--brand) / 0.14); }
+  .btn-ghost { @apply border border-line bg-surface text-ink shadow-[0_1px_2px_rgb(15_23_42/0.03)]; }
+  .btn-ghost:hover:not(:disabled) { @apply border-brand/30 bg-surface-2; }
+  .btn-danger { @apply bg-danger text-white shadow-sm; }
+  .btn-ok { @apply bg-ok text-white shadow-sm; }
+  .hero-gradient {
+    background: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+    box-shadow: 0 14px 32px -10px rgb(var(--brand) / 0.38);
+  }
+  [data-mode='contrast'] .hero-gradient {
+    background: rgb(var(--brand));
+    box-shadow: none;
+  }
+  .card { @apply rounded-[1.25rem] border border-line/85 bg-surface shadow-card; }
   .field {
-    @apply min-h-12 w-full rounded-xl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-muted/70;
+    @apply min-h-12 w-full rounded-xl border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-muted/70 transition-colors focus:border-brand;
   }
   .label { @apply mb-1 block text-sm font-semibold text-ink; }
   .chip {
-    @apply inline-flex min-h-8 items-center gap-1 rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink;
+    @apply inline-flex min-h-8 items-center gap-1 rounded-full border border-line bg-surface px-3 text-sm font-medium text-ink transition-colors hover:border-brand/40 hover:bg-brand-soft/50;
   }
-  .chip[aria-pressed='true'], .chip[data-active='true'] { @apply border-brand bg-brand text-brand-ink; }
+  .chip[aria-pressed='true'], .chip[data-active='true'] {
+    @apply border-transparent bg-brand text-brand-ink shadow-sm;
+    background: linear-gradient(135deg, rgb(var(--brand)) 0%, rgb(var(--brand-2)) 100%);
+  }
   .skeleton { @apply relative overflow-hidden rounded-xl bg-surface-2; }
   .skeleton::after {
     content: '';

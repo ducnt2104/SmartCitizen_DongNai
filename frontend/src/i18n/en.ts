@@ -231,7 +231,6 @@ export const en: Record<keyof typeof vi, string> = {
   'map.heat': 'Heatmap',
   'map.baseLayer': 'Choose map base layer',
   'map.layer.light': 'Roadmap',
-  'map.layer.dark': 'Terrain / Dark',
   'map.layer.satellite': 'Hybrid Satellite',
   'map.fallbackBadge': 'Vector Fallback',
   'map.fallbackHint': 'Running MapLibre fallback mode (VITE_GOOGLE_MAPS_API_KEY not configured or restricted)',

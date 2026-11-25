@@ -16,7 +16,10 @@ export function BottomNav() {
   const labelCls = settings.senior ? 'text-[12px]' : 'text-[10.5px] sm:text-[11px]';
 
   return (
-    <nav aria-label={t('nav.main')} className="safe-b fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur-md md:hidden">
+    <nav
+      aria-label={t('nav.main')}
+      className="safe-b fixed inset-x-0 bottom-0 z-40 border-t border-line/80 bg-surface/92 shadow-[0_-6px_24px_rgb(15_23_42/0.07)] backdrop-blur-xl md:hidden"
+    >
       <ul className="mx-auto grid max-w-lg grid-cols-5">
         {items.map(({ to, icon: Icon, label, end, tour }) => (
           <li key={to} className="min-w-0">
@@ -29,8 +32,8 @@ export function BottomNav() {
               }}
               className={({ isActive }) => {
                 const active = isActive && !assistantOpen;
-                return `flex min-h-14 w-full flex-col items-center justify-center gap-0.5 px-0.5 py-1 text-center font-semibold ${labelCls} ${
-                  active ? 'text-brand' : 'text-muted'
+                return `flex min-h-14 w-full flex-col items-center justify-center gap-0.5 px-0.5 py-1 text-center font-semibold transition-colors ${labelCls} ${
+                  active ? 'text-brand' : 'text-muted hover:text-ink'
                 }`;
               }}
             >
@@ -38,7 +41,7 @@ export function BottomNav() {
                 const active = isActive && !assistantOpen;
                 return (
                   <>
-                    <span className={`grid h-7 w-[min(2.75rem,85%)] place-items-center rounded-full transition-colors ${active ? 'bg-brand-soft' : ''}`}>
+                    <span className={`grid h-7 w-[min(2.75rem,85%)] place-items-center rounded-full transition-all ${active ? 'bg-brand-soft ring-1 ring-brand/20' : ''}`}>
                       <Icon className="h-5 w-5" aria-hidden />
                     </span>
                     <span className="w-full truncate leading-tight">{label}</span>
@@ -56,11 +59,11 @@ export function BottomNav() {
             aria-expanded={assistantOpen}
             aria-label={t('chat.open')}
             onClick={() => setAssistantOpen(!assistantOpen)}
-            className={`flex min-h-14 w-full flex-col items-center justify-center gap-0.5 px-0.5 py-1 text-center font-semibold ${labelCls} ${
-              assistantOpen ? 'text-brand' : 'text-muted'
+            className={`flex min-h-14 w-full flex-col items-center justify-center gap-0.5 px-0.5 py-1 text-center font-semibold transition-colors ${labelCls} ${
+              assistantOpen ? 'text-brand' : 'text-muted hover:text-ink'
             }`}
           >
-            <span className={`grid h-7 w-[min(2.75rem,85%)] place-items-center rounded-full transition-colors ${assistantOpen ? 'bg-brand-soft' : ''}`}>
+            <span className={`grid h-7 w-[min(2.75rem,85%)] place-items-center rounded-full transition-all ${assistantOpen ? 'bg-brand-soft ring-1 ring-brand/20' : ''}`}>
               <Bot className="h-5 w-5" aria-hidden />
             </span>
             <span className="w-full truncate leading-tight">{t('nav.assistant')}</span>
@@ -82,38 +85,40 @@ export function TopNav() {
     { to: '/mine', label: t('nav.mine'), end: false },
   ];
   return (
-    <nav aria-label={t('nav.main')} className="mx-auto hidden max-w-5xl flex-wrap items-center gap-1 px-3 pt-3 md:flex">
-      {links.map((l) => (
-        <NavLink
-          key={l.to}
-          to={l.to}
-          end={l.end}
-          onClick={() => {
-            if (assistantOpen) setAssistantOpen(false);
-          }}
-          className={({ isActive }) =>
-            `rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-              isActive && !assistantOpen ? 'bg-brand text-brand-ink' : 'text-muted hover:bg-surface-2'
-            }`
-          }
+    <nav aria-label={t('nav.main')} className="mx-auto hidden w-full max-w-5xl px-3 pt-3 md:flex">
+      <div className="inline-flex flex-wrap items-center gap-1 rounded-full border border-line/85 bg-surface/90 p-1 shadow-card backdrop-blur-md">
+        {links.map((l) => (
+          <NavLink
+            key={l.to}
+            to={l.to}
+            end={l.end}
+            onClick={() => {
+              if (assistantOpen) setAssistantOpen(false);
+            }}
+            className={({ isActive }) =>
+              `rounded-full px-4 py-1.5 text-sm font-semibold transition-all ${
+                isActive && !assistantOpen ? 'btn-primary' : 'text-muted hover:bg-surface-2 hover:text-ink'
+              }`
+            }
+          >
+            {l.label}
+          </NavLink>
+        ))}
+        <button
+          type="button"
+          data-tour="assistant"
+          aria-pressed={assistantOpen}
+          aria-expanded={assistantOpen}
+          aria-label={t('chat.open')}
+          onClick={() => setAssistantOpen(!assistantOpen)}
+          className={`inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-semibold transition-all ${
+            assistantOpen ? 'btn-primary' : 'text-muted hover:bg-surface-2 hover:text-ink'
+          }`}
         >
-          {l.label}
-        </NavLink>
-      ))}
-      <button
-        type="button"
-        data-tour="assistant"
-        aria-pressed={assistantOpen}
-        aria-expanded={assistantOpen}
-        aria-label={t('chat.open')}
-        onClick={() => setAssistantOpen(!assistantOpen)}
-        className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-          assistantOpen ? 'bg-brand text-brand-ink' : 'text-muted hover:bg-surface-2'
-        }`}
-      >
-        <Bot className="h-4 w-4 shrink-0" aria-hidden />
-        <span>{t('nav.assistant')}</span>
-      </button>
+          <Bot className="h-4 w-4 shrink-0" aria-hidden />
+          <span>{t('nav.assistant')}</span>
+        </button>
+      </div>
     </nav>
   );
 }
