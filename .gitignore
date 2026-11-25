@@ -2,6 +2,14 @@
 node_modules/
 **/node_modules/
 
+# Rust build artifacts & large local AI model weights
+engine/target/
+target/
+models/*.onnx
+models/*.bin
+models/*.gguf
+!models/.gitkeep
+
 # Environment variables & secrets (chặn tuyệt đối .env, chỉ cho phép .env.example)
 .env
 .env.*
