@@ -42,20 +42,20 @@ Nền tảng Web App **Phản ánh Hiện trường & Điều phối Đô thị 
 **Yêu cầu:** Node.js `>= 20` và npm `>= 10`.
 
 ```bash
-# 1. Cài dependencies cho cả server và client
+# 1. Cài dependencies cho cả backend và frontend
 npm run install:all
 
 # 2. Tạo file biến môi trường từ mẫu
-cp server/.env.example server/.env
-# Mở server/.env và điền:
+cp .env.example backend/.env
+# Mở backend/.env và điền:
 #  - RESEND_API_KEY (hoặc SMTP_HOST/SMTP_USER/SMTP_PASS) để gửi Email OTP thật
 #  - GEMINI_API_KEY (tùy chọn — để trống dùng AI Dự phòng Cục bộ)
 #  - MONGODB_URI (tùy chọn — để trống dùng Local Persistent JSON Store)
 #  - INITIAL_STAFF_PASSWORD (mật khẩu khởi tạo cán bộ IOC)
 
 # 3. Chạy đồng thời Backend (8080) và Frontend (5173)
-npm run dev:server
-npm run dev:client
+npm run dev:backend
+npm run dev:frontend
 ```
 
 Hoặc build & chạy ở chế độ Production (1 tiến trình phục vụ cả API lẫn SPA):

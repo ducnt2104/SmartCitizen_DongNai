@@ -4,15 +4,15 @@
   "version": "1.0.0",
   "description": "SmartCitizen_DongNai - Team Victer: Phản ánh hiện trường & Điều phối đô thị thông minh TP. Đồng Nai",
   "scripts": {
-    "install:all": "npm install --prefix server && npm install --prefix client",
-    "build": "npm run build --prefix server && npm run build --prefix client",
-    "build:server": "npm run build --prefix server",
-    "build:client": "npm run build --prefix client",
-    "typecheck": "npm run typecheck --prefix server && npm run typecheck --prefix client",
-    "test": "npm test --prefix server && npm test --prefix client",
-    "dev:server": "npm run dev --prefix server",
-    "dev:client": "npm run dev --prefix client",
-    "start": "npm start --prefix server",
-    "seed:dongnai": "npm run seed:dongnai --prefix server"
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend",
+    "build:backend": "npm run build --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "typecheck": "npm run typecheck --prefix backend && npm run typecheck --prefix frontend",
+    "test": "npm test --prefix backend && npm test --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "start": "npm start --prefix backend",
+    "seed:dongnai": "npm run seed:dongnai --prefix backend"
   }
 }

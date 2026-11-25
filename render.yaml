@@ -5,7 +5,7 @@ services:
     plan: free
     region: singapore
     autoDeploy: true
-    buildCommand: npm install --include=dev --prefix server && npm install --include=dev --prefix client && npm run build
+    buildCommand: npm install --include=dev --prefix backend && npm install --include=dev --prefix frontend && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
