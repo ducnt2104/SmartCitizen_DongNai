@@ -6,6 +6,7 @@ import {
   adminController, authController, metaController, reportController, volunteerController,
 } from '../controllers';
 import { aiController } from '../controllers/ai.controller';
+import { buildApiKeysRouter } from './apiKeys';
 import type { Services } from '../services/container';
 import { schemas } from '../validation/schemas';
 
@@ -81,6 +82,7 @@ export function buildRouter(s: Services, bootInfo: { fallbackReason: string | nu
   api.post('/admin/staff', city, validateBody(schemas.createStaff), h(ad.createStaff));
   api.patch('/admin/staff/:id/revoke', city, validateBody(schemas.revokeStaff), h(ad.revokeStaff));
   api.get('/admin/export', staff, h(ad.export));
+  api.use('/admin/api-keys', buildApiKeysRouter(s));
 
   // AI (Lớp 4 & 7)
   api.post('/ai/analyze-image', limits.vision, validateBody(schemas.analyzeImage), h(ai.analyzeImage));

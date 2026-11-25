@@ -1,9 +1,11 @@
 import type { Repositories } from '../repositories/types';
+import { env } from '../config/env';
 import { AuditService } from './audit.service';
 import { AuthService } from './auth.service';
 import { ChatService } from './chat.service';
 import { GeminiService } from './gemini.service';
 import { GeoService } from './geo.service';
+import { KeyPoolManager } from './keyPool';
 import { OtpDeliveryService } from './otpDelivery.service';
 import { ReportService } from './report.service';
 import { StaffService } from './staff.service';
@@ -16,6 +18,7 @@ export interface Services {
   otpDelivery: OtpDeliveryService;
   geo: GeoService;
   auth: AuthService;
+  keyPool: KeyPoolManager;
   gemini: GeminiService;
   reports: ReportService;
   staff: StaffService;
@@ -25,7 +28,13 @@ export interface Services {
 export function createServices(repos: Repositories): Services {
   const audit = new AuditService(repos.audit);
   const trust = new TrustService(repos.users);
-  const gemini = new GeminiService();
+  const keyPool = new KeyPoolManager({
+    encryptionSecret: process.env.KEY_ENCRYPTION_SECRET?.trim() || env.jwtSecret,
+    dataDir: env.dataDir,
+    quotaResetTimeZone: process.env.KEY_QUOTA_RESET_TZ?.trim() || 'Asia/Ho_Chi_Minh',
+    defaultGeminiModel: env.geminiModel,
+  });
+  const gemini = new GeminiService(keyPool);
   const otpDelivery = new OtpDeliveryService();
   const geo = new GeoService();
   return {
@@ -34,6 +43,7 @@ export function createServices(repos: Repositories): Services {
     trust,
     otpDelivery,
     geo,
+    keyPool,
     gemini,
     auth: new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit),
     reports: new ReportService(repos, gemini, trust, audit),
