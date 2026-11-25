@@ -677,7 +677,7 @@ export default function AlertsPage() {
   }, [filteredAlerts]);
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 w-full space-y-4">
       {/* Page Title & Action Row */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -784,7 +784,7 @@ export default function AlertsPage() {
                         wardCode: w.wardCode,
                       });
                     }}
-                    className="field !h-9 !min-h-9 !w-auto max-w-[15rem] !rounded-xl !px-2.5 !py-0 !text-xs"
+                    className="field !h-9 !min-h-9 w-full min-w-0 max-w-full !rounded-xl !px-2.5 !py-0 !text-xs sm:!w-auto sm:max-w-[15rem]"
                   >
                     <option value="">Chọn Phường/Xã (95 ĐVHC)…</option>
                     {DONG_NAI_WARDS.map((w) => (
@@ -1010,19 +1010,20 @@ export default function AlertsPage() {
                 </section>
 
                 {/* Dự báo theo giờ (24h) & Dự báo 7 ngày */}
-                <div className="grid gap-4 lg:grid-cols-12">
-                  <section className="card p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
+                <div className="grid min-w-0 w-full gap-4 lg:grid-cols-12">
+                  <section className="card min-w-0 w-full overflow-hidden p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
-                        <Compass className="h-4 w-4 text-brand" aria-hidden /> Dự báo theo giờ (24 giờ tới)
+                        <Compass className="h-4 w-4 shrink-0 text-brand" aria-hidden />
+                        <span className="truncate">Dự báo theo giờ (24 giờ tới)</span>
                       </h2>
-                      <span className="text-[11px] font-semibold text-muted">{forecastAreaName}</span>
+                      <span className="shrink-0 truncate text-[11px] font-semibold text-muted max-w-[9rem]">{forecastAreaName}</span>
                     </div>
-                    <div className="flex gap-2 overflow-x-auto pb-1">
+                    <div className="no-scrollbar flex w-full flex-nowrap gap-2 overflow-x-auto overscroll-x-contain pb-1">
                       {forecast.hourly.map((pt, idx) => (
                         <div
                           key={pt.timeIso}
-                          className={`flex min-w-[4.5rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2.5 text-center ${
+                          className={`flex w-[3.75rem] min-w-[3.75rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2 text-center ${
                             idx === 0 ? 'border-brand/35 bg-brand-soft/75' : 'border-line/70 bg-surface-2/60'
                           }`}
                         >
@@ -1038,7 +1039,7 @@ export default function AlertsPage() {
                     </div>
                   </section>
 
-                  <section className="card p-4 lg:col-span-5" aria-label="Dự báo 7 ngày tới">
+                  <section className="card min-w-0 w-full p-4 lg:col-span-5" aria-label="Dự báo 7 ngày tới">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
                         <Thermometer className="h-4 w-4 text-brand" aria-hidden /> Dự báo 7 ngày tới
@@ -1075,17 +1076,17 @@ export default function AlertsPage() {
 
             {/* Thanh Thời tiết các khu vực trọng điểm Đồng Nai */}
             {weather.length > 0 && (
-              <section aria-label="Thời tiết và lượng mưa các khu vực Đồng Nai" className="card p-3.5">
+              <section aria-label="Thời tiết và lượng mưa các khu vực Đồng Nai" className="card min-w-0 w-full overflow-hidden p-3.5">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-brand">
-                    <CloudRain className="h-4 w-4" aria-hidden />
+                    <CloudRain className="h-4 w-4 shrink-0" aria-hidden />
                     <span>Trạm đo Khí tượng các khu vực Đồng Nai</span>
                   </div>
                   <span className="text-[11px] text-muted">
                     {weatherSyncAt ? `Đồng bộ lúc: ${fmtDate(weatherSyncAt, true)}` : ''}
                   </span>
                 </div>
-                <div className="flex gap-2.5 overflow-x-auto pb-1">
+                <div className="no-scrollbar flex w-full flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain pb-1">
                   {weather.map((w) => {
                     const targetWard = WARD_BY_CODE[w.wardCode];
                     const isSelected = weatherLoc.wardCode === w.wardCode && !weatherLoc.isGps;
@@ -1338,9 +1339,9 @@ export default function AlertsPage() {
       )}
 
       {/* Bố cục 2 cột: Bản đồ Cảnh báo Trực quan + Luồng Cảnh báo */}
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid min-w-0 w-full gap-4 lg:grid-cols-12">
         {/* Cột Trái: Bản đồ Cảnh báo */}
-        <div className="space-y-2.5 lg:col-span-6">
+        <div className="min-w-0 w-full space-y-2.5 lg:col-span-6">
           <div className="flex items-center justify-between text-xs font-bold text-muted">
             <span className="inline-flex items-center gap-1.5">
               <Layers className="h-4 w-4 text-brand" aria-hidden />
@@ -1386,7 +1387,7 @@ export default function AlertsPage() {
         </div>
 
         {/* Cột Phải: Bộ lọc 3 nhóm + Luồng Cảnh báo & Tin Chính thống */}
-        <div className="space-y-3 lg:col-span-6">
+        <div className="min-w-0 w-full space-y-3 lg:col-span-6">
           <div className="flex flex-wrap gap-1.5">
             {([
               ['all', 'Tất cả cảnh báo'],

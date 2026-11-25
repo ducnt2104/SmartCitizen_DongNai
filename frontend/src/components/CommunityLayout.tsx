@@ -21,7 +21,7 @@ export function CommunityLayout() {
   const { t } = useI18n();
   const { assistantOpen } = useSettings();
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh w-full max-w-full flex-col overflow-x-clip">
       <div className="h-1 w-full bg-gradient-to-r from-brand via-brand-2 to-emerald-500" aria-hidden />
       <a href="#main" className="sr-only-focusable fixed left-2 top-2 z-[4000] rounded-lg bg-brand px-3 py-2 text-brand-ink">
         {t('nav.skip')}
@@ -29,7 +29,7 @@ export function CommunityLayout() {
       <Header />
       <OfflineBanner />
       <TopNav />
-      <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-3 pb-6 pt-4 md:pb-10">
+      <main id="main" className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-3 pb-6 pt-4 sm:px-4 md:pb-10">
         <RouteErrorBoundary>
           <Suspense fallback={<RouteLoadingSkeleton />}>
             <Outlet />
