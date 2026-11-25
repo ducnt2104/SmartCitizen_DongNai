@@ -715,7 +715,7 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
   const [googleDirActive, setGoogleDirActive] = useState(false);
 
   const mapTypeId = p.surface === 'hybrid' ? 'hybrid' : 'roadmap';
-  const colorScheme = p.surface === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
+  const colorScheme = ColorScheme.LIGHT;
 
   const arterialPaths = useMemo(
     () =>

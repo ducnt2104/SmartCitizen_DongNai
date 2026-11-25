@@ -1,4 +1,4 @@
-import { Compass, Globe2, Layers, LocateFixed, MapPin, Maximize2, Minimize2, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
+import { Compass, Globe2, Layers, LocateFixed, MapPin, Maximize2, Minimize2, Minus, Plus, ShieldCheck } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useId, useState, type ComponentType, type ReactNode } from 'react';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import { useI18n } from '../../i18n';
@@ -83,8 +83,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
   const mapInstanceId = `sc-map-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const googleAvailable = useGoogleMapsAvailable();
 
-  const defaultSurface: MapSurfaceStyle = p.tone === 'ioc' ? 'dark' : 'roadmap';
-  const [surface, setSurface] = useState<MapSurfaceStyle>(defaultSurface);
+  const [surface, setSurface] = useState<MapSurfaceStyle>('roadmap');
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [internalCmd, setInternalCmd] = useState<CameraCommand | null>(null);
@@ -97,10 +96,6 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [expanded]);
-
-  useEffect(() => {
-    setSurface((cur) => (cur === 'hybrid' ? 'hybrid' : p.tone === 'ioc' ? 'dark' : 'roadmap'));
-  }, [p.tone]);
 
   const dispatchCamera = useCallback(
     (cmd: Omit<CameraCommand, 'seq'>) => {
@@ -119,7 +114,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
     lng: p.initialCenter ? p.initialCenter[1] : DONG_NAI_CITY_CENTER[1],
   };
   const zoomVal = p.initialZoom ?? 10;
-  const isDarkFrame = surface === 'dark' || p.tone === 'ioc';
+  const isDarkFrame = p.tone === 'ioc';
 
   const sharedProps = {
     id: mapInstanceId,
@@ -221,7 +216,6 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
                 [
                   ['roadmap', t('map.layer.light'), Layers],
                   ['hybrid', t('map.layer.satellite'), Compass],
-                  ['dark', t('map.layer.dark'), Moon],
                 ] as const
               ).map(([id, label, Icon]) => (
                 <button

@@ -235,7 +235,6 @@ export const en: Record<keyof typeof vi, string> = {
   'map.baseLayer': 'Choose map base layer',
   'map.layer.light': 'Roadmap',
   'map.layer.satellite': 'Hybrid Satellite',
-  'map.layer.dark': 'Dark Mode',
   'map.fallbackBadge': 'Standard Map',
   'map.fallbackHint': 'Detailed digital map mode for Dong Nai City',
   'map.openGoogleMaps': 'Open in Google Maps',

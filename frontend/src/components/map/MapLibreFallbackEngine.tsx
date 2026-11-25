@@ -259,7 +259,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const fallbackToRasterStyle = (map: maplibregl.Map, reason: string): void => {
     clearVectorWatchdog();
     if (vectorFailedRef.current) return;
-    console.warn('[MapLibre] Chuyển sang nền CARTO/Esri dự phòng do:', reason);
+    console.warn('[MapLibre] Chuyển sang nền OSM/Esri dự phòng do:', reason);
     vectorFailedRef.current = true;
     vectorActiveRef.current = false;
     vectorLoadedRef.current = false;
@@ -275,9 +275,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     map.setStyle(vecStyle);
     vectorWatchdogRef.current = window.setTimeout(() => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        fallbackToRasterStyle(map, 'vector load timeout (10s)');
+        fallbackToRasterStyle(map, 'vector load timeout (12s)');
       }
-    }, 10000);
+    }, 12000);
   };
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; mở khóa kéo/zoom tự do toàn diện như Google Maps
@@ -318,18 +318,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     let vectorDisposed = false;
     const vectorAbort = new AbortController();
 
-    const applyDetailedVectorIfSupported = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
-      if (vectorFailedRef.current) {
-        clearVectorWatchdog();
-        vectorActiveRef.current = false;
-        vectorLoadedRef.current = false;
-        return;
-      }
-      void loadDetailedVectorStyle(targetSurface, targetLang, vectorAbort.signal).then((vecStyle) => {
-        if (vectorDisposed || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
-        applyVectorStyleWithWatchdog(map, vecStyle);
-      });
-    };
+    const prefetchedVectorPromise = loadDetailedVectorStyle(p.surface, lang, vectorAbort.signal);
 
     const emitViewport = (): void => {
       if (viewportRef.current) {
@@ -365,7 +354,10 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
       setStyleReadySeq((n) => n + 1);
       emitViewport();
-      applyDetailedVectorIfSupported(p.surface, lang);
+      void prefetchedVectorPromise.then((vecStyle) => {
+        if (vectorDisposed || !vecStyle || surfaceRef.current !== p.surface || vectorFailedRef.current) return;
+        applyVectorStyleWithWatchdog(map, vecStyle);
+      });
     });
 
     map.on('style.load', () => {
@@ -378,8 +370,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         vectorActiveRef.current &&
         !vectorLoadedRef.current &&
         ev.sourceId === 'openmaptiles' &&
-        ev.isSourceLoaded &&
-        map.areTilesLoaded()
+        ev.isSourceLoaded
       ) {
         vectorLoadedRef.current = true;
         clearVectorWatchdog();
@@ -396,11 +387,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     });
 
     map.on('error', (ev) => {
-      if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        const msg =
-          (ev as { error?: { message?: string }; sourceId?: string }).error?.message ??
-          (ev as { sourceId?: string }).sourceId ??
-          'style/tile load error';
+      const errSource = (ev as { sourceId?: string }).sourceId;
+      if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current && errSource === 'openmaptiles') {
+        const msg = (ev as { error?: { message?: string } }).error?.message ?? 'openmaptiles source error';
         fallbackToRasterStyle(map, msg);
       }
     });

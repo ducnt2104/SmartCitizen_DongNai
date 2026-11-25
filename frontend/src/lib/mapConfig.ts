@@ -6,8 +6,8 @@ import type { Category, Priority, ReportStatus } from '@shared/types';
 import { DONG_NAI_REAL_BOUNDARY_POLYGON } from '../data/dongNaiBoundary';
 
 export type MapMode = 'pins' | 'heat';
-/** 3 chế độ hiển thị chuẩn: Đường phố sạch (roadmap), Vệ tinh + Tên đường (hybrid), Địa hình / Tối (dark) */
-export type MapSurfaceStyle = 'roadmap' | 'hybrid' | 'dark';
+/** 2 chế độ chuẩn Google Maps: Đường phố (roadmap) và Vệ tinh + Đường (hybrid) */
+export type MapSurfaceStyle = 'roadmap' | 'hybrid';
 
 /** Kiểu điểm tối thiểu cho bản đồ (hỗ trợ cả ReportSummary siêu nhẹ lẫn ClientReport đầy đủ). */
 export interface MapPoint {
@@ -275,7 +275,6 @@ export function googleMapsDirectionsUrl(
 }
 
 export const OPENFREEMAP_VECTOR_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-export const OPENFREEMAP_DARK_STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
 export const DONG_NAI_GLYPHS_URL = 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf';
 
 /** Đa giác ranh giới thực Thành phố Đồng Nai mới (sáp nhập Đồng Nai + Bình Phước) dùng ẩn nhãn ĐVHC cũ của OSM và vẽ khung hành chính 2 cấp. */
@@ -338,7 +337,7 @@ const LEGACY_OSM_ADMIN_LAYERS = new Set([
   'place_village',
 ]);
 
-const cachedVectorStylePromises: Partial<Record<'roadmap' | 'dark', Promise<StyleSpecification | null>>> = {};
+let cachedVectorStylePromise: Promise<StyleSpecification | null> | null = null;
 
 function excludeDongNaiLegacyFilter(existing: unknown): unknown {
   const outsideMask: unknown = ['!', ['within', DONG_NAI_ADMIN_MASK_POLYGON]];
@@ -653,36 +652,10 @@ function tuneRoadmapLayer(layer: LayerSpecification): Record<string, unknown> {
   return next;
 }
 
-function tuneDarkLayer(layer: LayerSpecification): Record<string, unknown> {
-  const next = { ...layer } as Record<string, unknown>;
-  const paint = (layer.paint as Record<string, unknown> | undefined) ?? {};
-  const id = layer.id;
-
-  if (id === 'highway-name-major') {
-    next.minzoom = 10.2;
-  } else if (id === 'highway-name-minor') {
-    next.minzoom = 12.2;
-  } else if (id === 'highway-name-path') {
-    next.minzoom = 13.5;
-  } else if (id === 'poi_r1') {
-    next.minzoom = 11.5;
-    next.paint = { ...paint, 'text-color': GOOGLE_POI_TEXT_COLOR_DARK };
-  } else if (id === 'poi_r7') {
-    next.minzoom = 13.0;
-    next.paint = { ...paint, 'text-color': GOOGLE_POI_TEXT_COLOR_DARK };
-  } else if (id === 'poi_r20') {
-    next.minzoom = 14.2;
-    next.paint = { ...paint, 'text-color': GOOGLE_POI_TEXT_COLOR_DARK };
-  } else if (id === 'poi_transit') {
-    next.minzoom = 12.8;
-  }
-  return next;
-}
-
 function cloneAndLocalizeVectorStyle(
   base: StyleSpecification,
   lang: 'vi' | 'en',
-  surface: 'roadmap' | 'dark' | 'hybrid',
+  surface: MapSurfaceStyle,
 ): StyleSpecification {
   const nameExpr: unknown =
     lang === 'en'
@@ -690,7 +663,7 @@ function cloneAndLocalizeVectorStyle(
       : ['coalesce', ['get', 'name:vi'], ['get', 'name'], ['get', 'name:latin']];
 
   const cleanSources = { ...base.sources } as Record<string, unknown>;
-  if ((surface === 'roadmap' || surface === 'hybrid') && 'ne2_shaded' in cleanSources) {
+  if ('ne2_shaded' in cleanSources) {
     delete cleanSources.ne2_shaded;
   }
 
@@ -733,24 +706,19 @@ function cloneAndLocalizeVectorStyle(
           !layer.id.includes('casing') &&
           !layer.id.includes('hatching'));
       if (!keepOnSatellite) continue;
-    } else if (surface === 'roadmap' && layer.id === 'natural_earth') {
+    } else if (layer.id === 'natural_earth') {
       continue;
     }
 
-    const next =
-      surface === 'roadmap'
-        ? tuneRoadmapLayer(layer)
-        : surface === 'dark'
-          ? tuneDarkLayer(layer)
-          : ({ ...layer } as Record<string, unknown>);
+    const next = surface === 'roadmap' ? tuneRoadmapLayer(layer) : ({ ...layer } as Record<string, unknown>);
 
     // Trong Đồng Nai: chỉ ẩn ranh giới tỉnh/huyện cũ (`boundary_3`/`boundary_state`/`boundary_county`) để dùng địa giới 2 cấp mới;
     // NGOÀI Đồng Nai giữ nguyên ranh giới hành chính đầy đủ toàn Việt Nam & thế giới như Google Maps!
     if (
-      (layer.id === 'boundary_3' ||
-        layer.id === 'boundary_state' ||
-        layer.id === 'boundary_county' ||
-        (layer.id.startsWith('boundary_') && !isCountryBorder))
+      layer.id === 'boundary_3' ||
+      layer.id === 'boundary_state' ||
+      layer.id === 'boundary_county' ||
+      (layer.id.startsWith('boundary_') && !isCountryBorder)
     ) {
       next.filter = excludeDongNaiLegacyFilter(next.filter);
     }
@@ -779,8 +747,8 @@ function cloneAndLocalizeVectorStyle(
         layer.id.includes('motorway') || layer.id.includes('trunk') || layer.id.includes('primary');
       next.paint = {
         ...paint,
-        'line-color': isMajor ? 'rgba(251, 191, 36, 0.72)' : 'rgba(255, 255, 255, 0.45)',
-        'line-opacity': isMajor ? 0.75 : 0.48,
+        'line-color': isMajor ? 'rgba(251, 191, 36, 0.78)' : 'rgba(255, 255, 255, 0.5)',
+        'line-opacity': isMajor ? 0.78 : 0.5,
       };
     }
 
@@ -799,7 +767,7 @@ function cloneAndLocalizeVectorStyle(
           next.paint = {
             ...paint,
             'text-color': layer.id.startsWith('poi_') ? GOOGLE_POI_TEXT_COLOR_DARK : '#FFFFFF',
-            'text-halo-color': 'rgba(15, 23, 42, 0.9)',
+            'text-halo-color': 'rgba(15, 23, 42, 0.92)',
             'text-halo-width': 2.2,
           };
         }
@@ -815,7 +783,7 @@ function cloneAndLocalizeVectorStyle(
 
     mappedLayers.push(next as unknown as LayerSpecification);
 
-    // Chèn lớp số nhà chi tiết từ openmaptiles (`housenumber`) cho mọi chế độ (roadmap, dark, hybrid) hiển thị xuyên suốt zoom 14.8 → 22
+    // Chèn lớp số nhà chi tiết từ openmaptiles (`housenumber`) hiển thị xuyên suốt zoom 14.8 → 22
     if (
       !housenumberInserted &&
       'openmaptiles' in cleanSources &&
@@ -836,7 +804,7 @@ function cloneAndLocalizeVectorStyle(
           'text-padding': 3,
         },
         paint: {
-          'text-color': surface === 'roadmap' ? '#334155' : '#E2E8F0',
+          'text-color': surface === 'roadmap' ? '#334155' : '#F8FAFC',
           'text-halo-color': surface === 'roadmap' ? 'rgba(255, 255, 255, 0.98)' : 'rgba(15, 23, 42, 0.92)',
           'text-halo-width': 1.8,
         },
@@ -887,12 +855,10 @@ export async function loadDetailedVectorStyle(
   signal?: AbortSignal,
 ): Promise<StyleSpecification | null> {
   if (typeof fetch === 'undefined') return null;
-  const cacheKey: 'roadmap' | 'dark' = surface === 'dark' ? 'dark' : 'roadmap';
-  const styleUrl = cacheKey === 'dark' ? OPENFREEMAP_DARK_STYLE_URL : OPENFREEMAP_VECTOR_STYLE_URL;
-  if (!cachedVectorStylePromises[cacheKey]) {
+  if (!cachedVectorStylePromise) {
     const ctrl = new AbortController();
-    const timer = typeof window !== 'undefined' ? window.setTimeout(() => ctrl.abort(), 7500) : null;
-    cachedVectorStylePromises[cacheKey] = fetch(styleUrl, {
+    const timer = typeof window !== 'undefined' ? window.setTimeout(() => ctrl.abort(), 8000) : null;
+    cachedVectorStylePromise = fetch(OPENFREEMAP_VECTOR_STYLE_URL, {
       headers: { Accept: 'application/json' },
       signal: ctrl.signal,
     })
@@ -903,7 +869,7 @@ export async function loadDetailedVectorStyle(
         return json;
       })
       .catch(() => {
-        delete cachedVectorStylePromises[cacheKey];
+        cachedVectorStylePromise = null;
         return null;
       })
       .finally(() => {
@@ -911,7 +877,7 @@ export async function loadDetailedVectorStyle(
       });
   }
 
-  const base = await cachedVectorStylePromises[cacheKey];
+  const base = await cachedVectorStylePromise;
   if (!base || signal?.aborted) return null;
   return cloneAndLocalizeVectorStyle(base, lang, surface);
 }
@@ -924,10 +890,9 @@ export function loadDetailedVectorRoadmapStyle(
 }
 
 /**
- * Cấu hình Style khởi tạo & dự phòng cho MapLibre GL JS (có đầy đủ nhãn tên đường, POI, địa danh khi phóng to):
- *  - `roadmap`: CARTO Voyager @2x đầy đủ nhãn đường/địa danh (khởi tạo tức thì trước khi nâng cấp lên Vector Google-style).
- *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation (sau đó nâng cấp lớp phủ Vector chi tiết).
- *  - `dark`: CARTO Dark All @2x đầy đủ nhãn cho chế độ tối / IOC.
+ * Cấu hình Style khởi tạo & dự phòng cho MapLibre GL JS (100% miễn phí, không API key, không watermark):
+ *  - `roadmap`: OpenStreetMap Standard (đầy đủ tên đường, hẻm, số nhà, POI toàn cầu) trước/khi dự phòng cho Vector Google-style.
+ *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation + Nhãn địa danh Esri.
  */
 export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification {
   if (surface === 'hybrid') {
@@ -951,57 +916,20 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
           maxzoom: 19,
           attribution: '© Esri',
         },
-        'carto-sat-labels': {
+        'esri-places': {
           type: 'raster',
           tiles: [
-            'https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          maxzoom: 20,
-          attribution: '© OpenStreetMap contributors, © CARTO',
+          maxzoom: 19,
+          attribution: '© Esri',
         },
       },
       layers: [
         { id: 'esri-sat-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 22 },
         { id: 'esri-transport-layer', type: 'raster', source: 'esri-transport', minzoom: 0, maxzoom: 22 },
-        { id: 'carto-sat-labels-layer', type: 'raster', source: 'carto-sat-labels', minzoom: 0, maxzoom: 22 },
-      ],
-    };
-  }
-
-  if (surface === 'dark') {
-    return {
-      version: 8,
-      glyphs: DONG_NAI_GLYPHS_URL,
-      sources: {
-        'carto-dark-base': {
-          type: 'raster',
-          tiles: [
-            'https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png',
-          ],
-          tileSize: 256,
-          maxzoom: 20,
-          attribution: '© OpenStreetMap contributors, © CARTO',
-        },
-        'carto-dark-labels': {
-          type: 'raster',
-          tiles: [
-            'https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png',
-          ],
-          tileSize: 256,
-          maxzoom: 20,
-          attribution: '© OpenStreetMap contributors, © CARTO',
-        },
-      },
-      layers: [
-        { id: 'carto-dark-base-layer', type: 'raster', source: 'carto-dark-base', minzoom: 0, maxzoom: 22 },
-        { id: 'carto-dark-labels-layer', type: 'raster', source: 'carto-dark-labels', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-places-layer', type: 'raster', source: 'esri-places', minzoom: 0, maxzoom: 22 },
       ],
     };
   }
@@ -1010,18 +938,14 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
     version: 8,
     glyphs: DONG_NAI_GLYPHS_URL,
     sources: {
-      'carto-voyager': {
+      'osm-standard': {
         type: 'raster',
-        tiles: [
-          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-          'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png',
-        ],
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
         tileSize: 256,
-        maxzoom: 20,
-        attribution: '© OpenStreetMap contributors, © CARTO',
+        maxzoom: 19,
+        attribution: '© OpenStreetMap contributors',
       },
     },
-    layers: [{ id: 'carto-voyager-layer', type: 'raster', source: 'carto-voyager', minzoom: 0, maxzoom: 22 }],
+    layers: [{ id: 'osm-standard-layer', type: 'raster', source: 'osm-standard', minzoom: 0, maxzoom: 22 }],
   };
 }
