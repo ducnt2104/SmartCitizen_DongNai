@@ -42,6 +42,7 @@ function Kpi({
   const styles =
     tone === 'ok'
       ? {
+          cardBg: 'bg-gradient-to-br from-surface via-surface to-ok-soft/55',
           bar: 'from-emerald-500 to-teal-400',
           iconBg: 'bg-ok-soft text-ok ring-ok/20',
           subText: 'text-ok',
@@ -50,6 +51,7 @@ function Kpi({
         }
       : tone === 'accent'
         ? {
+            cardBg: 'bg-gradient-to-br from-surface via-surface to-warn-soft/55',
             bar: 'from-amber-500 to-orange-400',
             iconBg: 'bg-warn-soft text-warn ring-amber-500/20',
             subText: 'text-warn',
@@ -57,6 +59,7 @@ function Kpi({
             fill: 'bg-amber-500',
           }
         : {
+            cardBg: 'bg-gradient-to-br from-surface via-surface to-brand-soft/55',
             bar: 'from-brand to-brand-2',
             iconBg: 'bg-brand-soft text-brand ring-brand/20',
             subText: 'text-muted',
@@ -65,7 +68,7 @@ function Kpi({
           };
 
   return (
-    <div className="card group relative min-w-0 overflow-hidden p-3 transition-all hover:-translate-y-0.5 hover:shadow-lift sm:p-4">
+    <div className={`card group relative min-w-0 overflow-hidden p-3 transition-all hover:-translate-y-0.5 hover:shadow-lift sm:p-4 ${styles.cardBg}`}>
       <span className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${styles.bar}`} aria-hidden />
       <div className="flex items-start justify-between gap-2 pt-0.5">
         <p className="truncate text-[11px] font-semibold text-muted sm:text-xs">{label}</p>
@@ -237,8 +240,8 @@ export default function HomePage() {
           <h2 className="text-base font-extrabold tracking-tight text-ink sm:text-lg">{t('home.gateways')}</h2>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Link to="/map" data-tour="map" className="card group relative flex items-center gap-3.5 overflow-hidden p-4 transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lift active:scale-[0.99]">
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-brand-soft text-brand ring-1 ring-brand/15 transition-transform group-hover:scale-105">
+          <Link to="/map" data-tour="map" className="card group relative flex items-center gap-3.5 overflow-hidden bg-gradient-to-br from-surface via-surface to-brand-soft/40 p-4 transition-all hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lift active:scale-[0.99]">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-brand-soft text-brand shadow-sm ring-1 ring-brand/20 transition-transform group-hover:scale-105">
               <MapIcon className="h-6 w-6" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
@@ -247,8 +250,8 @@ export default function HomePage() {
             </span>
             <ChevronRight className="h-4 w-4 shrink-0 text-muted/70 transition-transform group-hover:translate-x-0.5 group-hover:text-brand" aria-hidden />
           </Link>
-          <Link to="/mine" className="card group relative flex items-center gap-3.5 overflow-hidden p-4 transition-all hover:-translate-y-0.5 hover:border-ok/40 hover:shadow-lift active:scale-[0.99]">
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-ok-soft text-ok ring-1 ring-ok/15 transition-transform group-hover:scale-105">
+          <Link to="/mine" className="card group relative flex items-center gap-3.5 overflow-hidden bg-gradient-to-br from-surface via-surface to-ok-soft/40 p-4 transition-all hover:-translate-y-0.5 hover:border-ok/40 hover:shadow-lift active:scale-[0.99]">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-ok-soft text-ok shadow-sm ring-1 ring-ok/20 transition-transform group-hover:scale-105">
               <ClipboardList className="h-6 w-6" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
@@ -257,8 +260,8 @@ export default function HomePage() {
             </span>
             <ChevronRight className="h-4 w-4 shrink-0 text-muted/70 transition-transform group-hover:translate-x-0.5 group-hover:text-ok" aria-hidden />
           </Link>
-          <button type="button" onClick={() => openAssistant(false)} className="card group relative flex items-center gap-3.5 overflow-hidden p-4 text-left transition-all hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-lift active:scale-[0.99]">
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-warn-soft text-warn ring-1 ring-amber-500/20 transition-transform group-hover:scale-105">
+          <button type="button" onClick={() => openAssistant(false)} className="card group relative flex items-center gap-3.5 overflow-hidden bg-gradient-to-br from-surface via-surface to-warn-soft/40 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-lift active:scale-[0.99]">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-warn-soft text-warn shadow-sm ring-1 ring-amber-500/25 transition-transform group-hover:scale-105">
               <Bot className="h-6 w-6" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
