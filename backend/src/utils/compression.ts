@@ -6,7 +6,7 @@ const DEFAULT_THRESHOLD = 512;
 
 function shouldSkipCompression(req: Request, res: Response): boolean {
   if (req.method === 'HEAD') return true;
-  if (req.path === '/api/ai/chat' || req.path === '/api/auth/session-events' || req.path.startsWith('/api/media/')) return true;
+  if (req.path === '/api/ai/chat' || req.path === '/api/chat' || req.path === '/api/auth/session-events' || req.path.startsWith('/api/media/')) return true;
   if (res.getHeader('Content-Encoding')) return true;
   const ct = String(res.getHeader('Content-Type') ?? '');
   if (ct.startsWith('image/') || ct.startsWith('video/') || ct.includes('text/event-stream')) return true;

@@ -178,6 +178,7 @@ export function buildRouter(
   api.post('/ai/verify-resolution', staffOrRescue, parseMultipartOrJson, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
   api.post('/ai/tactical-briefing', staffOrRescue, validateBody(schemas.tacticalBriefing), h(ai.tacticalBriefing));
   api.post('/ai/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));
+  api.post('/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));
 
   return { api, root };
 }

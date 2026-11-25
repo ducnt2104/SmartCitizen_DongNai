@@ -1,7 +1,7 @@
-import { Bot, Mic, MicOff, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
+import { Bot, KeyRound, Mic, MicOff, Send, Square, Volume2, VolumeX, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
-import { ApiError, NetworkError, streamChat } from '../lib/api';
+import { ApiError, getStoredGeminiApiKey, NetworkError, saveStoredGeminiApiKey, streamChat } from '../lib/api';
 import { speak, speechRecognitionSupported, startListening, stopSpeaking } from '../lib/speech';
 import { useSettings } from '../state/settings';
 
@@ -23,6 +23,9 @@ export function ChatWidget() {
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [tts, setTts] = useState(settings.senior);
+  const [showKeyBox, setShowKeyBox] = useState(false);
+  const [inlineKey, setInlineKey] = useState(() => getStoredGeminiApiKey());
+  const [inlineKeySaved, setInlineKeySaved] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const stopListenRef = useRef<(() => void) | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -99,26 +102,42 @@ export function ChatWidget() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let acc = '';
-    let mode: 'gemini' | 'ollama' | 'fallback' = 'fallback';
+    let errText = '';
+    let mode: 'gemini' | 'ollama' | 'fallback' = 'gemini';
     const wardCode = settings.scope.startsWith('ward:') ? settings.scope.slice(5) : undefined;
     try {
       await streamChat(
-        { messages: history.slice(-10).map((m) => ({ role: m.role, text: m.text })), wardCode, locale: lang },
+        { messages: history.slice(-20).map((m) => ({ role: m.role, text: m.text })), wardCode, locale: lang },
         (c) => {
           if (c.delta) {
             acc += c.delta;
             if (c.mode) mode = c.mode;
             setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: acc, mode }]);
           }
-          if (c.error) acc = acc || c.error;
+          if (c.error) {
+            errText = c.error;
+            if (/API Key|GEMINI_API_KEY|401|403/i.test(c.error)) {
+              setShowKeyBox(true);
+            }
+            setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: acc || errText, error: !acc, mode: c.mode ?? 'fallback' }]);
+          }
         },
         ctrl.signal,
       );
-      if (!acc && !ctrl.signal.aborted) throw new Error('empty');
+      if (!acc && !errText) {
+        if (ctrl.signal.aborted) {
+          setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: 'Đã dừng trả lời.', error: true }]);
+        } else {
+          throw new Error('empty');
+        }
+      }
       if (ttsRef.current && acc) speak(acc, lang);
     } catch (err) {
       const offline = err instanceof NetworkError;
       const msg = offline ? t('chat.offline') : err instanceof ApiError ? err.message : t('chat.error');
+      if (/API Key|GEMINI_API_KEY|401|403|missing_gemini_key/i.test(msg)) {
+        setShowKeyBox(true);
+      }
       setMsgs((m) => [...m.slice(0, -1), { role: 'model', text: acc || msg, error: !acc, mode: acc ? mode : undefined }]);
     } finally {
       setBusy(false);
@@ -197,6 +216,50 @@ export function ChatWidget() {
           ))}
           <div ref={endRef} />
         </div>
+
+        {showKeyBox && (
+          <div className="border-t border-line/70 bg-surface-2 px-3 py-2.5">
+            <div className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold text-ink">
+              <span className="inline-flex items-center gap-1.5">
+                <KeyRound className="h-3.5 w-3.5 text-brand" aria-hidden />
+                Nhập Gemini API Key (AIzaSy...)
+              </span>
+              <button
+                type="button"
+                className="text-muted hover:text-ink"
+                onClick={() => setShowKeyBox(false)}
+                aria-label={t('common.close')}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="password"
+                value={inlineKey}
+                onChange={(e) => {
+                  setInlineKey(e.target.value);
+                  setInlineKeySaved(false);
+                }}
+                placeholder="AIzaSy..."
+                autoComplete="off"
+                className="field min-w-0 flex-1 !py-1.5 text-xs"
+              />
+              <button
+                type="button"
+                className="btn btn-primary !min-h-9 !px-3 !text-xs"
+                onClick={() => {
+                  saveStoredGeminiApiKey(inlineKey);
+                  setInlineKeySaved(true);
+                  if (inlineKey.trim()) setShowKeyBox(false);
+                }}
+              >
+                Lưu
+              </button>
+            </div>
+            {inlineKeySaved && <p className="mt-1 text-[11px] font-semibold text-ok">Đã lưu API Key!</p>}
+          </div>
+        )}
 
         {msgs.length > 0 && !busy && (
           <div className="flex gap-1.5 overflow-x-auto border-t border-line/60 px-3 py-2">

@@ -178,7 +178,7 @@ export function aiController(s: Services) {
       res.json(briefing);
     },
 
-    /** SSE Streaming tốc độ cao (Ollama / llama.cpp + Local BM25 RAG + LRU Cache + Gemini Multi-Key). */
+    /** SSE Streaming trực tiếp qua Google Gemini API (gemini-2.5-flash) kèm ngữ cảnh thời gian thực. */
     chat: async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof schemas.chat>;
       const last = b.messages[b.messages.length - 1];
@@ -188,6 +188,8 @@ export function aiController(s: Services) {
       if (!cleanLastText) {
         throw badRequest('Nội dung tin nhắn không hợp lệ hoặc bị trống sau khi làm sạch.', 'ai_input_too_short');
       }
+      const userApiKeyHeader = req.headers['x-gemini-api-key'];
+      const userApiKey = typeof userApiKeyHeader === 'string' ? userApiKeyHeader.trim() : '';
       const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, cleanLastText);
 
       res.set({
@@ -204,24 +206,29 @@ export function aiController(s: Services) {
       const send = (obj: unknown): void => {
         if (!closed) res.write(`data: ${JSON.stringify(obj)}\n\n`);
       };
-      let mode: AiMode = 'fallback';
+      let mode: AiMode = 'gemini';
       try {
-        for await (const chunk of s.gemini.chatStream(
+        for await (const chunk of s.gemini.streamRealGeminiChat({
           history,
-          ctx.text,
-          () => s.chat.localAnswer(ctx, cleanLastText, b.locale),
-          b.wardCode,
-          null,
-        )) {
+          databaseContext: ctx.text,
+          userApiKey,
+        })) {
           if (closed) break;
           mode = chunk.mode;
-          send({ delta: chunk.delta, mode: chunk.mode });
+          if (chunk.error) {
+            send({ error: chunk.error, mode: chunk.mode });
+          } else if (chunk.delta) {
+            send({ delta: chunk.delta, mode: chunk.mode });
+          }
         }
         send({ done: true, mode });
       } catch (err) {
-        console.error('[chat] stream lỗi:', err);
-        const safeFallback = s.chat.localAnswer(ctx, cleanLastText, b.locale);
-        send({ delta: safeFallback, mode: 'fallback' });
+        console.error('[chat] Gemini stream lỗi:', err);
+        const msg =
+          err instanceof Error && err.message
+            ? err.message
+            : 'Chưa kết nối API Key của Gemini. Vui lòng thêm GEMINI_API_KEY hoặc nhập trong mục Cài đặt ⚙️';
+        send({ error: msg, mode: 'fallback' });
         send({ done: true, mode: 'fallback' });
       }
       res.end();

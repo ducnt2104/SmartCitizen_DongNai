@@ -1,6 +1,7 @@
-import { Languages, Moon, Palette, Sun, SunMedium, Type, X } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { Eye, EyeOff, KeyRound, Languages, Moon, Palette, Sun, SunMedium, Type, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
+import { getStoredGeminiApiKey, saveStoredGeminiApiKey } from '../lib/api';
 import { useSettings, type ColorTheme, type DisplayMode, type FontScale, type Lang } from '../state/settings';
 
 function Seg<T extends string | number>({
@@ -37,6 +38,9 @@ export function SettingsDrawer() {
   const { t } = useI18n();
   const { settings, set, toggleSenior, drawerOpen, setDrawerOpen } = useSettings();
   const ref = useRef<HTMLDivElement>(null);
+  const [geminiKey, setGeminiKey] = useState(() => getStoredGeminiApiKey());
+  const [showKey, setShowKey] = useState(false);
+  const [keySaved, setKeySaved] = useState(false);
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -110,6 +114,63 @@ export function SettingsDrawer() {
               { v: 'en', label: 'English (EN)' },
             ]}
           />
+          <div className="mb-4 rounded-2xl border border-line bg-surface-2 p-3">
+            <label htmlFor="gemini-api-key-input" className="mb-1.5 flex items-center gap-2 text-sm font-bold">
+              <KeyRound className="h-4 w-4 text-brand" aria-hidden />
+              <span>Gemini API Key (Trợ lý AI)</span>
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                id="gemini-api-key-input"
+                type={showKey ? 'text' : 'password'}
+                value={geminiKey}
+                onChange={(e) => {
+                  setGeminiKey(e.target.value);
+                  setKeySaved(false);
+                }}
+                placeholder="AIza..."
+                autoComplete="off"
+                className="field min-w-0 flex-1 !py-2 text-xs"
+              />
+              <button
+                type="button"
+                className="btn btn-ghost !min-h-10 !min-w-10 !px-2"
+                onClick={() => setShowKey((v) => !v)}
+                aria-label={showKey ? 'Ẩn API Key' : 'Hiện API Key'}
+              >
+                {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                className="btn btn-primary !min-h-9 !px-3 !text-xs"
+                onClick={() => {
+                  saveStoredGeminiApiKey(geminiKey);
+                  setKeySaved(true);
+                }}
+              >
+                Lưu Key
+              </button>
+              {geminiKey.trim() && (
+                <button
+                  type="button"
+                  className="btn btn-ghost !min-h-9 !px-3 !text-xs"
+                  onClick={() => {
+                    setGeminiKey('');
+                    setKeySaved(false);
+                    saveStoredGeminiApiKey('');
+                  }}
+                >
+                  Xóa
+                </button>
+              )}
+              {keySaved && <span className="text-xs font-semibold text-ok">Đã lưu trên trình duyệt</span>}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-snug text-muted">
+              Dùng khi máy chủ chưa cấu hình biến môi trường GEMINI_API_KEY. Chỉ lưu cục bộ trên thiết bị của bạn.
+            </p>
+          </div>
           <p className="text-xs text-muted">{t('settings.note')}</p>
         </div>
       </aside>

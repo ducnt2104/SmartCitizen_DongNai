@@ -272,52 +272,210 @@ export interface ChatChunk {
 }
 
 /** Đọc SSE từ POST /api/ai/chat (fetch + ReadableStream, hỗ trợ AbortController). */
-export async function streamChat(
+export const GEMINI_KEY_STORAGE = 'gemini_api_key';
+const LEGACY_GEMINI_KEY_STORAGE = 'sc_gemini_api_key';
+
+export function getStoredGeminiApiKey(): string {
+  const envKey = (import.meta.env?.VITE_GEMINI_API_KEY as string | undefined)?.trim() ?? '';
+  if (envKey) return envKey;
+  try {
+    const primary = window.localStorage.getItem(GEMINI_KEY_STORAGE)?.trim() ?? '';
+    if (primary) return primary;
+    const legacy = window.localStorage.getItem(LEGACY_GEMINI_KEY_STORAGE)?.trim() ?? '';
+    if (legacy) return legacy;
+  } catch {
+    /* ignore storage errors */
+  }
+  return '';
+}
+
+export function saveStoredGeminiApiKey(rawKey: string): void {
+  const clean = rawKey.trim();
+  try {
+    if (clean) {
+      window.localStorage.setItem(GEMINI_KEY_STORAGE, clean);
+      window.localStorage.setItem(LEGACY_GEMINI_KEY_STORAGE, clean);
+    } else {
+      window.localStorage.removeItem(GEMINI_KEY_STORAGE);
+      window.localStorage.removeItem(LEGACY_GEMINI_KEY_STORAGE);
+    }
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+async function streamDirectGeminiClient(
+  apiKey: string,
   body: { messages: Array<{ role: 'user' | 'model'; text: string }>; wardCode?: string; locale: 'vi' | 'en' },
   onChunk: (c: ChatChunk) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(apiUrl('/api/ai/chat'), {
-      method: 'POST',
-      credentials: 'include',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-      signal,
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') return;
-    throw new NetworkError();
-  }
+  const sysText =
+    `Bạn là Trợ lý AI Công dân TP. Đồng Nai thân thiện, lễ phép, hỗ trợ người dân (đặc biệt là người lớn tuổi). ` +
+    `Trả lời ngắn gọn, súc tích (khoảng 3-5 gạch đầu dòng rõ ý), dùng từ ngữ đời thường dễ hiểu, không viết quá dài dòng. ` +
+    `Khu vực đang chọn: ${body.wardCode ?? 'Toàn TP. Đồng Nai'}. Số khẩn cấp Đồng Nai: Công an 113, Cứu hỏa 114, Cấp cứu 115.`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: sysText }] },
+      contents: body.messages.slice(-20).map((m) => ({
+        role: m.role === 'model' ? 'model' : 'user',
+        parts: [{ text: m.text }],
+      })),
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 800,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    }),
+    signal,
+  });
+
   if (!res.ok || !res.body) {
-    const t = await res.text().catch(() => '');
-    let msg = `Lỗi ${res.status}`;
+    const raw = await res.text().catch(() => '');
+    let detail = `HTTP ${res.status}`;
     try {
-      msg = (JSON.parse(t) as { error?: { message?: string } }).error?.message ?? msg;
+      detail = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? detail;
     } catch {
-      /* giữ thông điệp mặc định */
+      if (raw) detail = `${detail}: ${raw.slice(0, 120)}`;
     }
-    throw new ApiError(res.status, 'chat_failed', msg);
+    throw new ApiError(res.status, 'gemini_direct_failed', `Lỗi ${res.status}: ${detail}`);
   }
+
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  const parseFrame = (frame: string): void => {
+    const dataLines = frame
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).trim())
+      .filter((l) => l && l !== '[DONE]');
+    if (dataLines.length === 0) return;
+    try {
+      const parsed = JSON.parse(dataLines.join('\n')) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const delta = (parsed.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('');
+      if (delta) onChunk({ delta, mode: 'gemini' });
+    } catch {
+      /* ignore partial SSE frame */
+    }
+  };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    buf += dec.decode(value, { stream: true });
+    buf += dec.decode(value, { stream: true }).replace(/\r\n/g, '\n');
     let idx: number;
     while ((idx = buf.indexOf('\n\n')) >= 0) {
       const frame = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
-      const line = frame.split('\n').find((l) => l.startsWith('data: '));
-      if (!line) continue;
+      parseFrame(frame);
+    }
+  }
+  if (buf.trim()) parseFrame(buf);
+}
+
+export async function streamChat(
+  body: { messages: Array<{ role: 'user' | 'model'; text: string }>; wardCode?: string; locale: 'vi' | 'en' },
+  onChunk: (c: ChatChunk) => void,
+  externalSignal: AbortSignal,
+): Promise<void> {
+  const userGeminiKey = getStoredGeminiApiKey();
+  const timeoutCtrl = new AbortController();
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    timeoutCtrl.abort();
+  }, 15_000);
+  const onExternalAbort = (): void => timeoutCtrl.abort();
+  externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+
+  const headers = authHeaders({ 'Content-Type': 'application/json' });
+  if (userGeminiKey) {
+    headers['X-Gemini-Api-Key'] = userGeminiKey;
+  }
+
+  try {
+    let res: Response | null = null;
+    try {
+      res = await fetch(apiUrl('/api/ai/chat'), {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify(body),
+        signal: timeoutCtrl.signal,
+      });
+    } catch (err) {
+      if (timedOut) throw new ApiError(408, 'timeout', 'Kết nối quá hạn (15 giây), vui lòng thử lại.');
+      if (externalSignal.aborted) return;
+      if (userGeminiKey) {
+        await streamDirectGeminiClient(userGeminiKey, body, onChunk, timeoutCtrl.signal);
+        return;
+      }
+      throw new NetworkError();
+    }
+
+    const contentType = res.headers.get('content-type') ?? '';
+    const isStaticHtmlOr404 = res.status === 404 || contentType.includes('text/html');
+    if (isStaticHtmlOr404) {
+      if (!userGeminiKey) {
+        throw new ApiError(
+          res.status,
+          'missing_gemini_key',
+          'Chưa kết nối API Key của Gemini. Vui lòng nhập API Key bên dưới hoặc trong mục Cài đặt ⚙️',
+        );
+      }
+      await streamDirectGeminiClient(userGeminiKey, body, onChunk, timeoutCtrl.signal);
+      return;
+    }
+
+    if (!res.ok || !res.body) {
+      const t = await res.text().catch(() => '');
+      let msg = `Lỗi ${res.status}`;
+      try {
+        msg = (JSON.parse(t) as { error?: { message?: string } }).error?.message ?? msg;
+      } catch {
+        /* giữ thông điệp mặc định */
+      }
+      throw new ApiError(res.status, 'chat_failed', msg);
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const emitFrame = (frame: string): void => {
+      const line = frame.split(/\r?\n/).find((l) => l.startsWith('data: '));
+      if (!line) return;
       try {
         onChunk(JSON.parse(line.slice(6)) as ChatChunk);
       } catch (err) {
         console.warn('Khung SSE không hợp lệ:', err);
       }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      let idx: number;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        emitFrame(frame);
+      }
     }
+    if (buf.trim()) emitFrame(buf);
+  } catch (err) {
+    if (timedOut) {
+      throw new ApiError(408, 'timeout', 'Kết nối quá hạn (15 giây), vui lòng thử lại.');
+    }
+    if (externalSignal.aborted) return;
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+    externalSignal.removeEventListener('abort', onExternalAbort);
   }
 }

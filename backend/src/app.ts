@@ -166,6 +166,7 @@ export function createApp(
             'X-PoW-Solution',
             'X-Reauth-Token',
             'X-Reauth-Password',
+            'X-Gemini-Api-Key',
           ],
         });
         return;

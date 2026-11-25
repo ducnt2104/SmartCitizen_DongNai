@@ -291,7 +291,7 @@ Từ thông tin sự cố hiện trường, hãy trả về DUY NHẤT JSON gồ
 export const CHAT_SYSTEM = `Bạn là "Trợ lý AI Công dân TP. Đồng Nai" của nền tảng SmartCitizen_DongNai (Team Victer), phục vụ 95 Phường/Xã tại Thành phố Đồng Nai.
 PHONG CÁCH & TÍNH CÁCH:
 - Đóng vai chuyên gia hỗ trợ công dân thông minh: trả lời bằng tiếng Việt tự nhiên, ấm áp, lễ phép, xưng hô thân thiện ("mình" / "bác" hoặc "bạn" tùy ngữ cảnh, ưu tiên dễ đọc cho người lớn tuổi).
-- Câu văn ngắn gọn, chia ý/gạch đầu dòng rõ ràng, dễ hiểu ngay trên màn hình điện thoại.
+- Câu văn ngắn gọn, súc tích (khoảng 3-5 gạch đầu dòng rõ ý), dùng từ ngữ đời thường dễ hiểu cho người lớn tuổi, không viết quá dài dòng.
 NGUỒN DỮ LIỆU THỜI GIAN THỰC:
 - Luôn ưu tiên dùng số liệu thời tiết Open-Meteo, cảnh báo ngập/thi công, bản tin chính thống và hồ sơ nằm trong <DATABASE_CONTEXT> và <LOCAL_RAG_KNOWLEDGE> để trả lời sát thực tế ngay lúc hỏi.
 - Tuyệt đối không bịa đặt thông tin thiên tai, đường cấm, hay tiến độ hồ sơ ngoài dữ liệu thực tế. Nếu chưa có dữ liệu cụ thể, hãy thành thật báo chưa có và hướng dẫn kiểm tra thêm tại mục "Bản đồ" trên ứng dụng hoặc gọi tổng đài/số khẩn cấp (113, 114, 115).
@@ -1929,6 +1929,162 @@ export class GeminiService {
         const parsed = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
         if (parsed.message?.content) yield parsed.message.content;
       }
+    }
+  }
+
+  /**
+   * Trò chuyện AI tự do qua Google Gemini API (gemini-2.5-flash) với SSE streaming thật.
+   * Tuyệt đối KHÔNG rơi về câu trả lời mẫu/phường xã giả lập khi thiếu API key hoặc lỗi mạng.
+   */
+  async *streamRealGeminiChat(input: {
+    history: Array<{ role: 'user' | 'model'; text: string }>;
+    databaseContext: string;
+    userApiKey?: string;
+  }): AsyncGenerator<{ delta?: string; error?: string; mode: AiMode }> {
+    const missingKeyMsg =
+      'Chưa kết nối API Key của Gemini. Vui lòng thêm GEMINI_API_KEY hoặc nhập trong mục Cài đặt ⚙️';
+
+    let apiKey = (input.userApiKey ?? '').trim();
+    if (!apiKey) {
+      apiKey = (process.env.GEMINI_API_KEY ?? env.geminiApiKey ?? '').trim();
+    }
+    if (!apiKey) {
+      try {
+        const poolKey = await this.keyPool.executeWithRotation(
+          async (k, meta) => (meta.provider === 'gemini' ? k : ''),
+          { operationName: 'Gemini Chat Key Lookup' },
+        );
+        apiKey = (poolKey ?? '').trim();
+      } catch {
+        apiKey = '';
+      }
+    }
+
+    if (!apiKey) {
+      yield { error: missingKeyMsg, mode: 'fallback' };
+      return;
+    }
+
+    const fullSystem =
+      `${CHAT_SYSTEM}\n\n` +
+      `Bạn cũng có đầy đủ kiến thức phổ thông như một trợ lý AI đa năng để giải đáp tự nhiên mọi câu hỏi về đời sống, sức khỏe người cao tuổi, thời tiết, an toàn thiên tai.\n\n` +
+      `<REALTIME_WEB_CONTEXT>\n${input.databaseContext}\n</REALTIME_WEB_CONTEXT>`;
+
+    const contents = input.history.slice(-20).map((m) => ({
+      role: m.role === 'model' ? 'model' : 'user',
+      parts: [{ text: sanitizeUserText(m.text, 2000) }],
+    }));
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    timer.unref?.();
+
+    try {
+      const upstream = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: fullSystem }] },
+          contents,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 800,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        }),
+        signal: ctrl.signal,
+      });
+
+      if (!upstream.ok || !upstream.body) {
+        const errBody = await upstream.text().catch(() => '');
+        let upstreamMsg = '';
+        try {
+          upstreamMsg = (JSON.parse(errBody) as { error?: { message?: string } }).error?.message ?? '';
+        } catch {
+          upstreamMsg = errBody.slice(0, 160);
+        }
+        console.warn(`[ai/chat] Gemini HTTP ${upstream.status}: ${upstreamMsg}`);
+        if (upstream.status === 400 || upstream.status === 401 || upstream.status === 403) {
+          yield {
+            error: `Lỗi ${upstream.status} (${upstreamMsg || 'API Key Gemini không hợp lệ hoặc bị từ chối'}). Vui lòng kiểm tra lại GEMINI_API_KEY hoặc nhập lại trong mục Cài đặt ⚙️`,
+            mode: 'fallback',
+          };
+          return;
+        }
+        yield {
+          error: `Lỗi ${upstream.status} từ Google Gemini: ${upstreamMsg || 'Vui lòng thử lại sau ít phút.'}`,
+          mode: 'fallback',
+        };
+        return;
+      }
+
+      const reader = upstream.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let emitted = false;
+
+      const parseFrame = (frame: string): string | null => {
+        const dataLines = frame
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).trim())
+          .filter((l) => l && l !== '[DONE]');
+        if (dataLines.length === 0) return null;
+        try {
+          const parsed = JSON.parse(dataLines.join('\n')) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+          };
+          const parts = parsed.candidates?.[0]?.content?.parts ?? [];
+          return parts.map((p) => p.text ?? '').join('');
+        } catch {
+          return null;
+        }
+      };
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const normalized = buf.replace(/\r\n/g, '\n');
+        let idx: number;
+        let rest = normalized;
+        while ((idx = rest.indexOf('\n\n')) >= 0) {
+          const frame = rest.slice(0, idx);
+          rest = rest.slice(idx + 2);
+          const textChunk = parseFrame(frame);
+          if (textChunk) {
+            emitted = true;
+            yield { delta: textChunk, mode: 'gemini' };
+          }
+        }
+        buf = rest;
+      }
+
+      if (buf.trim()) {
+        const tail = parseFrame(buf);
+        if (tail) {
+          emitted = true;
+          yield { delta: tail, mode: 'gemini' };
+        }
+      }
+
+      if (!emitted) {
+        yield {
+          error: 'Google Gemini chưa trả về nội dung phản hồi. Vui lòng thử hỏi lại câu khác.',
+          mode: 'fallback',
+        };
+      }
+    } catch (err) {
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      const detail = isAbort ? 'Kết nối quá hạn (15 giây), vui lòng thử lại.' : err instanceof Error ? err.message : 'Lỗi kết nối';
+      console.warn('[ai/chat] Gemini fetch error:', detail);
+      yield {
+        error: isAbort ? detail : `Lỗi kết nối Google Gemini (${detail}). Vui lòng thử lại.`,
+        mode: 'fallback',
+      };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
