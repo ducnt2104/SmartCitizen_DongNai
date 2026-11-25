@@ -133,10 +133,12 @@ export default function AlertsPage() {
 
   const [weatherLoc, setWeatherLoc] = useState<{
     label: string;
+    detailAddress?: string;
     lat: number;
     lng: number;
     wardCode?: string;
     isGps?: boolean;
+    accuracyM?: number;
   }>(() => ({
     label: defaultWard.name,
     lat: defaultWard.centerLat,
@@ -162,40 +164,80 @@ export default function AlertsPage() {
   );
   const forecastAreaName = weatherLoc.label;
 
-  const detectGpsWeather = useCallback(() => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      toast('error', 'Trình duyệt không hỗ trợ định vị GPS');
-      return;
-    }
-    setGpsBusy(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        let nearest = DONG_NAI_WARDS[0];
-        let bestDist = Infinity;
-        for (const w of DONG_NAI_WARDS) {
-          const d = (w.centerLat - latitude) ** 2 + (w.centerLng - longitude) ** 2;
-          if (d < bestDist) {
-            bestDist = d;
-            nearest = w;
+  const detectGpsWeather = useCallback(
+    (silent = false) => {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        if (!silent) toast('error', 'Trình duyệt không hỗ trợ định vị GPS');
+        return;
+      }
+      setGpsBusy(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude, accuracy } = pos.coords;
+          let nearest = DONG_NAI_WARDS[0];
+          let bestDist = Infinity;
+          for (const w of DONG_NAI_WARDS) {
+            const d = (w.centerLat - latitude) ** 2 + (w.centerLng - longitude) ** 2;
+            if (d < bestDist) {
+              bestDist = d;
+              nearest = w;
+            }
           }
-        }
-        setWeatherLoc({
-          label: `Vị trí của bạn (gần ${nearest.shortName})`,
-          lat: latitude,
-          lng: longitude,
-          wardCode: nearest.wardCode,
-          isGps: true,
-        });
-        setGpsBusy(false);
-      },
-      () => {
-        setGpsBusy(false);
-        toast('info', 'Không lấy được GPS — vui lòng chọn Phường/Xã bên dưới.');
-      },
-      { enableHighAccuracy: false, timeout: 7000, maximumAge: 120_000 },
-    );
-  }, [toast]);
+          const accM = Number.isFinite(accuracy) ? Math.round(accuracy) : undefined;
+          setWeatherLoc({
+            label: `Vị trí hiện tại · ${nearest.name}`,
+            lat: latitude,
+            lng: longitude,
+            wardCode: nearest.wardCode,
+            isGps: true,
+            accuracyM: accM,
+          });
+          setGpsBusy(false);
+
+          // Reverse-geocode lấy tên đường / khu vực cụ thể từ tọa độ GPS
+          void fetch(
+            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude.toFixed(5)}&lon=${longitude.toFixed(5)}&accept-language=vi`,
+          )
+            .then((r) => (r.ok ? r.json() : null))
+            .then((geo: { address?: Record<string, string> } | null) => {
+              const a = geo?.address;
+              if (!a) return;
+              const parts = [
+                a.road || a.pedestrian || a.neighbourhood,
+                a.suburb || a.quarter || a.village || a.town,
+                a.city || a.county || a.state,
+              ].filter(Boolean);
+              if (parts.length > 0) {
+                const fullAddr = Array.from(new Set(parts)).join(', ');
+                setWeatherLoc((prev) =>
+                  prev.isGps && prev.lat === latitude && prev.lng === longitude
+                    ? { ...prev, detailAddress: fullAddr }
+                    : prev,
+                );
+              }
+            })
+            .catch(() => undefined);
+        },
+        () => {
+          setGpsBusy(false);
+          if (!silent) {
+            toast('info', 'Không lấy được GPS — vui lòng cấp quyền vị trí hoặc chọn Phường/Xã.');
+          }
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
+      );
+    },
+    [toast],
+  );
+
+  // Tự động truy cập GPS khi mở trang Cảnh báo (nếu người dùng chưa khóa sẵn 1 Phường/Xã)
+  useEffect(() => {
+    if (!selectedWard) {
+      detectGpsWeather(true);
+    }
+    // Chỉ chạy một lần khi mở trang
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [forecast, setForecast] = useState<DongNaiWeather>(() =>
     buildFallbackWeather(forecastCoords.lat, forecastCoords.lng, lang),
@@ -617,12 +659,12 @@ export default function AlertsPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={detectGpsWeather}
+                    onClick={() => detectGpsWeather(false)}
                     disabled={gpsBusy}
                     className={`btn !min-h-9 !rounded-xl !px-3 !text-xs ${weatherLoc.isGps ? 'btn-primary' : 'btn-soft'}`}
                   >
                     <LocateFixed className={`h-3.5 w-3.5 ${gpsBusy ? 'animate-spin' : ''}`} aria-hidden />
-                    <span>{gpsBusy ? 'Đang định vị…' : 'Vị trí của tôi (GPS)'}</span>
+                    <span>{gpsBusy ? 'Đang định vị GPS…' : weatherLoc.isGps ? 'Cập nhật GPS' : 'Vị trí của tôi (GPS)'}</span>
                   </button>
                   <select
                     aria-label="Chọn Phường/Xã xem thời tiết chi tiết"
@@ -682,10 +724,11 @@ export default function AlertsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/15 px-3 py-1 text-xs font-semibold backdrop-blur-md">
                       <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                      <span>{forecastAreaName}</span>
+                      <span>{weatherLoc.detailAddress ?? forecastAreaName}</span>
                     </span>
                     <span className="mono inline-flex items-center rounded-full border border-white/15 bg-slate-950/20 px-2.5 py-1 text-[10.5px] font-medium text-white/85">
-                      {forecastCoords.lat.toFixed(2)}°N, {forecastCoords.lng.toFixed(2)}°E
+                      {forecastCoords.lat.toFixed(4)}°N, {forecastCoords.lng.toFixed(4)}°E
+                      {weatherLoc.accuracyM ? ` · ±${weatherLoc.accuracyM}m` : ''}
                     </span>
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-slate-950/25 px-2.5 py-1 text-[11px] font-semibold">
                       <span className={`h-2 w-2 rounded-full ${forecast.source === 'live' ? 'bg-emerald-400' : 'bg-amber-300'}`} aria-hidden />
