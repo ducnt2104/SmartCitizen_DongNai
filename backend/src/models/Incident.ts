@@ -1,15 +1,21 @@
 import crypto from 'node:crypto';
 import mongoose, { Schema, Types, type HydratedDocument, type Model } from 'mongoose';
+import { matchWardByAddressText, WARD_BY_CODE } from '../shared/dongNaiWards';
+import { resolveAdminUnit } from '../shared/geo';
 import {
   applyHybridSyncIndex,
   createHybridSyncDefinition,
   DHASH_64_REGEX,
   DONG_NAI_GEO_BOUNDS,
+  isWithinDongNaiBounds,
+  normalizeSparseString,
+  PHASH_HEX_REGEX,
   validateDongNaiCoordinates,
   type HybridSyncFields,
 } from './common';
 
-export const INCIDENT_CATEGORIES = [
+/** 6 danh mục tiếng Việt truyền thống (giữ tương thích ngược 100% với bộ seed & service cũ) */
+export const LEGACY_INCIDENT_CATEGORIES = [
   'giao_thong',
   'moi_truong',
   'ha_tang_do_thi',
@@ -17,19 +23,45 @@ export const INCIDENT_CATEGORIES = [
   'y_te_dich_benh',
   'khac',
 ] as const;
+
+/** Tập danh mục mở rộng chuẩn hóa toàn hệ thống — hỗ trợ đầy đủ 'OTHER' kèm customCategoryLabel */
+export const INCIDENT_CATEGORIES = [
+  ...LEGACY_INCIDENT_CATEGORIES,
+  'rac_thai',
+  'den_duong',
+  'ngap_nuoc',
+  'mat_duong',
+  'TRAFFIC',
+  'ENVIRONMENT',
+  'INFRASTRUCTURE',
+  'SECURITY',
+  'HEALTH',
+  'WASTE',
+  'STREETLIGHT',
+  'FLOODING',
+  'ROAD_DAMAGE',
+  'OTHER',
+] as const;
 export type IncidentCategory = (typeof INCIDENT_CATEGORIES)[number];
 
 export const INCIDENT_STATUSES = [
   'pending_verify',
   'received',
+  'verifying',
   'in_progress',
+  'processing',
   'resolved',
+  'quarantined',
+  'rejected',
   'rejected_spam',
 ] as const;
 export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
 
 export const MEDIA_TYPES = ['image', 'video'] as const;
 export type MediaType = (typeof MEDIA_TYPES)[number];
+
+export const FINGERPRINT_ALGORITHMS = ['pHash-64', 'dHash-64', 'aHash-64', 'orb-256'] as const;
+export type FingerprintAlgorithm = (typeof FINGERPRINT_ALGORITHMS)[number];
 
 export interface IncidentLocation {
   type: 'Point';
@@ -48,12 +80,45 @@ export interface IncidentMediaItem {
   capturedAt: Date;
 }
 
+export interface ImageDescriptorMetadata {
+  width?: number;
+  height?: number;
+  blurScore?: number;
+  brightness?: number;
+  keypointCount?: number;
+  /** Chữ ký đặc trưng ORB/cục bộ dạng nén gọn để không vượt giới hạn lưu trữ M0 */
+  orbSignature?: string;
+  mimeType?: string;
+  byteSize?: number;
+}
+
+export interface IncidentImageFingerprint {
+  mediaUrl?: string;
+  /** Chuỗi Perceptual Hash (pHash/dHash 64-bit..256-bit hex) phục vụ so khớp tốc độ cao */
+  pHash: string;
+  dHash?: string;
+  algorithm: FingerprintAlgorithm;
+  descriptorMetadata: ImageDescriptorMetadata;
+  computedAt: Date;
+}
+
 export interface IncidentAiAnalysis {
   autoCategory: IncidentCategory;
   detectedObjects: string[];
   severityLevel: number;
   summary: string;
   isValidImage: boolean;
+}
+
+/** Kết quả đánh giá chuyên sâu từ AI / Computer Vision Engine (xác thực ảnh, trùng lặp, nghiệm thu) */
+export interface IncidentAiEvaluation {
+  authenticityScore: number;
+  isDuplicate: boolean;
+  matchedIncidentId: Types.ObjectId | string | null;
+  sceneMatchScore: number | null;
+  resolutionScore: number | null;
+  modelVersion?: string;
+  evaluatedAt?: Date;
 }
 
 export interface IncidentDuplicateControl {
@@ -72,15 +137,23 @@ export interface IncidentTimelineEntry {
 
 export interface IIncident extends HybridSyncFields {
   incidentCode: string;
+  /** Mã đồng bộ chống trùng lặp (Unique Sparse Index) từ Client Outbox Queue */
+  syncId?: string;
   reporterId: Types.ObjectId;
+  /** Mã đơn vị hành chính chuẩn 95 Phường/Xã TP. Đồng Nai (vd: DN-TB, DN-TLA) */
+  wardCode: string;
   category: IncidentCategory;
+  /** Nhãn danh mục tùy chỉnh do người dân/AI cung cấp khi category === 'OTHER' */
+  customCategoryLabel?: string | null;
   title: string;
   description: string;
-  /** Trường phản chiếu từ location.district phục vụ Compound Index hiệu năng cao trên Dashboard IOC */
+  /** Trường phản chiếu từ location.district phục vụ Compound Index tương thích ngược */
   district: string;
   location: IncidentLocation;
   media: IncidentMediaItem[];
+  imageFingerprints: IncidentImageFingerprint[];
   aiAnalysis: IncidentAiAnalysis;
+  aiEvaluation: IncidentAiEvaluation;
   priorityScore: number;
   duplicateControl: IncidentDuplicateControl;
   status: IncidentStatus;
@@ -172,6 +245,58 @@ const mediaItemSchema = new Schema<IncidentMediaItem>(
   { _id: false },
 );
 
+const descriptorMetadataSchema = new Schema<ImageDescriptorMetadata>(
+  {
+    width: { type: Number, min: 1, max: 16384 },
+    height: { type: Number, min: 1, max: 16384 },
+    blurScore: { type: Number, min: 0 },
+    brightness: { type: Number, min: 0, max: 255 },
+    keypointCount: { type: Number, min: 0, max: 50000 },
+    orbSignature: { type: String, trim: true, maxlength: 2048 },
+    mimeType: { type: String, trim: true, maxlength: 64 },
+    byteSize: { type: Number, min: 0 },
+  },
+  { _id: false },
+);
+
+const imageFingerprintSchema = new Schema<IncidentImageFingerprint>(
+  {
+    mediaUrl: { type: String, trim: true, maxlength: 2048 },
+    pHash: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: (v: string) => PHASH_HEX_REGEX.test(v),
+        message: 'pHash phải là chuỗi hex hợp lệ (16–64 ký tự).',
+      },
+    },
+    dHash: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: (v: string | undefined) => !v || DHASH_64_REGEX.test(v),
+        message: 'dHash phải là chuỗi hex 16 ký tự.',
+      },
+    },
+    algorithm: {
+      type: String,
+      enum: FINGERPRINT_ALGORITHMS,
+      default: 'pHash-64',
+      required: true,
+    },
+    descriptorMetadata: {
+      type: descriptorMetadataSchema,
+      default: () => ({}),
+      required: true,
+    },
+    computedAt: { type: Date, default: Date.now, required: true },
+  },
+  { _id: false },
+);
+
 const aiAnalysisSchema = new Schema<IncidentAiAnalysis>(
   {
     autoCategory: { type: String, enum: INCIDENT_CATEGORIES, default: 'khac' },
@@ -186,6 +311,19 @@ const aiAnalysisSchema = new Schema<IncidentAiAnalysis>(
     severityLevel: { type: Number, min: 1, max: 5, default: 3, required: true },
     summary: { type: String, trim: true, maxlength: 500, default: '' },
     isValidImage: { type: Boolean, default: true, required: true },
+  },
+  { _id: false },
+);
+
+const aiEvaluationSchema = new Schema<IncidentAiEvaluation>(
+  {
+    authenticityScore: { type: Number, min: 0, max: 100, default: 100, required: true },
+    isDuplicate: { type: Boolean, default: false, required: true },
+    matchedIncidentId: { type: Schema.Types.Mixed, default: null },
+    sceneMatchScore: { type: Number, min: 0, max: 100, default: null },
+    resolutionScore: { type: Number, min: 0, max: 100, default: null },
+    modelVersion: { type: String, trim: true, maxlength: 80, default: 'gemini-3.5-flash' },
+    evaluatedAt: { type: Date, default: Date.now },
   },
   { _id: false },
 );
@@ -219,12 +357,26 @@ const incidentSchema = new Schema<IIncident>(
       trim: true,
       uppercase: true,
       default: () => generateIncidentCode(),
-      match: [/^DN-\d{4}-[A-Z0-9]{5,}$/, 'incidentCode phải có dạng DN-YYYY-XXXXX.'],
+      match: [/^DN-(?:[A-Z]{2,4}-)?\d{4}-[A-Z0-9]{3,10}$/, 'incidentCode phải có dạng DN-YYYY-XXXXX hoặc DN-TB-YYYY-XXXX.'],
+    },
+    syncId: {
+      type: String,
+      trim: true,
+      maxlength: 128,
+      set: normalizeSparseString,
     },
     reporterId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: [true, 'reporterId là bắt buộc.'],
+    },
+    wardCode: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+      maxlength: 16,
+      default: 'DN-TB',
     },
     category: {
       type: String,
@@ -233,6 +385,12 @@ const incidentSchema = new Schema<IIncident>(
         message: 'Danh mục sự cố không hợp lệ ({VALUE}).',
       },
       required: true,
+    },
+    customCategoryLabel: {
+      type: String,
+      trim: true,
+      maxlength: [120, 'Nhãn danh mục tùy chỉnh tối đa 120 ký tự.'],
+      default: null,
     },
     title: {
       type: String,
@@ -253,7 +411,7 @@ const incidentSchema = new Schema<IIncident>(
       trim: true,
       maxlength: 100,
       default(this: IIncident) {
-        return this.location?.district;
+        return this.location?.district || 'TP. Đồng Nai';
       },
     },
     location: {
@@ -268,6 +426,14 @@ const incidentSchema = new Schema<IIncident>(
         message: 'Mỗi phản ánh lưu tối đa 10 tệp media để tối ưu kích thước document.',
       },
     },
+    imageFingerprints: {
+      type: [imageFingerprintSchema],
+      default: [],
+      validate: {
+        validator: (arr: IncidentImageFingerprint[]) => arr.length <= 10,
+        message: 'Mỗi phản ánh lưu tối đa 10 vân tay ảnh (imageFingerprints).',
+      },
+    },
     aiAnalysis: {
       type: aiAnalysisSchema,
       default: () => ({
@@ -276,6 +442,19 @@ const incidentSchema = new Schema<IIncident>(
         severityLevel: 3,
         summary: '',
         isValidImage: true,
+      }),
+      required: true,
+    },
+    aiEvaluation: {
+      type: aiEvaluationSchema,
+      default: () => ({
+        authenticityScore: 100,
+        isDuplicate: false,
+        matchedIncidentId: null,
+        sceneMatchScore: null,
+        resolutionScore: null,
+        modelVersion: 'gemini-3.5-flash',
+        evaluatedAt: new Date(),
       }),
       required: true,
     },
@@ -327,16 +506,91 @@ const incidentSchema = new Schema<IIncident>(
   },
 );
 
-// Tự sinh incidentCode, đồng bộ district top-level từ location.district và tính priorityScore mặc định
+// Tự sinh incidentCode, chuẩn hóa syncId/clientOfflineId, phân giải wardCode 95 ĐVHC, điền thông tin địa lý & pHash
 incidentSchema.pre('validate', function prepareIncidentFields() {
   if (!this.incidentCode) {
     this.incidentCode = generateIncidentCode();
   }
+
+  // Chuẩn hóa và đồng bộ 2 chiều syncId <-> clientOfflineId (bỏ chuỗi rỗng cho sparse unique index)
+  this.syncId = normalizeSparseString(this.syncId);
+  this.clientOfflineId = normalizeSparseString(this.clientOfflineId);
+  if (this.syncId && !this.clientOfflineId) {
+    this.clientOfflineId = this.syncId;
+  } else if (this.clientOfflineId && !this.syncId) {
+    this.syncId = this.clientOfflineId;
+  }
+
+  // Phân giải tự động wardCode và các trường mô tả vị trí từ tọa độ GeoJSON [lng, lat]
+  const coords = this.location?.coordinates;
+  const hasValidCoords =
+    Array.isArray(coords) &&
+    coords.length === 2 &&
+    typeof coords[0] === 'number' &&
+    typeof coords[1] === 'number' &&
+    isWithinDongNaiBounds(coords[0], coords[1]);
+
+  if (this.location) {
+    if (!this.wardCode || this.wardCode === 'DN-TB') {
+      const hintText = [this.location.ward, this.location.district, this.location.addressText]
+        .filter(Boolean)
+        .join(', ');
+      const matched = hintText ? matchWardByAddressText(hintText) : null;
+      if (matched) {
+        this.wardCode = matched.ward.wardCode;
+      } else if (hasValidCoords) {
+        const resolved = resolveAdminUnit({ lat: coords[1], lng: coords[0], rawAddressText: hintText });
+        if (resolved.wardCode) {
+          this.wardCode = resolved.wardCode;
+        }
+      }
+    }
+
+    const wardInfo = WARD_BY_CODE[this.wardCode];
+    if (!this.location.ward && wardInfo) {
+      this.location.ward = wardInfo.name;
+    }
+    if (!this.location.district) {
+      this.location.district = this.district || 'TP. Đồng Nai';
+    }
+    if (!this.location.addressText && wardInfo) {
+      this.location.addressText = `${wardInfo.name}, TP. Đồng Nai`;
+    }
+  }
+
   if (this.location?.district && !this.district) {
     this.district = this.location.district;
   } else if (this.district && this.location && !this.location.district) {
     this.location.district = this.district;
   }
+
+  if (this.category === 'OTHER' && !this.customCategoryLabel) {
+    this.customCategoryLabel = 'Sự cố dân sinh khác';
+  }
+
+  // Tự động trích xuất vân tay ảnh (imageFingerprints) từ media nếu client chỉ gửi media.dHash hợp lệ
+  if ((!this.imageFingerprints || this.imageFingerprints.length === 0) && Array.isArray(this.media) && this.media.length > 0) {
+    const validMedia = this.media.filter((m) => m && typeof m.dHash === 'string' && DHASH_64_REGEX.test(m.dHash));
+    if (validMedia.length > 0) {
+      this.imageFingerprints = validMedia.map((m) => ({
+        mediaUrl: m.url,
+        pHash: m.dHash.toLowerCase(),
+        dHash: m.dHash.toLowerCase(),
+        algorithm: 'dHash-64',
+        descriptorMetadata: {},
+        computedAt: m.capturedAt ?? new Date(),
+      }));
+    }
+  }
+
+  // Đồng bộ cờ trùng lặp giữa duplicateControl và aiEvaluation
+  if (this.duplicateControl?.isDuplicate && this.aiEvaluation && !this.aiEvaluation.isDuplicate) {
+    this.aiEvaluation.isDuplicate = true;
+    if (!this.aiEvaluation.matchedIncidentId && this.duplicateControl.masterIncidentId) {
+      this.aiEvaluation.matchedIncidentId = this.duplicateControl.masterIncidentId;
+    }
+  }
+
   if (!this.priorityScore || this.priorityScore === 0) {
     this.priorityScore = computePriorityScore({
       severityLevel: this.aiAnalysis?.severityLevel,
@@ -346,16 +600,22 @@ incidentSchema.pre('validate', function prepareIncidentFields() {
   }
 });
 
-// ── Indexes bắt buộc tối ưu truy vấn không gian, dashboard IOC và chống trùng lặp ──
-// 1. 2dsphere Index tìm sự cố trong bán kính 50m–200m và hiển thị bản đồ Đồng Nai
+// ── Hệ thống Indexes chuẩn Production (<10ms truy vấn không gian & IOC Dashboard) ──
+// 1. GeoJSON 2dsphere Index cho truy vấn bán kính ($nearSphere) và khung bản đồ ($geoWithin)
 incidentSchema.index({ location: '2dsphere' });
-// 2. Compound Index cho dashboard cán bộ lọc ngay điểm nóng ưu tiên cao nhất theo địa bàn
+// 2. Compound Indexes tăng tốc IOC Dashboard 95 Phường/Xã
+incidentSchema.index({ wardCode: 1, status: 1, createdAt: -1 });
+incidentSchema.index({ category: 1, priorityScore: -1, createdAt: -1 });
+incidentSchema.index({ reporterId: 1, createdAt: -1 });
+// 3. Compound Index tương thích ngược theo district
 incidentSchema.index({ status: 1, district: 1, priorityScore: -1, createdAt: -1 });
-// 3. Index tìm kiếm nhanh ảnh trùng theo 64-bit dHash
+// 4. Index tìm kiếm nhanh ảnh trùng theo 64-bit dHash & pHash
 incidentSchema.index({ 'media.dHash': 1 });
-// 4. Index unique + sparse trên clientOfflineId chống trùng bản ghi khi đồng bộ offline
+incidentSchema.index({ 'imageFingerprints.pHash': 1 });
+// 5. Unique Sparse Index trên syncId & clientOfflineId đảm bảo Idempotent Write cho Outbox Queue
+incidentSchema.index({ syncId: 1 }, { unique: true, sparse: true });
 applyHybridSyncIndex(incidentSchema);
-// 5. Index ưu tiên toàn cục
+// 6. Index sắp xếp điểm ưu tiên toàn cục
 incidentSchema.index({ priorityScore: -1 });
 
 export const Incident: Model<IIncident> =

@@ -12,7 +12,9 @@ export type SyncStatus = 'synced' | 'conflict';
 export const SYNC_STATUSES = ['synced', 'conflict'] as const;
 
 export interface HybridSyncFields {
-  /** UUID duy nhất sinh từ IndexedDB trên client để đảm bảo idempotency khi retry mạng chập chờn */
+  /** Mã đồng bộ duy nhất từ Client Local-First Outbox Queue để đảm bảo Idempotent Write */
+  syncId?: string;
+  /** Alias tương thích ngược cho UUID sinh từ IndexedDB dưới client */
   clientOfflineId?: string;
   syncStatus: SyncStatus;
   /** Thời điểm người dân bấm gửi thực tế dưới thiết bị */
@@ -22,7 +24,22 @@ export interface HybridSyncFields {
 }
 
 export const DHASH_64_REGEX = /^[0-9a-fA-F]{16}$/;
+export const PHASH_HEX_REGEX = /^[0-9a-fA-F]{16,64}$/;
 export const VN_PHONE_REGEX = /^0\d{9}$/;
+
+/**
+ * Chuẩn hóa chuỗi cho Unique + Sparse Index trên MongoDB:
+ * - Chuyển `null`, `undefined` hoặc chuỗi rỗng `""` về `undefined` để MongoDB Sparse Index bỏ qua đúng cách,
+ *   ngăn chặn triệt để lỗi `E11000 duplicate key: { syncId: null }`.
+ * - Giữ nguyên các toán tử truy vấn MongoDB dạng Object / RegExp (`{ $regex }`, `{ $in }`, ...) khi Mongoose cast filter.
+ */
+export function normalizeSparseString(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'object') return value as unknown as string;
+  if (typeof value !== 'string') return String(value);
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 /** Kiểm tra tọa độ (lng, lat) có nằm trong khung bao địa lý toàn Thành phố Đồng Nai hay không. */
 export function isWithinDongNaiBounds(lng: number, lat: number): boolean {
@@ -59,7 +76,8 @@ export function createHybridSyncDefinition(): SchemaDefinition {
       type: String,
       trim: true,
       maxlength: 128,
-      // Index unique + sparse được đăng ký tập trung qua applyHybridSyncIndex() để tránh trùng lặp index
+      set: normalizeSparseString,
+      // Index unique + sparse được đăng ký tập trung qua applyHybridSyncIndex()
     },
     syncStatus: {
       type: String,

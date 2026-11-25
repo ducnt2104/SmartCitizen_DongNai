@@ -5,23 +5,47 @@ import type { Repositories } from './types';
 
 export interface RepositoryBootInfo {
   repos: Repositories;
-  /** Lý do dùng JSON thay vì MongoDB (nếu có) */
+  /** Lý do dùng JSON thay vì MongoDB (chỉ khi chạy dev/test cục bộ không khai báo MONGODB_URI) */
   fallbackReason: string | null;
 }
 
-/** Dual-Mode: MongoDB khi có MONGODB_URI & kết nối được, ngược lại Local JSON Store. */
-export async function createRepositories(): Promise<RepositoryBootInfo> {
-  if (env.mongoUri) {
-    try {
-      const repos = await createMongoRepositories(env.mongoUri);
-      return { repos, fallbackReason: null };
-    } catch (err) {
-      const reason = `Không kết nối được MongoDB (${err instanceof Error ? err.message : String(err)})`;
-      console.error(`[db] ${reason} — chuyển sang Local JSON Store.`);
-      return { repos: createJsonRepositories(env.dataDir), fallbackReason: reason };
-    }
+/**
+ * Khởi tạo tầng lưu trữ chuẩn Production:
+ * - Khi có `MONGODB_URI`: kết nối trực tiếp tới MongoDB Atlas. TUYỆT ĐỐI KHÔNG bắt lỗi rồi fallback
+ *   sang mảng RAM/JSON giả lập — đảm bảo fail-loud nếu cấu hình DB sai và chống mất dữ liệu âm thầm.
+ * - Khi `NODE_ENV === 'production'`: bắt buộc phải có `MONGODB_URI`.
+ * - Chỉ cho phép Local JSON Store ở môi trường `development` / `test` khi chưa đặt `MONGODB_URI`.
+ */
+export async function createRepositories(customMongoUri?: string): Promise<RepositoryBootInfo> {
+  const uri = (customMongoUri ?? env.mongoUri ?? '').trim();
+
+  if (uri) {
+    const repos = await createMongoRepositories(uri);
+    return { repos, fallbackReason: null };
   }
-  return { repos: createJsonRepositories(env.dataDir), fallbackReason: 'MONGODB_URI chưa cấu hình — dùng Local JSON Store.' };
+
+  if (env.isProd) {
+    throw new Error(
+      '[db] Môi trường production bắt buộc phải khai báo MONGODB_URI (MongoDB Atlas). Không cho phép fallback sang Local JSON/RAM Store.',
+    );
+  }
+
+  return {
+    repos: createJsonRepositories(env.dataDir),
+    fallbackReason: 'MONGODB_URI chưa cấu hình (dev/test) — dùng Local JSON Store.',
+  };
 }
 
 export type { Repositories } from './types';
+export {
+  IncidentRepository,
+  incidentRepository,
+  type CreateIncidentInput,
+  type IocAggregatedStats,
+  type IocDashboardQuery,
+  type LeanIncident,
+  type LeanWard,
+  type SpatialBoxQuery,
+  type SpatialRadiusQuery,
+  type UpsertIncidentResult,
+} from './incidentRepository';

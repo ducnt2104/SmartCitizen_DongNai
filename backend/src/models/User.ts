@@ -2,11 +2,12 @@ import mongoose, { Schema, type HydratedDocument, type Model } from 'mongoose';
 import {
   applyHybridSyncIndex,
   createHybridSyncDefinition,
+  normalizeSparseString,
   VN_PHONE_REGEX,
   type HybridSyncFields,
 } from './common';
 
-export const USER_ROLES = ['citizen', 'ward_officer', 'admin'] as const;
+export const USER_ROLES = ['citizen', 'volunteer', 'ward_officer', 'city_admin', 'admin', 'super_admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
 export interface AssignedArea {
@@ -23,6 +24,10 @@ export interface OtpVerificationState {
 
 export interface IUser extends HybridSyncFields {
   phoneNumber: string;
+  email?: string;
+  staffCode?: string;
+  passwordHash?: string | null;
+  wardCode?: string | null;
   fullName: string;
   role: UserRole;
   assignedArea?: AssignedArea;
@@ -71,6 +76,39 @@ const userSchema = new Schema<IUser>(
         validator: (v: string) => VN_PHONE_REGEX.test(v),
         message: 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng số 0.',
       },
+    },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: 160,
+      set: (v: unknown) => {
+        if (v !== null && typeof v === 'object') return v as unknown as string;
+        const s = normalizeSparseString(v);
+        return typeof s === 'string' ? s.toLowerCase() : undefined;
+      },
+    },
+    staffCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      maxlength: 40,
+      set: (v: unknown) => {
+        if (v !== null && typeof v === 'object') return v as unknown as string;
+        const s = normalizeSparseString(v);
+        return typeof s === 'string' ? s.toUpperCase() : undefined;
+      },
+    },
+    passwordHash: {
+      type: String,
+      default: null,
+    },
+    wardCode: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      maxlength: 16,
+      default: null,
     },
     fullName: {
       type: String,
@@ -134,16 +172,16 @@ const userSchema = new Schema<IUser>(
 // Chuẩn hóa số điện thoại dạng +84 / 84 về 0xxxxxxxxx trước khi validate
 userSchema.pre('validate', function normalizeVietnamesePhone() {
   if (typeof this.phoneNumber === 'string') {
-    let cleaned = this.phoneNumber.replace(/[\s.\-()]/g, '');
-    if (cleaned.startsWith('+84')) cleaned = `0${cleaned.slice(3)}`;
-    else if (cleaned.startsWith('84') && cleaned.length === 11) cleaned = `0${cleaned.slice(2)}`;
-    this.phoneNumber = cleaned;
+    this.phoneNumber = normalizeVnPhone(this.phoneNumber);
   }
 });
 
-// Indexes: phoneNumber đã có unique index từ field schema; bổ sung index phân quyền địa bàn và Hybrid Sync
+// Indexes: phoneNumber đã có unique index từ field schema; bổ sung email/staffCode unique sparse, phân quyền địa bàn & Hybrid Sync
 applyHybridSyncIndex(userSchema);
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
+userSchema.index({ staffCode: 1 }, { unique: true, sparse: true });
 userSchema.index({ role: 1, 'assignedArea.district': 1, 'assignedArea.ward': 1 });
+userSchema.index({ role: 1, wardCode: 1 });
 
 export const User: Model<IUser> =
   (mongoose.models.User as Model<IUser> | undefined) ?? mongoose.model<IUser>('User', userSchema);

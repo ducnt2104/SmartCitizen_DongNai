@@ -13,6 +13,9 @@
     "dev:backend": "npm run dev --prefix backend",
     "dev:frontend": "npm run dev --prefix frontend",
     "start": "npm start --prefix backend",
-    "seed:dongnai": "npm run seed:dongnai --prefix backend"
+    "seed:dongnai": "npm run seed:dongnai --prefix backend",
+    "db:seed": "npm run db:seed --prefix backend",
+    "db:migrate-indexes": "npm run db:migrate-indexes --prefix backend",
+    "db:verify": "npm run db:verify --prefix backend"
   }
 }

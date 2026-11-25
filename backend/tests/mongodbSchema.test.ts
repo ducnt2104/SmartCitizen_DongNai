@@ -9,6 +9,7 @@ import {
   INCIDENT_STATUSES,
   incidentSchema,
   isWithinDongNaiBounds,
+  LEGACY_INCIDENT_CATEGORIES,
   SpamLog,
   SPAM_LOG_TTL_SECONDS,
   spamLogSchema,
@@ -234,11 +235,15 @@ describe('Helper findDuplicateIncident ($nearSphere + 64-bit dHash)', () => {
 });
 
 describe('Kết nối MongoDB Atlas & Bộ dữ liệu Seed Đồng Nai', () => {
-  it('cấu hình pool hợp lý cho Render 512MB + Atlas và fail-loud khi thiếu MONGODB_URI', async () => {
+  it('cấu hình pool chuẩn Production (maxPoolSize=20, minPoolSize=5, w=majority) và fail-loud khi thiếu MONGODB_URI', async () => {
     const opts = buildMongoConnectOptions();
-    expect(opts.maxPoolSize).toBe(10);
+    expect(opts.maxPoolSize).toBe(20);
+    expect(opts.minPoolSize).toBe(5);
+    expect(opts.serverSelectionTimeoutMS).toBe(5_000);
+    expect(opts.socketTimeoutMS).toBe(45_000);
+    expect(opts.retryWrites).toBe(true);
+    expect(opts.w).toBe('majority');
     expect(opts.autoIndex).toBe(false);
-    expect(opts.serverSelectionTimeoutMS).toBeGreaterThan(0);
     await expect(connectMongoDB({ uri: '' })).rejects.toThrow('MONGODB_URI');
   });
 
@@ -251,9 +256,11 @@ describe('Kết nối MongoDB Atlas & Bộ dữ liệu Seed Đồng Nai', () => 
     expect(seed.users.some((u) => u.assignedArea?.ward === 'Phường Trấn Biên')).toBe(true);
     expect(seed.users.some((u) => u.assignedArea?.ward === 'Xã Tà Lài' && u.assignedArea?.district === 'Huyện Tân Phú')).toBe(true);
 
+    expect(INCIDENT_CATEGORIES).toContain('OTHER');
     expect(seed.incidents).toHaveLength(8);
-    expect(new Set(seed.incidents.map((i) => i.category)).size).toBe(INCIDENT_CATEGORIES.length);
-    expect(new Set(seed.incidents.map((i) => i.status)).size).toBe(INCIDENT_STATUSES.length);
+    expect(new Set(seed.incidents.map((i) => i.category)).size).toBe(LEGACY_INCIDENT_CATEGORIES.length);
+    expect(new Set(seed.incidents.map((i) => i.status)).size).toBe(5);
+    expect(INCIDENT_STATUSES.length).toBeGreaterThanOrEqual(5);
     expect(seed.spamLogs).toHaveLength(2);
 
     // Toàn bộ 6 users + 8 incidents + 2 spam_logs phải vượt qua Mongoose schema validation chặt chẽ

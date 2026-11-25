@@ -12,7 +12,8 @@ import {
 } from '../models';
 
 type SeedUserInput = Omit<IUser, 'createdAt' | 'updatedAt'> & { _id: Types.ObjectId };
-type SeedIncidentInput = Omit<IIncident, 'createdAt' | 'updatedAt'> & { _id: Types.ObjectId };
+type SeedIncidentInput = Omit<IIncident, 'createdAt' | 'updatedAt' | 'wardCode' | 'imageFingerprints' | 'aiEvaluation'> &
+  Partial<Pick<IIncident, 'wardCode' | 'imageFingerprints' | 'aiEvaluation'>> & { _id: Types.ObjectId };
 type SeedSpamLogInput = Omit<ISpamLog, 'createdAt' | 'updatedAt'> & { _id: Types.ObjectId };
 
 export interface DongNaiSeedDataset {

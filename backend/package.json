@@ -9,7 +9,10 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "seed:dongnai": "tsx src/seed/seedDongNai.ts"
+    "seed:dongnai": "tsx src/seed/seedDongNai.ts",
+    "db:seed": "tsx src/scripts/seed.ts",
+    "db:migrate-indexes": "tsx src/scripts/migrateIndexes.ts",
+    "db:verify": "tsx src/scripts/verifyDb.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",
@@ -31,6 +34,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.6",
     "@types/nodemailer": "^8.0.2",
+    "mongodb-memory-server": "^11.4.0",
     "tsx": "^4.23.15",
     "typescript": "5.7",
     "vitest": "^5.1.1"
