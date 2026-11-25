@@ -165,8 +165,8 @@ describe('Thuật toán Edge (Geo 95 ĐVHC, dHash, Local Vision Fallback, Backof
 
     const roadmap = buildMapLibreStyle('roadmap');
     const hybrid = buildMapLibreStyle('hybrid');
-    expect(roadmap.layers.length).toBe(1); // OpenStreetMap Standard không watermark
-    expect(hybrid.layers.length).toBe(3); // Vệ tinh + Mạng lưới đường + Nhãn tên đường
+    expect(roadmap.layers.length).toBe(1); // Google Maps Đường phố (lyrs=m)
+    expect(hybrid.layers.length).toBe(1); // Google Maps Vệ tinh + Đường (lyrs=y)
     expect(googleMapsPlaceUrl(10.9465, 106.8243)).toBe('https://www.google.com/maps/search/?api=1&query=10.946500,106.824300');
 
     const circle = createGeoJsonCircle(10.9465, 106.8243, 25, 32);

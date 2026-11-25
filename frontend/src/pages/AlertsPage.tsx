@@ -58,6 +58,7 @@ import {
 } from '../lib/weather';
 import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
+import type { CameraCommand } from '../components/map/GoogleMapEngine';
 import { Spinner } from '../components/ui';
 
 function WeatherGlyph({ kind, isDay = true, className = 'h-6 w-6' }: { kind: WeatherKind; isDay?: boolean; className?: string }) {
@@ -139,6 +140,17 @@ const COMMON_ARTERIALS = [
   'Bùi Văn Hòa',
   'ĐT 768',
 ] as const;
+
+const ARTERIAL_FOCUS_COORDS: Record<string, { lat: number; lng: number; zoom: number }> = {
+  'Quốc lộ 1A': { lat: 10.955, lng: 106.92, zoom: 12.5 },
+  'Quốc lộ 51': { lat: 10.8213, lng: 106.9419, zoom: 12.8 },
+  'Quốc lộ 20': { lat: 11.1486, lng: 107.2358, zoom: 12.2 },
+  'Võ Nguyên Giáp': { lat: 10.9035, lng: 106.9055, zoom: 13.5 },
+  'Đồng Khởi': { lat: 10.9679, lng: 106.8537, zoom: 14 },
+  'Phạm Văn Thuận': { lat: 10.9567, lng: 106.8451, zoom: 14.2 },
+  'Bùi Văn Hòa': { lat: 10.9102, lng: 106.8899, zoom: 13.8 },
+  'ĐT 768': { lat: 11.045, lng: 106.94, zoom: 13 },
+};
 
 export default function AlertsPage() {
   const { fmtDate, lang } = useI18n();
@@ -369,10 +381,15 @@ export default function AlertsPage() {
   const [selectedAlert, setSelectedAlert] = useState<CivicAlertItem | null>(null);
   const [inspectWardCode, setInspectWardCode] = useState<string | null>(null);
 
-  // Route Check
+  // Route Check & Alerts Map Camera
   const [roadInput, setRoadInput] = useState('');
   const [routeChecking, setRouteChecking] = useState(false);
   const [routeResult, setRouteResult] = useState<RouteCheckResponse | null>(null);
+  const [alertsMapCam, setAlertsMapCam] = useState<CameraCommand | null>(null);
+
+  const pushAlertsMapCam = useCallback((cmd: Omit<CameraCommand, 'seq'>) => {
+    setAlertsMapCam((prev) => ({ ...cmd, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
 
   // Admin / Rescue Draw Mode
   const [drawOpen, setDrawOpen] = useState(false);
@@ -502,6 +519,10 @@ export default function AlertsPage() {
       return;
     }
     setRoadInput(q);
+    const focus = ARTERIAL_FOCUS_COORDS[q];
+    if (focus) {
+      pushAlertsMapCam({ kind: 'flyTo', lat: focus.lat, lng: focus.lng, zoom: focus.zoom });
+    }
     setRouteChecking(true);
     try {
       const res = await api<RouteCheckResponse>(`/api/alerts/route-check?road=${encodeURIComponent(q)}`);
@@ -1357,7 +1378,13 @@ export default function AlertsPage() {
               reports={mapMarkers}
               alerts={filteredAlerts}
               mode="pins"
-              fitCityOnMount
+              initialCenter={[10.9465, 106.8243]}
+              initialZoom={11}
+              cameraCommand={alertsMapCam}
+              onRequestCamera={pushAlertsMapCam}
+              userPos={weatherLoc.isGps ? { lat: weatherLoc.lat, lng: weatherLoc.lng } : null}
+              onLocate={() => detectGpsWeather(false)}
+              locating={gpsBusy}
               showArterials
               showFitCityButton
               draftPolyline={drawOpen && drawGeomType === 'polyline' ? drawPoints : undefined}

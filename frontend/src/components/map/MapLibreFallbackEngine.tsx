@@ -14,7 +14,6 @@ import {
   DONG_NAI_ADMIN_MASK_POLYGON,
   DONG_NAI_MAPLIBRE_BOUNDS,
   getPinState,
-  loadDetailedVectorStyle,
   PIN_STATE_COLOR,
   PIN_STATE_RANK,
   type MapPoint,
@@ -266,25 +265,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const fallbackToRasterStyle = (map: maplibregl.Map, reason: string): void => {
     clearVectorWatchdog();
     if (vectorFailedRef.current) return;
-    console.warn('[MapLibre] Chuyển sang nền OSM/Esri dự phòng do:', reason);
+    console.warn('[MapLibre] Chuyển sang nền Google/OSM dự phòng do:', reason);
     vectorFailedRef.current = true;
     vectorActiveRef.current = false;
     vectorLoadedRef.current = false;
     styleParsedRef.current = false;
     map.setStyle(buildMapLibreStyle(surfaceRef.current));
-  };
-
-  const applyVectorStyleWithWatchdog = (map: maplibregl.Map, vecStyle: maplibregl.StyleSpecification): void => {
-    clearVectorWatchdog();
-    vectorActiveRef.current = true;
-    vectorLoadedRef.current = false;
-    styleParsedRef.current = false;
-    map.setStyle(vecStyle);
-    vectorWatchdogRef.current = window.setTimeout(() => {
-      if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        fallbackToRasterStyle(map, 'vector load timeout (12s)');
-      }
-    }, 12000);
   };
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; mở khóa kéo/zoom tự do toàn diện như Google Maps
@@ -322,10 +308,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     mapRef.current = map;
     surfaceRef.current = p.surface;
     langRef.current = lang;
-    let vectorDisposed = false;
     const vectorAbort = new AbortController();
-
-    const prefetchedVectorPromise = loadDetailedVectorStyle(p.surface, lang, vectorAbort.signal);
 
     const emitViewport = (): void => {
       if (viewportRef.current) {
@@ -361,10 +344,6 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
       setStyleReadySeq((n) => n + 1);
       emitViewport();
-      void prefetchedVectorPromise.then((vecStyle) => {
-        if (vectorDisposed || !vecStyle || surfaceRef.current !== p.surface || vectorFailedRef.current) return;
-        applyVectorStyleWithWatchdog(map, vecStyle);
-      });
     });
 
     map.on('style.load', () => {
@@ -506,7 +485,6 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     window.addEventListener('resize', handleResize);
 
     return () => {
-      vectorDisposed = true;
       clearVectorWatchdog();
       if (moveEndTimerRef.current !== null) {
         window.clearTimeout(moveEndTimerRef.current);
@@ -544,7 +522,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     return () => window.cancelAnimationFrame(id);
   }, [p.followPadding?.bottom, p.followPadding?.top, p.followPadding?.left]);
 
-  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Địa chỉ Vector / Bản đồ tối) mượt không hủy instance Map
+  // 2) Đổi lớp nền (Google Đường phố / Google Vệ tinh + Đường) mượt không hủy instance Map
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -553,28 +531,6 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     if (!surfaceChanged && !langChanged) return;
     surfaceRef.current = p.surface;
     langRef.current = lang;
-
-    if (!vectorFailedRef.current) {
-      let cancelled = false;
-      const ctrl = new AbortController();
-      const targetSurface = p.surface;
-      if (surfaceChanged) {
-        clearVectorWatchdog();
-        vectorActiveRef.current = false;
-        vectorLoadedRef.current = false;
-        styleParsedRef.current = false;
-        map.setStyle(buildMapLibreStyle(targetSurface));
-      }
-      void loadDetailedVectorStyle(targetSurface, lang, ctrl.signal).then((vecStyle) => {
-        if (cancelled || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
-        applyVectorStyleWithWatchdog(map, vecStyle);
-      });
-      return () => {
-        cancelled = true;
-        clearVectorWatchdog();
-        ctrl.abort();
-      };
-    }
 
     if (surfaceChanged) {
       clearVectorWatchdog();
@@ -731,8 +687,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           'road_trunk_primary_casing',
         ].find((lid) => Boolean(map.getLayer(lid))) ?? overlayBeforeId;
 
-      // Không làm mờ khu vực ngoài ranh giới Đồng Nai để bản đồ mở toàn diện không giới hạn như Google Maps.
-      // Giữ phân khu màu rất nhẹ 95 ĐVHC ở tầm nhìn tổng quan và ẩn dần khi phóng to để lộ rõ chi tiết phố/hẻm/nhà.
+      // Giữ lớp ranh giới nét đứt mảnh màu xanh dương & tô nền cực nhẹ (fillOpacity <= 0.05) để không che chi tiết đường phố Google Maps bên dưới
       if (!map.getSource('sc-ward-zones')) {
         map.addSource('sc-ward-zones', {
           type: 'geojson',
@@ -743,22 +698,10 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             id: 'sc-ward-zones-fill',
             type: 'fill',
             source: 'sc-ward-zones',
-            maxzoom: 13.8,
+            maxzoom: 12.2,
             paint: {
               'fill-color': ['get', 'fillColor'],
-              'fill-opacity': [
-                'interpolate',
-                ['linear'],
-                ['zoom'],
-                7.2,
-                isRoadmap ? 0.12 : 0.1,
-                10.5,
-                isRoadmap ? 0.08 : 0.07,
-                12.8,
-                0.03,
-                13.8,
-                0,
-              ],
+              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7.2, 0.05, 10.5, 0.03, 12.2, 0],
             },
           },
           tintBeforeLayerId,
@@ -768,12 +711,13 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             id: 'sc-ward-zones-line',
             type: 'line',
             source: 'sc-ward-zones',
-            maxzoom: 14.5,
+            maxzoom: 13.5,
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
-              'line-color': isRoadmap ? ['get', 'borderColor'] : '#64748B',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.6, 11, 0.9, 13.5, 1.1],
-              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.24, 12.5, 0.28, 14.4, 0],
+              'line-color': isRoadmap ? ['get', 'borderColor'] : '#94A3B8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.5, 11, 0.75, 13.5, 0.9],
+              'line-dasharray': [2, 2],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.25, 12.5, 0.18, 13.5, 0],
             },
           },
           overlayBeforeId,

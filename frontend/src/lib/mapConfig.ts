@@ -890,9 +890,9 @@ export function loadDetailedVectorRoadmapStyle(
 }
 
 /**
- * Cấu hình Style khởi tạo & dự phòng cho MapLibre GL JS (100% miễn phí, không API key, không watermark):
- *  - `roadmap`: OpenStreetMap Standard (đầy đủ tên đường, hẻm, số nhà, POI toàn cầu) trước/khi dự phòng cho Vector Google-style.
- *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation + Nhãn địa danh Esri.
+ * Cấu hình Style chuẩn Google Maps cho MapLibre GL JS (miễn phí, không watermark, phủ kín 100%):
+ *  - `roadmap`: Google Maps Đường phố tiếng Việt (`lyrs=m&hl=vi`) — chi tiết từng con hẻm, số nhà, sông ngòi, địa danh.
+ *  - `hybrid`: Google Maps Vệ tinh + Tên đường (`lyrs=y&hl=vi`) — ảnh vệ tinh thực tế kết hợp nhãn đường & địa danh.
  */
 export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification {
   if (surface === 'hybrid') {
@@ -900,37 +900,20 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
       version: 8,
       glyphs: DONG_NAI_GLYPHS_URL,
       sources: {
-        'esri-sat': {
-          type: 'raster',
-          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-          tileSize: 256,
-          maxzoom: 19,
-          attribution: '© Esri, Maxar, Earthstar Geographics',
-        },
-        'esri-transport': {
+        'google-hybrid': {
           type: 'raster',
           tiles: [
-            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+            'https://mt0.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
+            'https://mt1.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
+            'https://mt2.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
+            'https://mt3.google.com/vt/lyrs=y&hl=vi&x={x}&y={y}&z={z}',
           ],
           tileSize: 256,
-          maxzoom: 19,
-          attribution: '© Esri',
-        },
-        'esri-places': {
-          type: 'raster',
-          tiles: [
-            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-          ],
-          tileSize: 256,
-          maxzoom: 19,
-          attribution: '© Esri',
+          maxzoom: 21,
+          attribution: '© Google Maps',
         },
       },
-      layers: [
-        { id: 'esri-sat-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 22 },
-        { id: 'esri-transport-layer', type: 'raster', source: 'esri-transport', minzoom: 0, maxzoom: 22 },
-        { id: 'esri-places-layer', type: 'raster', source: 'esri-places', minzoom: 0, maxzoom: 22 },
-      ],
+      layers: [{ id: 'google-hybrid-layer', type: 'raster', source: 'google-hybrid', minzoom: 0, maxzoom: 22 }],
     };
   }
 
@@ -938,14 +921,19 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
     version: 8,
     glyphs: DONG_NAI_GLYPHS_URL,
     sources: {
-      'osm-standard': {
+      'google-roadmap': {
         type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tiles: [
+          'https://mt0.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+          'https://mt1.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+          'https://mt2.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+          'https://mt3.google.com/vt/lyrs=m&hl=vi&x={x}&y={y}&z={z}',
+        ],
         tileSize: 256,
-        maxzoom: 19,
-        attribution: '© OpenStreetMap contributors',
+        maxzoom: 21,
+        attribution: '© Google Maps',
       },
     },
-    layers: [{ id: 'osm-standard-layer', type: 'raster', source: 'osm-standard', minzoom: 0, maxzoom: 22 }],
+    layers: [{ id: 'google-roadmap-layer', type: 'raster', source: 'google-roadmap', minzoom: 0, maxzoom: 22 }],
   };
 }
