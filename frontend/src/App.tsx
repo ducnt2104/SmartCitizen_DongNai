@@ -13,11 +13,13 @@ import { authStore } from './lib/authStore';
 import HomePage from './pages/Home';
 import { useToast } from './state/toast';
 import { lazyWithRetry } from './utils/lazyWithRetry';
+import { useRouteSeo } from './utils/usePageSeo';
 
 const ReportPage = lazyWithRetry(() => import('./pages/Report'), 'ReportPage');
 const MapPage = lazyWithRetry(() => import('./pages/MapPage'), 'MapPage');
 const MinePage = lazyWithRetry(() => import('./pages/MinePage'), 'MinePage');
 const ProfilePage = lazyWithRetry(() => import('./pages/ProfilePage'), 'ProfilePage');
+const NotFoundPage = lazyWithRetry(() => import('./pages/NotFoundPage'), 'NotFoundPage');
 const AuthPage = lazyWithRetry(() => import('./pages/AuthPage'), 'AuthPage');
 const AdminPage = lazyWithRetry(() => import('./pages/admin/AdminPage'), 'AdminPage');
 const RescuePortalPage = lazyWithRetry(() => import('./pages/rescue/RescuePortalPage'), 'RescuePortalPage');
@@ -67,9 +69,15 @@ function ScrollTop() {
   return null;
 }
 
+function RouteSeoSync() {
+  useRouteSeo();
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <RouteSeoSync />
       <SessionSync />
       <SyncToasts />
       <RouteErrorBoundary>
@@ -83,7 +91,7 @@ export default function App() {
               <Route path="mine" element={<MinePage />} />
               <Route path="profile" element={<ProfilePage />} />
               <Route path="volunteer" element={<Navigate to="/ioc" replace />} />
-              <Route path="*" element={<HomePage />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
             <Route path="auth" element={<AuthPage />} />
             <Route path="rescue/login" element={<Navigate to="/auth" replace />} />

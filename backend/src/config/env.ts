@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { normalizeSiteUrl } from '../utils/seo';
 
 // Nạp .env từ cả thư mục gốc monorepo lẫn backend/.env (chỉ nạp ngoài môi trường unit test Vitest để cô lập DB test)
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
@@ -282,6 +283,9 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   );
   const cookieSecure = parseBoolEnv(source, 'COOKIE_SECURE', isProd, issues);
   const dataDirRaw = readTrimmed(source, 'DATA_DIR') || './data';
+  const siteUrl = normalizeSiteUrl(readTrimmed(source, 'SITE_URL') || readTrimmed(source, 'VITE_SITE_URL'));
+  const googleSiteVerification =
+    readTrimmed(source, 'GOOGLE_SITE_VERIFICATION') || readTrimmed(source, 'VITE_GOOGLE_SITE_VERIFICATION') || '';
 
   if (issues.length > 0) {
     throw new Error(`\n${formatEnvErrorReport(issues, rawNodeEnv || nodeEnv)}`);
@@ -336,6 +340,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     refreshTokenDays,
     cookieSecure,
     dataDir: path.resolve(dataDirRaw),
+    siteUrl,
+    googleSiteVerification,
   } as const;
 }
 

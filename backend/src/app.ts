@@ -10,6 +10,14 @@ import { limits } from './middleware/rateLimit';
 import { errorHandler, sanitizeInput } from './middleware/validate';
 import { buildRouter } from './routes';
 import type { Services } from './services/container';
+import {
+  buildRobotsTxt,
+  buildSitemapXml,
+  injectHtmlSeo,
+  KNOWN_SPA_ROUTES,
+  NOINDEX_SPA_ROUTES,
+  normalizeAppPathname,
+} from './utils/seo';
 
 const STATIC_ASSET_EXT_RE = /\.(?:js|mjs|cjs|css|map|wasm|json|webmanifest|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
 
@@ -123,6 +131,17 @@ export function createApp(
     res.status(404).json({ error: { code: 'not_found', message: 'Endpoint không tồn tại.' } });
   });
 
+  // Endpoints SEO (đặt TRƯỚC express.static và SPA fallback để không trả về index.html)
+  const sitemapLastMod = new Date().toISOString().slice(0, 10);
+  app.get('/robots.txt', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).type('text/plain; charset=utf-8').send(buildRobotsTxt(env.siteUrl));
+  });
+  app.get('/sitemap.xml', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.status(200).type('application/xml; charset=utf-8').send(buildSitemapXml(env.siteUrl, sitemapLastMod));
+  });
+
   // Phục vụ frontend đã build (single-service trên Render); nếu chưa build thì chỉ chạy API.
   const frontendDist = path.resolve(__dirname, '../../frontend/dist');
   const candidates = [
@@ -133,8 +152,12 @@ export function createApp(
   const dist = candidates.find((p) => fs.existsSync(path.join(p, 'index.html')));
   if (dist) {
     const assetsDir = path.join(dist, 'assets') + path.sep;
+    const indexHtmlPath = path.join(dist, 'index.html');
+    const rawIndexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
+
     app.use(
       express.static(dist, {
+        index: false,
         etag: true,
         setHeaders: (res, file) => {
           if (file.startsWith(assetsDir)) {
@@ -151,16 +174,32 @@ export function createApp(
     );
 
     // Tuyệt đối KHÔNG trả index.html cho request .js/.css/.svg/.json/.woff2 bị thiếu sau khi redeploy (tránh lỗi MIME type gây trắng trang)
-    app.get(/^(?!\/api|\/healthz).*/, (req, res) => {
+    app.get(/^(?!\/api|\/healthz|\/robots\.txt$|\/sitemap\.xml$).*/, (req, res) => {
       if (req.path.startsWith('/assets/') || STATIC_ASSET_EXT_RE.test(req.path)) {
         res.setHeader('Cache-Control', 'no-store');
         res.status(404).type('text/plain').send('Asset not found');
         return;
       }
+
+      const normalizedPath = normalizeAppPathname(req.path);
+      const isKnownRoute = KNOWN_SPA_ROUTES.has(normalizedPath);
+      const isNoIndex = !isKnownRoute || NOINDEX_SPA_ROUTES.has(normalizedPath);
+      if (isNoIndex) {
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      }
+
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
-      res.sendFile(path.join(dist, 'index.html'));
+
+      const html = injectHtmlSeo(rawIndexHtml, {
+        siteUrl: env.siteUrl,
+        googleSiteVerification: env.googleSiteVerification,
+        pathname: normalizedPath,
+        forceNoIndex: isNoIndex,
+      });
+
+      res.status(isKnownRoute ? 200 : 404).type('text/html; charset=utf-8').send(html);
     });
   }
 

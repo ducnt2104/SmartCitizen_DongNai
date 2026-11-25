@@ -590,4 +590,8 @@ export const vi = {
   'ioc.staffStatusRevoked': 'Đã thu hồi',
   'ioc.staffRevokeBtn': 'Thu hồi',
   'ioc.staffRestoreBtn': 'Khôi phục',
+
+  // ── 404 ──
+  'notFound.title': 'Không tìm thấy trang',
+  'notFound.text': 'Đường dẫn bạn truy cập không tồn tại hoặc đã được di chuyển. Vui lòng quay về Trang chủ hoặc mở Bản đồ sự cố.',
 } as const;
