@@ -1,36 +1,70 @@
-import { useId } from 'react';
+import logoMark from '../assets/logo-mark.png';
 
-/** Logo SVG tùy biến: Khiên + ghim bản đồ + sóng số (xanh dương – vàng cam). */
-export function LogoMark({ size = 36, className = '' }: { size?: number; className?: string }) {
-  const id = useId();
+/** Logo chính thức SMARTCITIZEN ĐỒNG NAI (huy hiệu tròn tách nền từ bộ nhận diện mới). */
+export function LogoMark({
+  size = 36,
+  className = '',
+  decorative = false,
+}: {
+  size?: number;
+  className?: string;
+  decorative?: boolean;
+}) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="SmartCitizen_DongNai" className={className}>
-      <defs>
-        <clipPath id={`${id}-c`}>
-          <path d="M32 3 8 12v18c0 15 10 26 24 31 14-5 24-16 24-31V12L32 3Z" />
-        </clipPath>
-      </defs>
-      <path d="M32 3 8 12v18c0 15 10 26 24 31 14-5 24-16 24-31V12L32 3Z" fill="#0B57D0" />
-      <g clipPath={`url(#${id}-c)`}>
-        <rect x="32" y="0" width="30" height="64" fill="#0A4BB5" />
-      </g>
-      <path d="M32 15c-7 0-12.5 5.2-12.5 11.8C19.5 35.200 32 46 32 46s12.5-10.800 12.500-19.200C44.500 20.200 39 15 32 15Z" fill="#fff" />
-      <circle cx="32" cy="26.500" r="5" fill="#F59E0B" />
-      <path d="M13 51c4.500-3.500 8.500-3.500 13 0s8.500 3.500 13 0 8.500-3.500 12 0" fill="none" stroke="#F59E0B" strokeWidth="3" strokeLinecap="round" />
-    </svg>
+    <img
+      src={logoMark}
+      alt={decorative ? '' : 'SMARTCITIZEN ĐỒNG NAI'}
+      aria-hidden={decorative || undefined}
+      width={size}
+      height={size}
+      decoding="async"
+      className={`rounded-full object-contain select-none ${className}`}
+    />
   );
 }
 
-export function Logo({ compact = false, dark = false }: { compact?: boolean; dark?: boolean }) {
+export function Logo({
+  compact = false,
+  dark = false,
+  stacked = false,
+}: {
+  compact?: boolean;
+  dark?: boolean;
+  stacked?: boolean;
+}) {
+  if (stacked) {
+    return (
+      <span className="inline-flex flex-col items-center gap-1.5 text-center">
+        <LogoMark size={56} className="h-14 w-14 shrink-0" decorative />
+        <span className="leading-tight">
+          <span className="block text-sm font-extrabold tracking-tight sm:text-base">
+            <span className={dark ? 'text-ioc-cyan' : 'text-brand'}>SMARTCITIZEN</span>{' '}
+            <span className={dark ? 'text-ioc-text' : 'text-ink'}>ĐỒNG NAI</span>
+          </span>
+          <span className={`mt-0.5 block text-[11px] font-medium ${dark ? 'text-ioc-dim' : 'text-muted'}`}>
+            Kết nối - Sáng tạo - Phát triển
+          </span>
+        </span>
+      </span>
+    );
+  }
+
   return (
-    <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 sm:gap-2">
-      <LogoMark size={compact ? 30 : 36} className={compact ? 'shrink-0' : 'h-8 w-8 shrink-0 sm:h-9 sm:w-9'} />
+    <span className="inline-flex max-w-full min-w-0 items-center gap-2">
+      <LogoMark
+        size={compact ? 44 : 40}
+        className={compact ? 'h-11 w-11 shrink-0' : 'h-9 w-9 shrink-0 sm:h-10 sm:w-10'}
+        decorative={!compact}
+      />
       {!compact && (
         <span className="min-w-0 leading-tight">
-          <span className={`block truncate text-[12.5px] font-bold tracking-tight sm:text-base ${dark ? 'text-ioc-text' : 'text-ink'}`}>
-            SmartCitizen<span className="text-accent">_</span>DongNai
+          <span className="block truncate text-[11px] font-extrabold tracking-tight sm:text-[13.5px]">
+            <span className={dark ? 'text-ioc-cyan' : 'text-brand'}>SMARTCITIZEN</span>{' '}
+            <span className={dark ? 'text-ioc-text' : 'text-ink'}>ĐỒNG NAI</span>
           </span>
-          <span className={`block truncate text-[11px] font-medium ${dark ? 'text-ioc-dim' : 'text-muted'}`}>Team Victer</span>
+          <span className={`block truncate text-[9.5px] font-medium sm:text-[11px] ${dark ? 'text-ioc-dim' : 'text-muted'}`}>
+            Kết nối - Sáng tạo - Phát triển
+          </span>
         </span>
       )}
     </span>

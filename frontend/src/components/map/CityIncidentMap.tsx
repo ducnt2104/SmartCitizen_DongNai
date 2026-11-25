@@ -408,7 +408,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
       {/* Floating Glass Filter Bar: Tìm địa chỉ/hẻm + Chọn nhanh 95 Phường/Xã + Chip Danh mục/Trạng thái */}
       <div className="rounded-[1.25rem] border border-line/85 bg-surface/95 p-3 shadow-card backdrop-blur-md">
-        <div className="grid gap-2 md:grid-cols-[1fr_17rem_auto]">
+        <div className="grid gap-2 md:grid-cols-[1fr_20rem]">
           {/* Ô tìm kiếm Địa chỉ / Con hẻm / 95 Phường Xã */}
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
@@ -502,10 +502,10 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         </div>
 
         {/* Nhảy nhanh 5 vùng toàn Thành phố Đồng Nai */}
-        <div className="no-scrollbar mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5" role="group" aria-label={t('map.quickRegions')}>
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5" role="group" aria-label={t('map.quickRegions')}>
           <button
             type="button"
-            className="chip shrink-0 !min-h-8 !text-xs"
+            className="chip !min-h-8 !text-xs"
             aria-pressed={settings.scope === 'city'}
             onClick={() => selectWardScope('city')}
           >
@@ -515,7 +515,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
             <button
               key={reg.id}
               type="button"
-              className="chip shrink-0 !min-h-8 !text-xs"
+              className="chip !min-h-8 !text-xs"
               onClick={() => {
                 set({ scope: 'city' });
                 pushCamera({ kind: 'flyTo', lat: reg.center[0], lng: reg.center[1], zoom: reg.zoom });
@@ -682,15 +682,28 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         </div>
       )}
 
-      {/* Chú giải mức ưu tiên & tổng số phản ánh */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl border border-line/85 bg-surface/90 px-3.5 py-2.5 text-xs font-semibold shadow-sm" aria-label={t('map.legend')}>
-        <span className="text-muted">{filtered ? t('map.count', { n: filtered.length }) : ''}</span>
-        {LEGEND_COLORS.map(([k, color, label]) => (
-          <span key={k} className="inline-flex items-center gap-1.5">
-            <i className="h-3 w-3 rounded-full" style={{ background: color }} />
-            {t(label)}
+      {/* Chú giải mức ưu tiên, ĐVHC 2 cấp & tổng số phản ánh */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-2xl border border-line/85 bg-surface/90 px-3.5 py-2.5 text-xs font-semibold shadow-sm" aria-label={t('map.legend')}>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <span className="text-muted">{filtered ? t('map.count', { n: filtered.length }) : ''}</span>
+          {LEGEND_COLORS.map(([k, color, label]) => (
+            <span key={k} className="inline-flex items-center gap-1.5">
+              <i className="h-3 w-3 rounded-full" style={{ background: color }} />
+              {t(label)}
+            </span>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-muted">
+          <span className="inline-flex items-center gap-1.5 text-[#0B57D0]">
+            <i className="h-2.5 w-2.5 rounded-full bg-[#0B57D0]" /> 33 Phường
           </span>
-        ))}
+          <span className="inline-flex items-center gap-1.5 text-[#0F766E]">
+            <i className="h-2.5 w-2.5 rounded-full bg-[#0F766E]" /> 62 Xã
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-0.5 w-3.5 rounded-full bg-[#1A73E8]" /> Ranh giới 2 cấp (95 ĐVHC)
+          </span>
+        </div>
       </div>
 
       {filtered && filtered.length === 0 && (

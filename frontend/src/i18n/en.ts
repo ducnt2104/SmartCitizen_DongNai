@@ -43,12 +43,15 @@ export const en: Record<keyof typeof vi, string> = {
   'scope.groupXa': '62 Communes (Dong Nai City)',
 
   // ── Home ──
-  'home.tagline': 'Dong Nai City Citizen Feedback Portal',
-  'home.heroTitle': 'Spot an issue? Report it in 3 steps.',
-  'home.heroText': 'Take a photo — AI fills the form — submit. Records appear instantly on your device.',
-  'home.cta': 'Report now',
+  'home.tagline': 'Digital Citizen Portal · 95 Dong Nai Wards & Communes',
+  'home.heroTitle': 'Spot an urban issue? Report it in 30 seconds.',
+  'home.heroText': 'Capture on-site photos, pinpoint the location, and track resolution transparently.',
+  'home.cta': 'Report an issue now',
+  'home.heroMapCta': 'Map',
+  'home.heroImgAlt': 'Panoramic view of the Dong Nai riverfront skyline and modern cable-stayed bridge',
   'home.kpiTitle': 'Community transparency',
   'home.kpiTotal': 'Reports',
+  'home.kpiTotalSub': 'cases',
   'home.kpiDone': 'Resolved',
   'home.kpiAvg': 'Avg. resolution',
   'home.days': 'days',
@@ -61,6 +64,7 @@ export const en: Record<keyof typeof vi, string> = {
   'home.gate.ai': 'Community AI Assistant',
   'home.gate.aiText': 'Ask by voice or text',
   'home.recent': 'Latest reports',
+  'home.recentCount': '{n} latest',
   'home.seeMap': 'View map',
 
   // ── Senior Mode ──

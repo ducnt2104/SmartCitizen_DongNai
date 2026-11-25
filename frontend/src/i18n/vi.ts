@@ -41,12 +41,15 @@ export const vi = {
   'scope.groupXa': '62 Xã (TP. Đồng Nai)',
 
   // ── Trang chủ ──
-  'home.tagline': 'Cổng phản hồi của người dân Thành phố Đồng Nai',
-  'home.heroTitle': 'Thấy sự cố? Báo cáo trong 3 bước.',
-  'home.heroText': 'Chụp ảnh — AI tự điền đơn — gửi. Hồ sơ hiển thị ngay trên thiết bị.',
-  'home.cta': 'Báo cáo ngay',
+  'home.tagline': 'Cổng công dân số · 95 Phường & Xã Đồng Nai',
+  'home.heroTitle': 'Thấy sự cố đô thị? Báo cáo trong 30 giây.',
+  'home.heroText': 'Chụp ảnh hiện trường, chọn vị trí và theo dõi tiến độ xử lý minh bạch.',
+  'home.cta': 'Báo cáo sự cố ngay',
+  'home.heroMapCta': 'Bản đồ',
+  'home.heroImgAlt': 'Toàn cảnh đô thị ven sông Đồng Nai và cầu dây văng hiện đại',
   'home.kpiTitle': 'Minh bạch cộng đồng',
   'home.kpiTotal': 'Phản ánh',
+  'home.kpiTotalSub': 'hồ sơ',
   'home.kpiDone': 'Đã xử lý',
   'home.kpiAvg': 'TB xử lý',
   'home.days': 'ngày',
@@ -59,6 +62,7 @@ export const vi = {
   'home.gate.ai': 'Trợ lý AI Cộng đồng',
   'home.gate.aiText': 'Hỏi bằng giọng nói hoặc gõ chữ',
   'home.recent': 'Phản ánh mới nhất',
+  'home.recentCount': '{n} mới nhất',
   'home.seeMap': 'Xem bản đồ',
 
   // ── Chế độ người cao tuổi ──

@@ -107,7 +107,7 @@ const XA_ROWS: readonly Row[] = [
   ['PLA', 'Phú Lâm', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.318, 107.482, false, ['Phú Bình (Tân Phú)', 'Thanh Sơn (Tân Phú)', 'Phú Sơn']],
   ['DLU', 'Đak Lua', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.448, 107.425, false, ['Đắc Lua', 'Xã Đak Lua']],
   ['PLY', 'Phú Lý', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.265, 107.048, false, ['Xã Phú Lý']],
-  ['TAN', 'Tân An', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.045, 106.915, false, ['Vĩnh Tân']],
+  ['TAN', 'Tân An', 'X', 'dong_bac_cat_tien', 'Nông thôn - Sinh thái', 11.038, 106.942, false, ['Vĩnh Tân']],
 
   // ── Bắc Đồng Nai — Chơn Thành, Hớn Quản, Lộc Ninh, Bù Đốp, Bù Gia Mập, Phú Riềng, Đồng Phú, Bù Đăng (29 xã) ──
   ['NBI', 'Nha Bích', 'X', 'bac_dong_nai', 'Công nghiệp', 11.445, 106.715, false, ['Minh Thắng', 'Minh Lập']],
