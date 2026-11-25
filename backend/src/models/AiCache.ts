@@ -31,7 +31,7 @@ const aiCacheSchema = new Schema<IAiCache>(
     },
     kind: { type: String, enum: AI_CACHE_KINDS, required: true },
     pHash: { type: String, trim: true, lowercase: true, maxlength: 64, default: null },
-    modelName: { type: String, trim: true, maxlength: 80, default: 'gemini-3.5-flash-lite', required: true },
+    modelName: { type: String, trim: true, maxlength: 80, default: 'gemini-2.5-flash', required: true },
     payload: { type: Schema.Types.Mixed, required: true },
     hitCount: { type: Number, default: 0, min: 0, required: true },
     expiresAt: {

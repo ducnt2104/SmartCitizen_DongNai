@@ -1,16 +1,28 @@
-import { parseGeminiKeyRouting } from './cryptoVault';
+import { parseGeminiKeyRouting, redactSecretsInText } from './cryptoVault';
 import { sanitizeUpstreamErrorReason } from './errorClassifier';
-import type { GeminiEndpointKind } from './types';
+import type { GeminiEndpointKind, GeminiKeyFormat } from './types';
 
-/** Chuỗi model Gemini 2026 ổn định theo thứ tự: Tốc độ tối đa -> Đa phương thức cân bằng -> Độ chính xác cao. */
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
+/** Chuỗi model Gemini Flash chính thức, ổn định & tốc độ cao: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`. */
+export const PRIMARY_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_GEMINI_MODEL = PRIMARY_GEMINI_MODEL;
+export const FALLBACK_GEMINI_MODEL = 'gemini-2.0-flash';
 export const ACTIVE_GEMINI_MODEL_CHAIN: readonly string[] = [
-  'gemini-3.5-flash-lite',
-  'gemini-3.6-flash',
-  'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
 ] as const;
 
-const DEPRECATED_GEMINI_MODEL_RE = /^gemini-(?:1\.5|2\.0|2\.5)(?:-|$)/i;
+export const SUPPORTED_GEMINI_MODELS: ReadonlySet<string> = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.5-pro',
+]);
+
+const DEPRECATED_OR_INVALID_GEMINI_MODEL_RE =
+  /^(?:gemini-(?:1\.0|1\.5|3\.5|3\.6|3\.8)(?:-|$)|gemini-2\.0-flash-exp$)/i;
+const warnedUnsupportedModels = new Set<string>();
 
 export interface GeminiRestConfig {
   systemInstruction?: string;
@@ -18,29 +30,45 @@ export interface GeminiRestConfig {
   maxOutputTokens?: number;
   responseMimeType?: string;
   responseSchema?: Record<string, unknown>;
-  /** Tuỳ chọn cho Gemini 3.5+: dùng thinkingLevel thay vì thinkingBudget đã lỗi thời. */
+  /** Tắt thinking (`0`) trên Gemini 2.5 để tối ưu độ trễ < 2s. */
+  thinkingBudget?: number;
+  /** Tuỳ chọn cho các dòng hỗ trợ thinkingLevel. */
   thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH';
 }
 
 export interface ExecuteGeminiChainOptions {
   apiKey: string;
   geminiEndpoint?: GeminiEndpointKind;
+  keyFormat?: GeminiKeyFormat;
   models: readonly string[];
   contents: unknown | ((modelId: string) => unknown);
   config?: GeminiRestConfig | ((modelId: string) => GeminiRestConfig);
   timeoutMs: number;
   label: string;
   fetchImpl?: typeof fetch;
-  /** Cho phép thử Vertex Express đúng 1 lần nếu key `AQ.*` mặc định AI Studio bị từ chối 401/403. */
+  /** Cho phép thử Vertex Express đúng 1 lần nếu key `AQ.*` bị gọi nhầm qua AI Studio và trả về 401/403. */
   allowAqVertexFallbackOnAuthError?: boolean;
   onModelNotFound?: (modelId: string, err: unknown) => void;
   onModelSuccess?: (modelId: string, endpoint: GeminiEndpointKind) => void;
 }
 
-/** Chuẩn hóa tên model Gemini: nâng cấp tự động các model đã ngừng hỗ trợ (`1.5`/`2.0`/`2.5`) sang `gemini-3.5-flash-lite`. */
+export function isValidGeminiModel(modelId?: string | null): boolean {
+  const trimmed = (modelId ?? '').trim();
+  if (!trimmed || DEPRECATED_OR_INVALID_GEMINI_MODEL_RE.test(trimmed)) return false;
+  return SUPPORTED_GEMINI_MODELS.has(trimmed);
+}
+
+/** Chuẩn hóa tên model Gemini: thay thế các model cũ/không hợp lệ (`gemini-1.5-*`, `gemini-3.5-*`, ...) về `gemini-2.5-flash`. */
 export function normalizeGeminiModelName(rawModel?: string | null): string {
   const trimmed = (rawModel ?? '').trim();
-  if (!trimmed || DEPRECATED_GEMINI_MODEL_RE.test(trimmed)) {
+  if (!trimmed) return DEFAULT_GEMINI_MODEL;
+  if (!isValidGeminiModel(trimmed)) {
+    if (!warnedUnsupportedModels.has(trimmed)) {
+      warnedUnsupportedModels.add(trimmed);
+      console.warn(
+        `[ai] Model "${trimmed}" không nằm trong danh sách model Gemini ổn định (${Array.from(SUPPORTED_GEMINI_MODELS).join(', ')}). Tự động chuyển sang "${DEFAULT_GEMINI_MODEL}".`,
+      );
+    }
     return DEFAULT_GEMINI_MODEL;
   }
   return trimmed;
@@ -56,23 +84,36 @@ export function isCloudAiAllowed(configuredKeyCount: number, staticDefault = fal
   return configuredKeyCount > 0 || staticDefault;
 }
 
-/** Xây dựng chuỗi model dự phòng bắt đầu từ model cấu hình (hoặc model live vừa thành công). */
+/** Xây dựng chuỗi model dự phòng bắt đầu từ model cấu hình (hoặc tự động hạ cấp sang FALLBACK_GEMINI_MODEL khi 503 liên tiếp). */
 export function buildGeminiModelChain(
   configuredModel?: string | null,
   cachedLiveModel?: string | null,
+  options?: { preferFallbackModel?: boolean; fallbackModel?: string },
 ): string[] {
   const normalizedConfigured = normalizeGeminiModelName(configuredModel);
   const normalizedCached =
-    cachedLiveModel && !DEPRECATED_GEMINI_MODEL_RE.test(cachedLiveModel.trim())
-      ? cachedLiveModel.trim()
-      : null;
+    cachedLiveModel && isValidGeminiModel(cachedLiveModel) ? cachedLiveModel.trim() : null;
+
+  if (options?.preferFallbackModel) {
+    const fb = normalizeGeminiModelName(options.fallbackModel ?? FALLBACK_GEMINI_MODEL);
+    const ordered = [
+      fb,
+      'gemini-2.5-flash-lite',
+      ...ACTIVE_GEMINI_MODEL_CHAIN,
+    ].filter((m) => isValidGeminiModel(m));
+    const unique = Array.from(new Set(ordered));
+    // Đẩy model chính đang bị 503 xuống cuối (chỉ dùng nếu mọi fallback đều 404)
+    const primary = normalizedConfigured;
+    const withoutPrimary = unique.filter((m) => m !== primary);
+    return withoutPrimary.length > 0 ? [...withoutPrimary, primary] : unique;
+  }
 
   const chain = [
     ...(normalizedCached ? [normalizedCached] : []),
     normalizedConfigured,
     ...ACTIVE_GEMINI_MODEL_CHAIN,
-  ];
-  return Array.from(new Set(chain));
+  ].filter((m) => isValidGeminiModel(m));
+  return Array.from(new Set(chain.length > 0 ? chain : ACTIVE_GEMINI_MODEL_CHAIN));
 }
 
 export function isModelNotFoundError(err: unknown): boolean {
@@ -100,10 +141,11 @@ export function isGeminiAuthOrInvalidKeyError(err: unknown): boolean {
   );
 }
 
-/** Tạo URL, headers và payload REST chuẩn cho Google AI Studio hoặc Vertex AI Express Mode. */
+/** Tạo URL, headers và payload REST chuẩn cho Google AI Studio, Vertex AI Express Mode hoặc OAuth Bearer. */
 export function buildGeminiRestRequest(params: {
   cleanKey: string;
   endpoint: GeminiEndpointKind;
+  keyFormat?: GeminiKeyFormat;
   modelId: string;
   contents: unknown;
   config?: GeminiRestConfig;
@@ -113,15 +155,24 @@ export function buildGeminiRestRequest(params: {
   body: Record<string, unknown>;
   endpointLabel: 'AIStudio' | 'VertexAI';
 } {
-  const isVertex = params.endpoint === 'vertex';
-  const encodedModel = encodeURIComponent(params.modelId);
+  const isOAuthBearer = params.keyFormat === 'oauth_bearer' || params.cleanKey.startsWith('ya29.');
+  const isVertex = params.endpoint === 'vertex' || (!isOAuthBearer && params.cleanKey.startsWith('AQ.'));
+  const resolvedModel = isValidGeminiModel(params.modelId) ? params.modelId.trim() : DEFAULT_GEMINI_MODEL;
+  const encodedModel = encodeURIComponent(resolvedModel);
+
   const url = isVertex
-    ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent?key=${encodeURIComponent(params.cleanKey)}`
+    ? isOAuthBearer
+      ? `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent`
+      : `https://aiplatform.googleapis.com/v1/publishers/google/models/${encodedModel}:generateContent?key=${encodeURIComponent(params.cleanKey)}`
     : `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}:generateContent`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(isVertex ? {} : { 'x-goog-api-key': params.cleanKey }),
+    ...(isOAuthBearer
+      ? { Authorization: `Bearer ${params.cleanKey}` }
+      : isVertex
+        ? {}
+        : { 'x-goog-api-key': params.cleanKey }),
   };
 
   const cfg = params.config ?? {};
@@ -130,8 +181,9 @@ export function buildGeminiRestRequest(params: {
   if (cfg.maxOutputTokens !== undefined) generationConfig.maxOutputTokens = cfg.maxOutputTokens;
   if (cfg.responseMimeType !== undefined) generationConfig.responseMimeType = cfg.responseMimeType;
   if (cfg.responseSchema !== undefined) generationConfig.responseSchema = cfg.responseSchema;
-  // Tương thích Gemini 3.5+: dùng thinkingLevel thay vì thinkingBudget lỗi thời (mặc định bỏ qua để đạt độ trễ thấp nhất)
-  if (cfg.thinkingLevel !== undefined) {
+  if (cfg.thinkingBudget !== undefined) {
+    generationConfig.thinkingConfig = { thinkingBudget: cfg.thinkingBudget };
+  } else if (cfg.thinkingLevel !== undefined) {
     generationConfig.thinkingConfig = { thinkingLevel: cfg.thinkingLevel };
   }
 
@@ -162,6 +214,7 @@ export function buildGeminiRestRequest(params: {
 async function callSingleGeminiRequest(params: {
   cleanKey: string;
   endpoint: GeminiEndpointKind;
+  keyFormat?: GeminiKeyFormat;
   modelId: string;
   contents: unknown;
   config?: GeminiRestConfig;
@@ -172,12 +225,13 @@ async function callSingleGeminiRequest(params: {
   const req = buildGeminiRestRequest({
     cleanKey: params.cleanKey,
     endpoint: params.endpoint,
+    keyFormat: params.keyFormat,
     modelId: params.modelId,
     contents: params.contents,
     config: params.config,
   });
 
-  const effectiveTimeoutMs = Math.min(params.timeoutMs, 8_000);
+  const effectiveTimeoutMs = Math.max(1_000, Math.min(params.timeoutMs, 6_000));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), effectiveTimeoutMs);
   try {
@@ -193,10 +247,13 @@ async function callSingleGeminiRequest(params: {
       if (ctrl.signal.aborted) {
         throw Object.assign(
           new Error(`${params.label} ${req.endpointLabel}(${params.modelId}) quá thời gian ${effectiveTimeoutMs}ms`),
-          { status: 408 },
+          { status: 408, code: 'UPSTREAM_TIMEOUT' },
         );
       }
-      throw err;
+      const msg = err instanceof Error ? redactSecretsInText(err.message) : redactSecretsInText(String(err));
+      throw Object.assign(new Error(msg || `${req.endpointLabel}(${params.modelId}) fetch failed`), {
+        cause: undefined,
+      });
     }
 
     if (!res.ok) {
@@ -228,9 +285,11 @@ async function runChainOnEndpoint(
   opts: ExecuteGeminiChainOptions,
   cleanKey: string,
   endpoint: GeminiEndpointKind,
+  keyFormat: GeminiKeyFormat,
   fetchImpl: typeof fetch,
 ): Promise<{ text: string; modelUsed: string; endpointUsed: GeminiEndpointKind }> {
-  const models = opts.models.length > 0 ? opts.models : ACTIVE_GEMINI_MODEL_CHAIN;
+  const validModels = opts.models.filter((m) => isValidGeminiModel(m));
+  const models = validModels.length > 0 ? validModels : ACTIVE_GEMINI_MODEL_CHAIN;
   let lastErr: unknown = null;
 
   for (const modelId of models) {
@@ -242,6 +301,7 @@ async function runChainOnEndpoint(
       const text = await callSingleGeminiRequest({
         cleanKey,
         endpoint,
+        keyFormat,
         modelId,
         contents: resolvedContents,
         config: resolvedConfig,
@@ -270,31 +330,59 @@ async function runChainOnEndpoint(
 /**
  * Thực thi gọi Gemini REST qua chuỗi model dự phòng trên CÙNG một API key khỏe:
  * - Gặp HTTP 404: tự động chuyển sang model kế tiếp trong chuỗi trên cùng key (không đánh dấu key hỏng).
- * - Gặp HTTP 429 / 503: ném lỗi ngay để KeyPool Cooldown và xoay key tức thì.
- * - Gặp HTTP 401 / 403 trên AI Studio với key `AQ.*`: tùy chọn thử Vertex Express 1 lần trước khi báo INVALID.
+ * - Gặp HTTP 429 / 503: ném lỗi ngay để KeyPool Cooldown + Backoff và xoay key tức thì.
+ * - Định tuyến nghiêm ngặt: chỉ `AIzaSy*` mặc định chạy AI Studio; `AQ.*` mặc định chạy Vertex AI Express.
  */
 export async function executeGeminiWithModelFallback(
   opts: ExecuteGeminiChainOptions,
 ): Promise<{ text: string; modelUsed: string; endpointUsed: GeminiEndpointKind }> {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const { cleanKey, geminiEndpoint } = parseGeminiKeyRouting(
-    opts.apiKey,
-    opts.geminiEndpoint ?? 'ai_studio',
-  );
+  const routing = parseGeminiKeyRouting(opts.apiKey, opts.geminiEndpoint ?? 'ai_studio');
+  const keyFormat = opts.keyFormat ?? routing.keyFormat;
 
   try {
-    return await runChainOnEndpoint(opts, cleanKey, geminiEndpoint, fetchImpl);
+    return await runChainOnEndpoint(opts, routing.cleanKey, routing.geminiEndpoint, keyFormat, fetchImpl);
   } catch (err) {
     const canTryVertexOnce =
       opts.allowAqVertexFallbackOnAuthError !== false &&
-      geminiEndpoint === 'ai_studio' &&
-      /^AQ\./.test(cleanKey) &&
+      routing.geminiEndpoint === 'ai_studio' &&
+      /^AQ\./.test(routing.cleanKey) &&
       isGeminiAuthOrInvalidKeyError(err);
 
     if (!canTryVertexOnce) {
       throw err;
     }
 
-    return await runChainOnEndpoint(opts, cleanKey, 'vertex', fetchImpl);
+    return await runChainOnEndpoint(opts, routing.cleanKey, 'vertex', keyFormat, fetchImpl);
   }
+}
+
+/** Kiểm tra trực tiếp một key Gemini (`AIzaSy*` qua AI Studio hoặc `AQ.*`/`ya29.*` qua Vertex/OAuth). */
+export async function probeGeminiKeyEndpoint(params: {
+  apiKey: string;
+  geminiEndpoint?: GeminiEndpointKind;
+  keyFormat?: GeminiKeyFormat;
+  defaultModel?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}): Promise<{ ok: boolean; endpointUsed: GeminiEndpointKind; modelUsed: string; detail: string }> {
+  const modelsToTry = buildGeminiModelChain(params.defaultModel ?? DEFAULT_GEMINI_MODEL);
+  const { text, modelUsed, endpointUsed } = await executeGeminiWithModelFallback({
+    apiKey: params.apiKey,
+    geminiEndpoint: params.geminiEndpoint,
+    keyFormat: params.keyFormat,
+    models: modelsToTry,
+    contents: [{ role: 'user', parts: [{ text: 'Trả lời duy nhất từ: OK' }] }],
+    config: { maxOutputTokens: 5, temperature: 0 },
+    timeoutMs: params.timeoutMs ?? 8_000,
+    label: 'KeyPool Probe',
+    fetchImpl: params.fetchImpl,
+  });
+  const endpointLabel = endpointUsed === 'vertex' ? 'Vertex AI' : 'Google AI Studio';
+  return {
+    ok: true,
+    endpointUsed,
+    modelUsed,
+    detail: `${endpointLabel} (${modelUsed}) phản hồi thành công${text ? `: "${text.trim().slice(0, 24)}"` : ''}.`,
+  };
 }

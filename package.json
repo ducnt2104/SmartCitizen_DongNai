@@ -11,6 +11,7 @@
     "build:frontend": "npm run build --prefix frontend",
     "typecheck": "npm run typecheck --prefix backend && npm run typecheck --prefix frontend",
     "test": "npm test --prefix backend && npm test --prefix frontend",
+    "test:ai-pool": "npm run test:ai-pool --prefix backend",
     "test:engine": "cargo test --manifest-path engine/Cargo.toml",
     "dev:engine": "cargo run --release --manifest-path engine/Cargo.toml",
     "dev:backend": "npm run dev --prefix backend",

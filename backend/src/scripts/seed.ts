@@ -393,7 +393,7 @@ export function buildTranBien64PilotIncidents(
         matchedIncidentId: null,
         sceneMatchScore,
         resolutionScore,
-        modelVersion: 'gemini-3.5-flash-lite',
+        modelVersion: 'gemini-2.5-flash',
         evaluatedAt: createdAt,
       },
       priorityScore,

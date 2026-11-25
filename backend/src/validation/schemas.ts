@@ -176,8 +176,11 @@ export const schemas = {
     pHash: hash.optional(),
     subGridHashes: z.array(hash).max(9).optional(),
     colorHistogram: z.array(z.number().min(0).max(1)).max(32).optional(),
+    imageSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+    forceCloud: z.boolean().optional(),
+    skipCache: z.boolean().optional(),
     category: category.optional(),
-    hintText: z.string().max(500).optional(),
+    hintText: z.string().trim().max(500).optional(),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
     wardCode: wardCode.optional(),
@@ -196,8 +199,8 @@ export const schemas = {
   tacticalBriefing: z.object({
     reportId: z.string().min(3).max(64).optional(),
     category: category.optional(),
-    title: z.string().min(3).max(140).optional(),
-    description: z.string().max(800).optional(),
+    title: z.string().trim().min(4, 'Tiêu đề sự cố cần tối thiểu 4 ký tự.').max(140).optional(),
+    description: z.string().trim().max(800).optional(),
     severity: z.number().int().min(1).max(5).optional(),
     isEmergency: z.boolean().optional(),
     wardCode: wardCode.optional(),
@@ -206,7 +209,7 @@ export const schemas = {
   }),
   chat: z.object({
     messages: z
-      .array(z.object({ role: z.enum(['user', 'model']), text: z.string().min(1).max(2000) }))
+      .array(z.object({ role: z.enum(['user', 'model']), text: z.string().trim().min(1, 'Tin nhắn không được để trống.').max(2000) }))
       .min(1)
       .max(20),
     wardCode: wardCode.optional(),
@@ -219,6 +222,8 @@ export const schemas = {
     aiSuggestedLabel: z.string().max(80).nullable().optional(),
     title: z.string().min(3).max(140),
     description: z.string().max(800).default(''),
+    severity: z.coerce.number().int().min(1).max(5).optional(),
+    isEmergency: z.boolean().optional(),
     lat: z.number().finite(),
     lng: z.number().finite(),
     wardCode: wardCode.optional(),

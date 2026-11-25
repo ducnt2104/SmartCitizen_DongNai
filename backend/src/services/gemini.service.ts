@@ -27,6 +27,7 @@ import {
   computeRawFullSsim,
   runImageForensics,
   stage0PreFilter,
+  Stage0PreFilterService,
   VisionAnalyzerService,
   type Stage0ExifInput,
 } from './ai';
@@ -46,6 +47,7 @@ import {
   sanitizeUpstreamErrorReason,
   type ApiKeyProvider,
   type GeminiEndpointKind,
+  type GeminiKeyFormat,
   type GeminiRestConfig,
   type KeyPoolSummary,
 } from './keyPool';
@@ -70,6 +72,7 @@ export interface EdgeStats {
 export interface AnalyzeInput {
   imageBase64?: string;
   imageBuffer?: Buffer;
+  imageSha256?: string;
   mimeType: string;
   dHash: string;
   pHash?: string;
@@ -177,10 +180,12 @@ export interface AiDiagnosticResult {
   detail: string;
 }
 
+const MIN_AI_TEXT_LENGTH = 4;
+
 const TacticalBriefingZ = z.object({
-  riskSummary: z.string().min(5).max(320),
-  equipmentAndCrew: z.string().min(5).max(320),
-  safetyWarning: z.string().min(5).max(320),
+  riskSummary: z.string().trim().max(320).optional().default(''),
+  equipmentAndCrew: z.string().trim().max(320).optional().default(''),
+  safetyWarning: z.string().trim().max(320).optional().default(''),
 });
 
 const VerifyZ = z.object({
@@ -191,7 +196,7 @@ const VerifyZ = z.object({
   sceneMatchScore: z.coerce.number().min(0).max(100).optional(),
   resolutionScore: z.coerce.number().min(0).max(100).optional(),
   fraudFlags: z.array(z.string().max(60)).max(6).default([]),
-  summary: z.string().min(3).max(500),
+  summary: z.string().trim().max(500).optional().default(''),
 });
 
 const VERIFY_SCHEMA: Record<string, unknown> = {
@@ -225,7 +230,7 @@ const BulletinClassificationZ = z.object({
   severity: z.coerce.number().int().min(1).max(3),
   wardIds: z.array(z.string().max(24)).max(25).default(['ALL_DONG_NAI']),
   affectedRoads: z.array(z.string().max(120)).max(10).default([]),
-  cleanSummary: z.string().min(4).max(400),
+  cleanSummary: z.string().trim().max(400).optional().default(''),
 });
 
 const BULLETIN_SCHEMA: Record<string, unknown> = {
@@ -242,7 +247,7 @@ const BULLETIN_SCHEMA: Record<string, unknown> = {
 };
 
 const DailyDigestZ = z.object({
-  bullets: z.array(z.string().min(8).max(260)).min(1).max(4),
+  bullets: z.array(z.string().trim().max(260)).max(4).default([]),
 });
 
 const DAILY_DIGEST_SCHEMA: Record<string, unknown> = {
@@ -334,19 +339,23 @@ export function extractJsonObject(raw: string): string {
   return candidate;
 }
 
-export function safeParseStructuredJson<T>(raw: string, schema: z.ZodType<T>): T {
+export function safeParseStructuredJson<S extends z.ZodTypeAny>(raw: string, schema: S): z.output<S> {
   const cleanJson = extractJsonObject(raw);
   const parsed = JSON.parse(cleanJson) as unknown;
-  return schema.parse(parsed);
+  return schema.parse(parsed) as z.output<S>;
 }
 
 let cachedLiveGeminiModel: string | null = null;
 
-/** Chuỗi model Gemini 2026 ổn định: `gemini-3.5-flash-lite` -> `gemini-3.6-flash` -> `gemini-3.8-flash`. */
-export function resolveGeminiModelChain(configuredModel?: string): string[] {
+/** Chuỗi model Gemini chính thức, ổn định 2026: `gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`. */
+export function resolveGeminiModelChain(
+  configuredModel?: string,
+  options?: { preferFallbackModel?: boolean; fallbackModel?: string },
+): string[] {
   return buildGeminiModelChain(
     configuredModel !== undefined ? configuredModel : env.geminiModel,
-    configuredModel === undefined ? cachedLiveGeminiModel : null,
+    configuredModel === undefined && !options?.preferFallbackModel ? cachedLiveGeminiModel : null,
+    options,
   );
 }
 
@@ -385,8 +394,8 @@ function inferSuggestedOtherLabel(text: string): string {
 
 /**
  * Tạo cấu hình `@google/genai` SDK theo định tuyến key:
- * - Mặc định mọi key Google AI Studio (cả `AQ.*` và `AIzaSy*`) đều dùng Google AI Studio (`generativelanguage.googleapis.com`).
- * - Chỉ định tuyến Vertex AI (`vertexai: true`) khi được tag `vertex:` hoặc cấu hình trong `VERTEX_API_KEYS`.
+ * - Chỉ key Google AI Studio (`AIzaSy*`) mới định tuyến tới Google AI Studio (`generativelanguage.googleapis.com`).
+ * - Key dạng `AQ.*`, tag `vertex:` hoặc cấu hình trong `VERTEX_API_KEYS` định tuyến tới Vertex AI (`vertexai: true`).
  */
 export function buildGoogleGenAiClientOptions(
   apiKey: string,
@@ -404,7 +413,7 @@ export function buildGoogleGenAiClientOptions(
 
 /**
  * Zero-Crash SmartCitizen AI Brain:
- *  1) Multi-Key Cloud Pool (`gemini-3.5-flash-lite` -> `gemini-3.6-flash` -> `gemini-3.8-flash`, OpenRouter, Groq) có Zod validation chặt.
+ *  1) Multi-Key Cloud Pool (`gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`, OpenRouter, Groq) có kiểm chuẩn schema an toàn.
  *  2) Rust Native CV Engine (:8001) cho thẩm định ảnh giả/screenshot & nghiệm thu Trước–Sau (<50ms).
  *  3) Local LLM (Ollama :11434 / llama.cpp) + BM25 RAG.
  *  4) Deterministic Rule-Based SOP Fallback đảm bảo 100% không bao giờ văng lỗi 500 trong vận hành thực tế.
@@ -481,10 +490,10 @@ export class GeminiService {
   }
 
   /**
-   * Gọi Gemini qua chuỗi model 2026 ổn định (`gemini-3.5-flash-lite` -> `gemini-3.6-flash` -> `gemini-3.8-flash`):
-   * - Mặc định định tuyến mọi key trong `GEMINI_API_KEYS` (cả `AIzaSy*` và `AQ.*`) tới Google AI Studio (`x-goog-api-key`).
-   * - Chỉ định tuyến Vertex AI (`aiplatform.googleapis.com`) cho key từ `VERTEX_API_KEYS` hoặc tiền tố `vertex:`.
-   * - Gặp HTTP 404: tự động chuyển model kế tiếp trên CÙNG một key khỏe; 401/403 trên `AQ.*` AI Studio thử Vertex Express 1 lần trước khi báo INVALID.
+   * Gọi Gemini qua chuỗi model ổn định (`gemini-2.5-flash` -> `gemini-2.5-flash-lite` -> `gemini-2.0-flash`):
+   * - Chỉ key `AIzaSy*` định tuyến Google AI Studio (`x-goog-api-key`); `AQ.*` định tuyến Vertex AI Express (`aiplatform.googleapis.com`).
+   * - Gặp HTTP 404: tự động chuyển model kế tiếp trên CÙNG một key khỏe.
+   * - Khi `preferFallbackModel` bật (sau 3 key liên tiếp 503): tự động hạ cấp sang `fallbackModel` (`gemini-2.0-flash`) cho request đó.
    */
   private async generateGeminiWithModelChain(
     apiKey: string,
@@ -492,21 +501,32 @@ export class GeminiService {
     buildParams: (modelId: string) => GeminiRestGenerateParams,
     timeoutMs: number,
     label: string,
+    routingOpts?: {
+      keyFormat?: GeminiKeyFormat;
+      preferFallbackModel?: boolean;
+      fallbackModel?: string;
+    },
   ): Promise<{ text: string; modelUsed: string }> {
-    const models = resolveGeminiModelChain();
+    const models = resolveGeminiModelChain(undefined, {
+      preferFallbackModel: routingOpts?.preferFallbackModel,
+      fallbackModel: routingOpts?.fallbackModel,
+    });
     const { text, modelUsed } = await executeGeminiWithModelFallback({
       apiKey,
       geminiEndpoint: geminiEndpoint ?? 'ai_studio',
+      keyFormat: routingOpts?.keyFormat,
       models,
       contents: (modelId: string) => buildParams(modelId).contents,
       config: (modelId: string) => (buildParams(modelId).config ?? {}) as GeminiRestConfig,
-      timeoutMs: Math.min(timeoutMs, 8_000),
+      timeoutMs: Math.min(timeoutMs, 6_000),
       label,
       onModelNotFound: (modelId: string) => {
         console.warn(`[ai] Model "${modelId}" trả 404, tự động chuyển sang model dự phòng kế tiếp trên cùng key...`);
       },
       onModelSuccess: (modelId: string) => {
-        cachedLiveGeminiModel = modelId;
+        if (!routingOpts?.preferFallbackModel) {
+          cachedLiveGeminiModel = modelId;
+        }
       },
     });
     return { text, modelUsed };
@@ -590,7 +610,12 @@ export class GeminiService {
     }
   }
 
-  private async callOllamaJson<T>(systemPrompt: string, userPrompt: string, schema: z.ZodType<T>, timeoutMs = 4500): Promise<T | null> {
+  private async callOllamaJson<S extends z.ZodTypeAny>(
+    systemPrompt: string,
+    userPrompt: string,
+    schema: S,
+    timeoutMs = 4500,
+  ): Promise<z.output<S> | null> {
     if (Date.now() < this.ollamaOfflineUntil) return null;
     try {
       const ctrl = new AbortController();
@@ -641,7 +666,7 @@ export class GeminiService {
         : 'https://api.groq.com/openai/v1/chat/completions';
     const model =
       params.provider === 'openrouter'
-        ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-3.5-flash-lite'
+        ? process.env.OPENROUTER_MODEL?.trim() || 'google/gemini-2.5-flash'
         : process.env.GROQ_MODEL?.trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
 
     const effectiveTimeoutMs = Math.min(params.timeoutMs, 8_000);
@@ -692,7 +717,10 @@ export class GeminiService {
 
   // ── SmartCitizen AI Brain: Tactical Briefing 3 Dòng cho Đội Cứu Hộ & IOC ──
   deterministicTacticalBriefing(input: TacticalBriefingInput, mode: AiMode = 'fallback'): TacticalBriefing {
-    const text = `${input.title} ${input.description ?? ''} ${(input.safetyHazards ?? []).join(' ')}`.toLowerCase();
+    const safeTitle = sanitizeUserText(input.title ?? '', 140);
+    const safeDesc = sanitizeUserText(input.description ?? '', 400);
+    const displayTitle = safeTitle.length >= MIN_AI_TEXT_LENGTH ? safeTitle : 'Sự cố hạ tầng công cộng';
+    const text = `${safeTitle} ${safeDesc} ${(input.safetyHazards ?? []).join(' ')}`.toLowerCase();
     const wardLabel = input.wardCode ? WARD_BY_CODE[input.wardCode]?.name ?? input.wardCode : 'khu vực hiện trường';
     const roadNote = input.roadName ? ` trên trục huyết mạch ${input.roadName}` : input.onArterial ? ' trên tuyến giao thông chính' : '';
     const isSos = Boolean(input.isEmergency || (input.severity ?? 3) >= 5 || EMERGENCY_WORDS.test(text));
@@ -750,7 +778,7 @@ export class GeminiService {
         safetyWarning =
           'Quan sát vết nứt đỉnh taluy liên tục; cấm phương tiện qua lại và giữ lối thoát hiểm nhanh cho lực lượng dọn dẹp.';
       } else {
-        riskSummary = `${isSos ? 'Sự cố khẩn cấp' : 'Sự cố hạ tầng đô thị'} (${input.title}) tại ${wardLabel}${roadNote} cần xác minh & xử lý hiện trường.`;
+        riskSummary = `${isSos ? 'Sự cố khẩn cấp' : 'Sự cố hạ tầng đô thị'} (${displayTitle}) tại ${wardLabel}${roadNote} cần xác minh & xử lý hiện trường.`;
         equipmentAndCrew =
           '01 Tổ Phản ứng nhanh Phường/Xã (2–4 cán bộ), bộ rào chắn di động, đèn pin công suất cao và bộ dụng cụ đa năng.';
         safetyWarning =
@@ -770,23 +798,51 @@ export class GeminiService {
 
   async generateTacticalBriefing(input: TacticalBriefingInput): Promise<TacticalBriefing> {
     const t0 = performance.now();
-    const cacheKey = `${input.reportId ?? ''}:${input.category}:${input.severity ?? 3}:${input.title.slice(0, 60)}`;
+    const cleanTitle = sanitizeUserText(input.title ?? '', 140);
+    const cleanDesc = sanitizeUserText(input.description ?? '', 400);
+    const cacheKey = `${input.reportId ?? ''}:${input.category}:${input.severity ?? 3}:${cleanTitle.slice(0, 60)}`;
     if (!input.forceRefresh) {
       const hit = this.briefingCache.get(cacheKey);
       if (hit) return hit;
     }
 
+    // Kiểm tra đầu vào ngay tại tầng Service: không gọi KeyPool nếu title & description đều quá ngắn (< 4 ký tự)
+    if (cleanTitle.length < MIN_AI_TEXT_LENGTH && cleanDesc.length < MIN_AI_TEXT_LENGTH) {
+      const safeFallback = this.deterministicTacticalBriefing(input, 'fallback');
+      safeFallback.latencyMs = Math.round((performance.now() - t0) * 10) / 10;
+      this.briefingCache.set(cacheKey, safeFallback);
+      return safeFallback;
+    }
+
     const wardLabel = input.wardCode ? WARD_BY_CODE[input.wardCode]?.name ?? input.wardCode : 'TP. Đồng Nai';
     const userPrompt = [
       `Loại sự cố: ${input.category}`,
-      `Tiêu đề: ${sanitizeUserText(input.title, 140)}`,
-      input.description ? `Mô tả: ${sanitizeUserText(input.description, 400)}` : '',
+      `Tiêu đề: ${cleanTitle || 'Sự cố hạ tầng đô thị'}`,
+      cleanDesc ? `Mô tả: ${cleanDesc}` : '',
       `Mức độ: ${input.severity ?? 3}/5 | Khẩn cấp SOS: ${Boolean(input.isEmergency)}`,
       `Địa điểm: ${input.address || wardLabel}${input.roadName ? ` (Trục chính: ${input.roadName})` : ''}`,
       input.safetyHazards?.length ? `Mối nguy đã phát hiện: ${input.safetyHazards.join(', ')}` : '',
     ]
       .filter(Boolean)
       .join('\n');
+
+    const normalizeBriefingFields = (
+      raw: z.output<typeof TacticalBriefingZ>,
+      mode: AiMode,
+    ): TacticalBriefing => {
+      const base = this.deterministicTacticalBriefing(input, mode);
+      const r = (raw.riskSummary ?? '').trim();
+      const e = (raw.equipmentAndCrew ?? '').trim();
+      const s = (raw.safetyWarning ?? '').trim();
+      return {
+        riskSummary: r.length >= 5 ? r : base.riskSummary,
+        equipmentAndCrew: e.length >= 5 ? e : base.equipmentAndCrew,
+        safetyWarning: s.length >= 5 ? s : base.safetyWarning,
+        mode,
+        generatedAt: new Date().toISOString(),
+        latencyMs: Math.round((performance.now() - t0) * 10) / 10,
+      };
+    };
 
     if (await this.cloudAllowed()) {
       try {
@@ -820,18 +876,18 @@ export class GeminiService {
               }),
               8_000,
               'Gemini TacticalBriefing',
+              {
+                keyFormat: meta.keyFormat,
+                preferFallbackModel: meta.preferFallbackModel,
+                fallbackModel: meta.fallbackModel,
+              },
             );
             return safeParseStructuredJson(text, TacticalBriefingZ);
           },
           { operationName: 'Gemini TacticalBriefing' },
         );
         this.ok();
-        const out: TacticalBriefing = {
-          ...parsed,
-          mode: 'gemini',
-          generatedAt: new Date().toISOString(),
-          latencyMs: Math.round((performance.now() - t0) * 10) / 10,
-        };
+        const out = normalizeBriefingFields(parsed, 'gemini');
         this.briefingCache.set(cacheKey, out);
         return out;
       } catch (err) {
@@ -841,12 +897,7 @@ export class GeminiService {
 
     const ollamaOut = await this.callOllamaJson(BRIEFING_SYSTEM, userPrompt, TacticalBriefingZ, 3500);
     if (ollamaOut) {
-      const out: TacticalBriefing = {
-        ...ollamaOut,
-        mode: 'ollama',
-        generatedAt: new Date().toISOString(),
-        latencyMs: Math.round((performance.now() - t0) * 10) / 10,
-      };
+      const out = normalizeBriefingFields(ollamaOut, 'ollama');
       this.briefingCache.set(cacheKey, out);
       return out;
     }
@@ -906,17 +957,21 @@ export class GeminiService {
       (input.imageBase64 ? Buffer.from(input.imageBase64, 'base64') : undefined);
     const base64ForRust =
       input.imageBase64 ?? (imgBuf ? imgBuf.toString('base64') : '');
+    const effectiveSha256 =
+      input.imageSha256?.toLowerCase() || (imgBuf && imgBuf.byteLength > 0 ? Stage0PreFilterService.computeSha256(imgBuf) : '');
 
-    // Stage 0: Instant Pre-Filter & Anti-Spam Gate (<50ms, Zero LLM Cost)
+    // Stage 0: Instant Pre-Filter, SHA-256 Cache (<5ms) & Anti-Spam Gate (Zero LLM Cost)
     const stage0 = await stage0PreFilter.run({
       rateLimitKey: input.rateLimitKey ?? (input.reportId ? `rp:${input.reportId}` : 'vision:global'),
       trustScore: input.trustScore,
       imageBuffer: imgBuf,
+      imageSha256: effectiveSha256 || undefined,
       allowTinyTestStub: input.allowTinyTestStub,
       dHash: input.dHash,
       hintText: input.hintText,
       lat: input.lat,
       lng: input.lng,
+      wardCode: input.wardCode,
       exif: input.exif,
       edge: input.edge,
       reportsRepo: input.reportsRepo,
@@ -967,10 +1022,15 @@ export class GeminiService {
     }
 
     try {
-      const cacheKey = `${input.dHash}:${input.hintCategory ?? ''}:${stage0.cleanHintText.slice(0, 48)}`;
-      if (!input.reportId && !stage0.promptInjectionDetected && stage0.forensicSignals.length === 0) {
+      const cacheKey = effectiveSha256
+        ? `sha256:${effectiveSha256}:${input.hintCategory ?? ''}:${stage0.cleanHintText.slice(0, 48)}`
+        : `${input.dHash}:${input.hintCategory ?? ''}:${stage0.cleanHintText.slice(0, 48)}`;
+      if (!input.skipCache && !input.reportId && !stage0.promptInjectionDetected && stage0.forensicSignals.length === 0) {
         const cached = this.cache.get(cacheKey);
-        if (cached) return { ...cached, cached: true };
+        if (cached && !cached.degraded && !cached.errorCode) {
+          const hitMs = Math.round((performance.now() - t0) * 10) / 10;
+          return { ...cached, cached: true, latencyMs: hitMs };
+        }
       }
 
       const t1Start = performance.now();
@@ -1112,11 +1172,13 @@ export class GeminiService {
           stageTimingsMs: { stage0: stage0.stage0Ms, stage1: stage1Ms, total: totalMs },
         };
 
-        if (!stage0.promptInjectionDetected && localOut.decision !== 'AUTO_REJECT') {
-          this.cache.set(cacheKey, localOut);
-          if (input.dHash) stage0PreFilter.setCachedVision(input.dHash, localOut);
+        if (!stage0.promptInjectionDetected && localOut.decision !== 'AUTO_REJECT' && !localOut.degraded) {
+          const toCache: VisionResult = { ...localOut, ...(effectiveSha256 ? { imageSha256: effectiveSha256 } : {}) };
+          this.cache.set(cacheKey, toCache);
+          if (input.dHash) stage0PreFilter.setCachedVision(input.dHash, toCache);
+          if (effectiveSha256 && !input.forceCloud) stage0PreFilter.setCachedBySha256(effectiveSha256, toCache);
         }
-        return localOut;
+        return { ...localOut, ...(effectiveSha256 ? { imageSha256: effectiveSha256 } : {}) };
       }
 
       // Bước 2 (Escalation khi confidence < 0.75 hoặc ảnh nghi vấn): gọi Stage 1 Gemini Multimodal Vision
@@ -1184,18 +1246,31 @@ export class GeminiService {
       const totalMs = Math.round((performance.now() - t0) * 10) / 10;
       baseResult.latencyMs = totalMs;
       baseResult.stageTimingsMs = { stage0: stage0.stage0Ms, stage1: stage1Ms, total: totalMs };
+      if (effectiveSha256) baseResult.imageSha256 = effectiveSha256;
 
-      if (!stage0.promptInjectionDetected && baseResult.decision !== 'AUTO_REJECT') {
+      if (
+        !stage0.promptInjectionDetected &&
+        baseResult.decision !== 'AUTO_REJECT' &&
+        !baseResult.degraded &&
+        !baseResult.errorCode &&
+        baseResult.mode === 'gemini'
+      ) {
         this.cache.set(cacheKey, baseResult);
         if (input.dHash) stage0PreFilter.setCachedVision(input.dHash, baseResult);
+        if (effectiveSha256) stage0PreFilter.setCachedBySha256(effectiveSha256, baseResult);
       }
 
       return { ...baseResult, cached: false };
     } catch (unexpectedErr) {
       if (unexpectedErr instanceof HttpError) throw unexpectedErr;
+      const errMsg = unexpectedErr instanceof Error ? unexpectedErr.message : String(unexpectedErr);
       console.error('[ai] analyzeImage gặp lỗi ngoài dự kiến, kích hoạt Deterministic Fallback:', unexpectedErr);
       const safe = this.fallbackVision({ ...input, hintText: stage0.cleanHintText });
+      safe.degraded = true;
+      safe.errorCode = 'AI_UNEXPECTED_ERROR';
+      safe.errorMessage = `Phân tích AI gặp lỗi kỹ thuật (${errMsg.slice(0, 120)}). Đã dùng gợi ý dự phòng.`;
       safe.latencyMs = Math.round((performance.now() - t0) * 10) / 10;
+      if (effectiveSha256) safe.imageSha256 = effectiveSha256;
       return safe;
     }
   }
@@ -1237,7 +1312,12 @@ export class GeminiService {
     else if (highRisk) hazards.push('Nguy cơ cản trở giao thông hoặc mất an toàn nếu kéo dài');
 
     const resolvedTitle = category === 'khac' && aiSuggestedLabel ? aiSuggestedLabel : tpl.title;
-    const resolvedDesc = text ? sanitizeUserText(text, 300) : tpl.desc;
+    const resolvedDesc =
+      text.length >= 8
+        ? sanitizeUserText(text, 300)
+        : text.length > 0
+          ? `${tpl.desc} (Ghi chú: ${sanitizeUserText(text, 60)})`
+          : tpl.desc;
 
     return {
       category,
@@ -1431,7 +1511,12 @@ export class GeminiService {
         !input.allowTinyTestStub && (await this.cloudAllowed()) && input.beforeBase64 && input.afterBase64
           ? this.keyPool
               .executeWithRotation(
-                async (apiKey, meta) => this.callVerifyWithKey(apiKey, meta.provider, meta.geminiEndpoint, input),
+                async (apiKey, meta) =>
+                  this.callVerifyWithKey(apiKey, meta.provider, meta.geminiEndpoint, input, {
+                    keyFormat: meta.keyFormat,
+                    preferFallbackModel: meta.preferFallbackModel,
+                    fallbackModel: meta.fallbackModel,
+                  }),
                 { operationName: 'Gemini Verify' },
               )
               .then((r) => {
@@ -1550,6 +1635,11 @@ export class GeminiService {
     provider: ApiKeyProvider,
     geminiEndpoint: GeminiEndpointKind | undefined,
     input: VerifyInput,
+    routingOpts?: {
+      keyFormat?: GeminiKeyFormat;
+      preferFallbackModel?: boolean;
+      fallbackModel?: string;
+    },
   ): Promise<VerifyOutput> {
     const leadPrompt = `Sự cố: ${sanitizeUserText(input.title, 160)} (nhóm ${input.category}). Ảnh 1 = TRƯỚC xử lý, ảnh 2 = SAU xử lý. Chấm rõ sameScene, issueResolved, sceneMatchScore (0-100) và resolutionScore (0-100).`;
     let rawText: string | undefined;
@@ -1594,6 +1684,7 @@ export class GeminiService {
         }),
         8_000,
         'Gemini Verify',
+        routingOpts,
       );
       rawText = out.text;
     }
@@ -1605,6 +1696,13 @@ export class GeminiService {
     const sameScene = v.sameScene ?? sceneMatchScore >= 60;
     const issueResolved = v.issueResolved ?? (v.resolutionVerified && resolutionScore >= 70);
     const verified = v.resolutionVerified && sameScene && issueResolved;
+    const rawSummary = (v.summary ?? '').trim();
+    const safeSummary =
+      rawSummary.length >= MIN_AI_TEXT_LENGTH
+        ? rawSummary
+        : verified
+          ? `Nghiệm thu đạt ${Math.round(v.matchConfidence)}% tại đúng vị trí hiện trường.`
+          : 'Ảnh hoàn thành chưa chứng minh đủ điều kiện nghiệm thu.';
     return {
       resolutionVerified: verified,
       resolutionStatus: verified ? 'AUTO_VERIFIED' : Math.round(v.matchConfidence) >= 60 && sameScene ? 'PENDING_MODERATION' : 'REJECTED',
@@ -1619,7 +1717,7 @@ export class GeminiService {
       forensics: null,
       criteria: { isAuthentic: true, sameScene, issueResolved, spatiotemporalValid: true },
       fraudFlags: v.fraudFlags,
-      summary: v.summary,
+      summary: safeSummary,
       mode: 'gemini',
     };
   }
@@ -1833,6 +1931,13 @@ export class GeminiService {
     const fullSystem = `${CHAT_SYSTEM}\n\n<LOCAL_RAG_KNOWLEDGE>\n${ragContext}\n</LOCAL_RAG_KNOWLEDGE>\n\n<DATABASE_CONTEXT>\n${databaseContext}\n</DATABASE_CONTEXT>`;
 
     const normalizedQ = sanitizeUserText(last?.text ?? '').toLowerCase();
+    if (!normalizedQ) {
+      const ans = localAnswer();
+      for (let i = 0; i < ans.length; i += 64) {
+        yield { delta: ans.slice(i, i + 64), mode: 'fallback' };
+      }
+      return;
+    }
     const isDynamicLookup = /dn-[a-z]{2,4}-\d{4}-\d{3}|bao nhiêu|thống kê|tổng|của tôi/i.test(normalizedQ);
     const faqKey = `${wardCode ?? 'city'}:${normalizedQ}`;
     if (!isDynamicLookup && history.length === 1) {
@@ -1902,6 +2007,11 @@ export class GeminiService {
               }),
               8_000,
               'Gemini Chat',
+              {
+                keyFormat: meta.keyFormat,
+                preferFallbackModel: meta.preferFallbackModel,
+                fallbackModel: meta.fallbackModel,
+              },
             );
             return { kind: 'full' as const, text };
           },
@@ -2008,13 +2118,20 @@ export class GeminiService {
     const wardIds = this.normalizeMatchedWardIds([], combined);
     const affectedRoads = this.extractAffectedRoadsFromText(combined);
     const cleanText = sanitizeUserText(combined, 240);
+    const cleanTitle = sanitizeUserText(input.title ?? '', 200);
+    const resolvedSummary =
+      cleanText.length >= MIN_AI_TEXT_LENGTH
+        ? cleanText
+        : cleanTitle.length >= MIN_AI_TEXT_LENGTH
+          ? cleanTitle
+          : 'Bản tin hành chính địa bàn Tỉnh Đồng Nai (đang cập nhật).';
     return {
       isRelevant,
       category,
       severity,
       wardIds,
       affectedRoads,
-      cleanSummary: cleanText.length > 0 ? cleanText : sanitizeUserText(input.title, 200),
+      cleanSummary: resolvedSummary,
     };
   }
 
@@ -2024,8 +2141,18 @@ export class GeminiService {
     sourceName: string;
     sourceUrl: string;
   }): Promise<OfficialBulletinClassification> {
-    const cleanTitle = sanitizeUserText(input.title, 200);
-    const cleanBody = sanitizeUserText(input.summary.replace(/<[^>]*>/g, ' '), 800);
+    const cleanTitle = sanitizeUserText(input.title ?? '', 200);
+    const cleanBody = sanitizeUserText((input.summary ?? '').replace(/<[^>]*>/g, ' '), 800);
+
+    // Chặn input quá ngắn/rỗng (< 4 ký tự) ngay tại tầng Service để không gọi KeyPool lãng phí
+    if (cleanTitle.length < MIN_AI_TEXT_LENGTH && cleanBody.length < MIN_AI_TEXT_LENGTH) {
+      return this.deterministicBulletinClassify({
+        title: cleanTitle,
+        summary: cleanBody,
+        sourceName: input.sourceName,
+      });
+    }
+
     const userPrompt = `Nguồn: ${input.sourceName}\nTiêu đề: ${cleanTitle}\nNội dung tóm tắt: ${cleanBody}\nLink: ${input.sourceUrl}`;
 
     if (await this.cloudAllowed()) {
@@ -2060,12 +2187,24 @@ export class GeminiService {
               }),
               8_000,
               'Gemini BulletinClassify',
+              {
+                keyFormat: meta.keyFormat,
+                preferFallbackModel: meta.preferFallbackModel,
+                fallbackModel: meta.fallbackModel,
+              },
             );
             return safeParseStructuredJson(text, BulletinClassificationZ);
           },
           { operationName: 'Gemini BulletinClassify' },
         );
         this.ok();
+        const cleanedSummary = sanitizeUserText(parsed.cleanSummary ?? '', 320);
+        const safeSummary =
+          cleanedSummary.length >= MIN_AI_TEXT_LENGTH
+            ? cleanedSummary
+            : cleanTitle.length >= MIN_AI_TEXT_LENGTH
+              ? cleanTitle
+              : 'Bản tin địa bàn Tỉnh Đồng Nai.';
         return {
           isRelevant: parsed.isRelevant,
           category: parsed.category,
@@ -2075,7 +2214,7 @@ export class GeminiService {
             (parsed.affectedRoads ?? []).length > 0
               ? (parsed.affectedRoads ?? []).slice(0, 8)
               : this.extractAffectedRoadsFromText(`${cleanTitle} ${cleanBody}`),
-          cleanSummary: sanitizeUserText(parsed.cleanSummary, 320),
+          cleanSummary: safeSummary,
         };
       } catch (err) {
         this.recordPoolExhausted(err);
@@ -2184,18 +2323,27 @@ export class GeminiService {
               }),
               8_000,
               'Gemini DailyDigest',
+              {
+                keyFormat: meta.keyFormat,
+                preferFallbackModel: meta.preferFallbackModel,
+                fallbackModel: meta.fallbackModel,
+              },
             );
             return safeParseStructuredJson(text, DailyDigestZ);
           },
           { operationName: 'Gemini DailyDigest' },
         );
-        this.ok();
-        return {
-          bullets: parsed.bullets
-            .slice(0, 3)
-            .map((b) => sanitizeUserText(b, 260).replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai')),
-          model: 'gemini',
-        };
+        const validBullets = (parsed.bullets ?? [])
+          .map((b) => sanitizeUserText(b, 260).replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai'))
+          .filter((b) => b.length >= MIN_AI_TEXT_LENGTH)
+          .slice(0, 3);
+        if (validBullets.length > 0) {
+          this.ok();
+          return {
+            bullets: validBullets,
+            model: 'gemini',
+          };
+        }
       } catch (err) {
         this.recordPoolExhausted(err);
       }

@@ -1,3 +1,4 @@
+import { redactSecretsInText } from './cryptoVault';
 import type { ApiKeyStatus } from './types';
 
 export type KeyErrorKind =
@@ -31,7 +32,7 @@ const RATE_LIMIT_RE =
   /(\b429\b|too many requests|resource_exhausted|rate[_ -]?limit|quota exceeded|tokens? per minute|\brpm\b|\btpm\b)/i;
 
 const INVALID_KEY_RE =
-  /(api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|api_key_service_blocked|api_key_http_referrer_blocked|service_disabled|has not been used in project|accessnotconfigured|unauthenticated|permission_denied|invalid authentication|incorrect api key|key.*revoked|key.*leaked|key.*expired|unauthorized|forbidden)/i;
+  /(api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|api_key_service_blocked|api_key_http_referrer_blocked|api_key_ip_address_blocked|service_disabled|has not been used in project|accessnotconfigured|unauthenticated|permission_denied|invalid authentication|incorrect api key|key.*revoked|key.*leaked|key.*expired|unauthorized|forbidden)/i;
 
 const MODEL_NOT_FOUND_RE =
   /(is not found for api version|publisher model.*not found|model.*not found|models\/[^\s]+.*not found)/i;
@@ -40,6 +41,22 @@ const OVERLOADED_503_RE = /(\b503\b|model is overloaded|service unavailable|high
 
 const TRANSIENT_RE =
   /(\b500\b|\b502\b|\b504\b|unavailable|deadline_exceeded|internal error|quá thời gian|timeout|timed out|econnreset|etimedout|fetch failed|socket hang up)/i;
+
+function detectAuthDetailTag(text: string): string {
+  if (/API_KEY_INVALID|API key not valid|invalid[_ -]?api[_ -]?key|incorrect api key/i.test(text)) {
+    return '[SAI_KEY]';
+  }
+  if (/SERVICE_DISABLED|ACCESS_NOT_CONFIGURED|has not been used in project|it is disabled/i.test(text)) {
+    return '[CHƯA_BẬT_API]';
+  }
+  if (/REFERRER_BLOCKED|IP_ADDRESS_BLOCKED|SERVICE_BLOCKED|referer|ip address/i.test(text)) {
+    return '[GIỚI_HẠN_IP_REFERER]';
+  }
+  if (/leaked|revoked|expired/i.test(text)) {
+    return '[KEY_BỊ_THU_HỒI]';
+  }
+  return '';
+}
 
 function extractHttpStatus(err: unknown): number | null {
   if (!err || typeof err !== 'object') return null;
@@ -86,12 +103,12 @@ function stringifyError(err: unknown): string {
   }
 }
 
-/** Làm sạch thông điệp lỗi từ SDK/HTTP để tuyệt đối không trả mảng/chuỗi JSON lỗi thô ra log hay response. */
+/** Làm sạch thông điệp lỗi từ SDK/HTTP, che toàn bộ secret và trích rõ error.message + reason từ Google API. */
 export function sanitizeUpstreamErrorReason(rawText: string, status: number | null): string {
-  const trimmed = rawText.trim();
+  const trimmed = redactSecretsInText(rawText.trim());
   if (!trimmed) return status ? `HTTP ${status} Upstream Error` : 'Upstream AI Error';
 
-  // Nếu chuỗi chứa khối JSON `{"error": ...}` hoặc `[{"error": ...}]`, trích xuất `error.message` và `error.status` gọn gàng
+  // Nếu chuỗi chứa khối JSON `{"error": ...}` hoặc `[{"error": ...}]`, trích xuất `error.message`, `error.status` & `details.reason`
   const jsonStart = trimmed.search(/[\[{]\s*"error"\s*:/);
   const candidateJson =
     jsonStart >= 0
@@ -103,7 +120,9 @@ export function sanitizeUpstreamErrorReason(rawText: string, status: number | nu
   if (candidateJson) {
     try {
       const parsed = JSON.parse(candidateJson) as unknown;
-      const root = Array.isArray(parsed) ? (parsed[0] as Record<string, unknown> | undefined) : (parsed as Record<string, unknown>);
+      const root = Array.isArray(parsed)
+        ? (parsed[0] as Record<string, unknown> | undefined)
+        : (parsed as Record<string, unknown>);
       const errObj =
         root && typeof root === 'object' && root.error && typeof root.error === 'object'
           ? (root.error as Record<string, unknown>)
@@ -111,10 +130,21 @@ export function sanitizeUpstreamErrorReason(rawText: string, status: number | nu
       if (errObj && typeof errObj === 'object') {
         const code = typeof errObj.code === 'number' ? errObj.code : status;
         const statusStr = typeof errObj.status === 'string' ? errObj.status : '';
-        const msgStr = typeof errObj.message === 'string' ? errObj.message.replace(/\s+/g, ' ').trim() : '';
-        const prefix = [code ? `HTTP ${code}` : '', statusStr].filter(Boolean).join(' ');
+        const msgStr =
+          typeof errObj.message === 'string' ? errObj.message.replace(/\s+/g, ' ').trim() : '';
+        let detailReason = '';
+        if (Array.isArray(errObj.details)) {
+          for (const d of errObj.details) {
+            if (d && typeof d === 'object' && typeof (d as Record<string, unknown>).reason === 'string') {
+              detailReason = String((d as Record<string, unknown>).reason);
+              break;
+            }
+          }
+        }
+        const tag = detectAuthDetailTag(`${statusStr} ${detailReason} ${msgStr}`);
+        const prefix = [code ? `HTTP ${code}` : '', statusStr, detailReason, tag].filter(Boolean).join(' ');
         if (msgStr) {
-          return `${prefix ? `${prefix}: ` : ''}${msgStr}`.slice(0, 200);
+          return redactSecretsInText(`${prefix ? `${prefix}: ` : ''}${msgStr}`).slice(0, 320);
         }
       }
     } catch {
@@ -128,18 +158,36 @@ export function sanitizeUpstreamErrorReason(rawText: string, status: number | nu
     .replace(/\s+/g, ' ')
     .trim();
 
-  return (strippedJson || (status ? `HTTP ${status} Upstream Error` : 'Upstream AI Error')).slice(0, 200);
+  const tag = detectAuthDetailTag(strippedJson);
+  const base = strippedJson || (status ? `HTTP ${status} Upstream Error` : 'Upstream AI Error');
+  const tagged = tag && !base.includes(tag) ? `${tag} ${base}` : base;
+  return redactSecretsInText(tagged).slice(0, 320);
 }
 
 /** Phân loại lỗi từ Gemini / OpenRouter / Groq để quyết định trạng thái Circuit Breaker của từng key. */
 export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
+  if (err && typeof err === 'object' && (err as { name?: string }).name === 'ZodError') {
+    const issues = (err as { issues?: Array<{ path?: Array<string | number>; message?: string }> }).issues;
+    const summary = Array.isArray(issues) && issues.length > 0
+      ? `AI Output Schema Invalid (${issues.map((i) => `${i.path?.join('.') || 'root'}: ${i.message}`).join('; ')})`
+      : 'AI Output Schema Invalid';
+    return {
+      kind: 'NON_RETRYABLE',
+      httpStatus: null,
+      targetStatus: 'HEALTHY',
+      retryable: false,
+      reasonSummary: summary.slice(0, 240),
+    };
+  }
+
   const status = extractHttpStatus(err);
-  const fullText = stringifyError(err);
+  const fullText = redactSecretsInText(stringifyError(err));
   const rawMessage = err instanceof Error ? err.message : fullText;
   const shortReason = sanitizeUpstreamErrorReason(rawMessage, status);
 
-  // 1. Lỗi 429 / RESOURCE_EXHAUSTED: tách bạch RPD (hết quota ngày) vs RPM/TPM (tạm thời)
-  if (status === 429 || RATE_LIMIT_RE.test(fullText)) {
+  // 1. Lỗi 429 / RESOURCE_EXHAUSTED / 403 Quota Exceeded: tách bạch RPD vs RPM/TPM
+  const isQuota403 = status === 403 && RATE_LIMIT_RE.test(fullText) && !INVALID_KEY_RE.test(fullText);
+  if (status === 429 || isQuota403 || (status !== 401 && status !== 403 && RATE_LIMIT_RE.test(fullText))) {
     if (DAILY_QUOTA_RE.test(fullText)) {
       return {
         kind: 'DAILY_QUOTA_EXHAUSTED',
@@ -175,7 +223,8 @@ export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
     };
   }
 
-  // 3. Key chết / bị thu hồi / sai quyền (401/403 hoặc thông điệp xác thực API_KEY_INVALID)
+  // 3. Key lỗi xác thực / bị thu hồi / chưa bật API / giới hạn IP-Referer (401/403 hoặc API_KEY_INVALID)
+  // Đánh dấu INVALID vĩnh viễn cho phiên chạy hiện tại và lưu kèm lý do chi tiết từ Google API.
   if (status === 401 || status === 403 || INVALID_KEY_RE.test(fullText)) {
     return {
       kind: 'INVALID_KEY',
@@ -197,18 +246,18 @@ export function classifyUpstreamError(err: unknown): ClassifiedKeyError {
     };
   }
 
-  // 5. Lỗi máy chủ upstream tạm thời / mạng chập chờn -> giữ key HEALTHY và xoay sang key kế tiếp
+  // 5. Lỗi máy chủ upstream tạm thời / timeout 408 / mạng chập chờn -> Cooldown ngắn 30s để tránh dính lại ngay key vừa timeout
   if ((status !== null && status >= 500) || status === 408 || TRANSIENT_RE.test(fullText)) {
     return {
       kind: 'TRANSIENT_UPSTREAM',
-      httpStatus: status,
-      targetStatus: 'HEALTHY',
+      httpStatus: status ?? 408,
+      targetStatus: 'COOLDOWN',
       retryable: true,
-      reasonSummary: shortReason || 'Transient Upstream Error',
+      reasonSummary: shortReason || 'Transient Upstream / Timeout Error',
     };
   }
 
-  // 4. Lỗi nội dung / schema không liên quan tới sức khỏe API key
+  // 6. Lỗi nội dung / schema không liên quan tới sức khỏe API key
   return {
     kind: 'NON_RETRYABLE',
     httpStatus: status,

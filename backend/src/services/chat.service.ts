@@ -187,7 +187,7 @@ export class ChatService {
     if (instant) return instant;
 
     const en = locale === 'en';
-    if (!en && ctx.ragHits.length > 0) {
+    if (!en && ctx.ragHits.length > 0 && ctx.ragHits[0].content.trim().length >= 8) {
       return ctx.ragHits[0].content;
     }
     return en

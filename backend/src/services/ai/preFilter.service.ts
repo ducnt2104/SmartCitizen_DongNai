@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { LRUCache } from 'lru-cache';
 import { env } from '../../config/env';
@@ -27,11 +28,13 @@ export interface Stage0RequestContext {
   rateLimitKey: string;
   trustScore?: number;
   imageBuffer?: Buffer;
+  imageSha256?: string;
   allowTinyTestStub?: boolean;
   dHash: string;
   hintText?: string;
   lat?: number;
   lng?: number;
+  wardCode?: string;
   exif?: Stage0ExifInput | null;
   edge?: Stage0EdgeInput;
   reportsRepo?: ReportRepository;
@@ -169,15 +172,22 @@ export class Stage0PreFilterService {
     ttl: 60 * 60 * 1000,
   });
 
-  // Cache kết quả Stage 1 theo dHash (tối đa 200 mục, TTL 15 phút)
+  // Cache kết quả Stage 1 theo dHash (tối đa 200 mục, TTL 20 phút)
   private readonly aiResultCache = new LRUCache<string, VisionResult>({
     max: 200,
-    ttl: 15 * 60 * 1000,
+    ttl: 20 * 60 * 1000,
+  });
+
+  // Cache kết quả Stage 1 theo mã băm SHA-256 của buffer ảnh đã nén (tối đa 300 mục, TTL 20 phút, hit < 5ms)
+  private readonly sha256ResultCache = new LRUCache<string, VisionResult>({
+    max: 300,
+    ttl: 20 * 60 * 1000,
   });
 
   resetForTests(): void {
     this.rateBuckets.clear();
     this.aiResultCache.clear();
+    this.sha256ResultCache.clear();
   }
 
   getCachedVision(cacheKey: string): VisionResult | undefined {
@@ -186,6 +196,20 @@ export class Stage0PreFilterService {
 
   setCachedVision(cacheKey: string, val: VisionResult): void {
     this.aiResultCache.set(cacheKey, val);
+  }
+
+  getCachedBySha256(sha256Hex: string): VisionResult | undefined {
+    if (!sha256Hex) return undefined;
+    return this.sha256ResultCache.get(sha256Hex.toLowerCase());
+  }
+
+  setCachedBySha256(sha256Hex: string, val: VisionResult): void {
+    if (!sha256Hex) return;
+    this.sha256ResultCache.set(sha256Hex.toLowerCase(), val);
+  }
+
+  static computeSha256(buf: Buffer): string {
+    return crypto.createHash('sha256').update(buf).digest('hex');
   }
 
   checkSlidingWindowRateLimit(key: string, trustScore = 50): void {
@@ -270,6 +294,26 @@ export class Stage0PreFilterService {
       await validateAndInspectImage(ctx.imageBuffer!, { allowTinyTestStub: ctx.allowTinyTestStub });
     }
 
+    // 3b. SHA-256 Buffer Cache Hit (< 5ms, 0 API quota, 0 Sharp decode)
+    const computedSha256 =
+      ctx.imageSha256?.toLowerCase() || (hasBuf ? Stage0PreFilterService.computeSha256(ctx.imageBuffer!) : '');
+    if (!ctx.skipCache && computedSha256 && !injectionDetected && forensicSignals.length === 0) {
+      const shaHit = this.sha256ResultCache.get(computedSha256);
+      if (shaHit && !shaHit.degraded && !shaHit.errorCode) {
+        const hitMs = Math.round((performance.now() - t0) * 10) / 10;
+        return {
+          outcome: 'CACHE_HIT',
+          cachedResult: {
+            ...shaHit,
+            cached: true,
+            imageSha256: computedSha256,
+            latencyMs: hitMs,
+          },
+          stage0Ms: hitMs,
+        };
+      }
+    }
+
     // 4. Instant Geo (48h, <= DUPLICATE_RADIUS_METERS) + Perceptual dHash (<= DHASH_HAMMING_THRESHOLD) Deduplication
     if (!ctx.skipDedup && ctx.reportsRepo && isValidHash(ctx.dHash)) {
       const since48h = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
@@ -313,14 +357,15 @@ export class Stage0PreFilterService {
       }
     }
 
-    // 5. Bounded AI Result Cache (by dHash, TTL 15 min, max 200) -> <10ms on identical clean retries
+    // 5. Bounded AI Result Cache (by dHash, TTL 20 min, max 200) -> <5ms on identical clean retries
     if (!ctx.skipCache && isValidHash(ctx.dHash) && !injectionDetected && forensicSignals.length === 0) {
       const hit = this.aiResultCache.get(ctx.dHash);
-      if (hit) {
+      if (hit && !hit.degraded && !hit.errorCode) {
+        const hitMs = Math.round((performance.now() - t0) * 10) / 10;
         return {
           outcome: 'CACHE_HIT',
-          cachedResult: { ...hit, cached: true },
-          stage0Ms: Math.round((performance.now() - t0) * 10) / 10,
+          cachedResult: { ...hit, cached: true, ...(computedSha256 ? { imageSha256: computedSha256 } : {}), latencyMs: hitMs },
+          stage0Ms: hitMs,
         };
       }
     }

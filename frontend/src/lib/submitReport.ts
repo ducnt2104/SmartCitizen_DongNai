@@ -20,6 +20,8 @@ export interface SubmitInput {
   aiSuggestedLabel?: string | null;
   title: string;
   description: string;
+  severity?: 1 | 2 | 3 | 4 | 5;
+  isEmergency?: boolean;
   lat: number;
   lng: number;
   wardCode: string;
@@ -57,8 +59,8 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     aiSuggestedLabel: input.category === 'khac' ? (input.aiSuggestedLabel ?? v?.aiSuggestedLabel ?? null) : null,
     title: input.title,
     description: input.description,
-    severity: v?.severity ?? 3,
-    isEmergency: v?.isEmergency ?? false,
+    severity: input.severity ?? v?.severity ?? 3,
+    isEmergency: input.isEmergency ?? v?.isEmergency ?? false,
     emergencyLevel: 0,
     priority: 'normal',
     status: 'received',
@@ -118,6 +120,8 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
     ...(input.category === 'khac' && input.aiSuggestedLabel ? { aiSuggestedLabel: input.aiSuggestedLabel } : {}),
     title: input.title,
     description: input.description,
+    ...(input.severity !== undefined ? { severity: input.severity } : {}),
+    ...(input.isEmergency !== undefined ? { isEmergency: input.isEmergency } : {}),
     lat: input.lat,
     lng: input.lng,
     wardCode: input.wardCode,

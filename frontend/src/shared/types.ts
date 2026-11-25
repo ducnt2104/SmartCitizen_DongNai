@@ -541,7 +541,14 @@ export interface VisionResult {
   suggestedUnit?: string;
   suggestedTitle?: string;
   suggestedDescription?: string;
+  addressHint?: string | null;
   keyEvidenceTags?: string[];
+  imageSha256?: string;
+  modelUsed?: string;
+  degraded?: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  upstreamStatus?: number | null;
   isScreenCaptureOrFake?: boolean;
   forensicFlags?: string[];
   forensics?: ForensicSignals | null;

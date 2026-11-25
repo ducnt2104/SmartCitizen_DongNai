@@ -272,7 +272,7 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
       dataDir: kpDir,
       encryptionSecret: 'test-secret-0123456789abcdef',
       quotaResetTimeZone: 'Asia/Ho_Chi_Minh',
-      defaultGeminiModel: 'gemini-3.5-flash-lite',
+      defaultGeminiModel: 'gemini-2.5-flash',
     });
     await kp.addKeys({ apiKey: 'AIzaSyTestFakeGeminiKey000000000001' });
 
@@ -348,7 +348,8 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
       const genCfg = capturedPayloads[0]?.generationConfig as Record<string, unknown>;
       expect(genCfg?.responseMimeType).toBe('application/json');
       expect(genCfg?.responseSchema).toBeTruthy();
-      expect(genCfg?.thinkingConfig).toBeUndefined();
+      expect(genCfg?.thinkingConfig).toEqual({ thinkingBudget: 0 });
+      expect(genCfg?.maxOutputTokens).toBeLessThanOrEqual(600);
     } finally {
       globalThis.fetch = origFetch;
       if (prevFallback === undefined) delete process.env.ALLOW_CLOUD_AI_FALLBACK;

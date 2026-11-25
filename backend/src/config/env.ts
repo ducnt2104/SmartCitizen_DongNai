@@ -169,7 +169,7 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     readTrimmed(source, 'GEMINI_FAST_MODEL') ||
     readTrimmed(source, 'GEMINI_MODEL') ||
     DEFAULT_GEMINI_MODEL;
-  // Tự động chuẩn hóa các model cũ đã ngừng hỗ trợ (1.5/2.0/2.5) sang model 2026 ổn định (mặc định gemini-3.5-flash-lite)
+  // Chuẩn hóa model cũ đã ngừng hỗ trợ (1.0/1.5/2.0-exp) sang model production nhanh nhất (mặc định gemini-2.5-flash)
   const geminiModel = normalizeGeminiModelName(rawGeminiModel);
   const geminiFastModel = geminiModel;
   const duplicateRadiusMeters = parseIntEnv(

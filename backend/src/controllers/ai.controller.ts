@@ -19,18 +19,29 @@ export function aiController(s: Services) {
       const photo = await resolvePhotoInputFromRequest(req, b.image, b.dHash);
       const aiBuf = photo.aiBuffer ?? photo.buffer;
       const base64 = aiBuf ? aiBuf.toString('base64') : '';
+      const cleanHint = sanitizeUserText(b.hintText ?? '', 500);
+      if (!base64 && cleanHint.length < 4) {
+        throw badRequest(
+          'Vui lòng cung cấp ảnh hiện trường hoặc mô tả sự cố tối thiểu 4 ký tự để phân tích AI.',
+          'ai_input_too_short',
+        );
+      }
       const legacyMime = photo.dataUrl ? parsePhotoDataUrl(photo.dataUrl).mime : 'image/webp';
-      const mimeType = photo.aiBuffer ? 'image/webp' : legacyMime;
+      const mimeType = photo.aiMimeType ?? (photo.aiBuffer ? 'image/webp' : legacyMime);
       const deviceFp = typeof req.headers['x-device-fp'] === 'string' ? req.headers['x-device-fp'] : '';
       const rateLimitKey = `vision:${req.ip ?? 'ip'}:${req.user?.id ?? 'anon'}:${deviceFp}`;
 
       const result = await s.gemini.analyzeImage({
         imageBuffer: aiBuf,
         imageBase64: base64,
+        imageSha256: b.imageSha256,
         mimeType,
         dHash: photo.dHash,
+        pHash: b.pHash,
+        subGridHashes: b.subGridHashes,
+        colorHistogram: b.colorHistogram,
         hintCategory: b.category,
-        hintText: b.hintText,
+        hintText: cleanHint || b.hintText,
         edge: b.edge,
         exif: b.exif,
         lat: b.lat,
@@ -39,6 +50,8 @@ export function aiController(s: Services) {
         rateLimitKey,
         trustScore: req.user?.trustScore,
         reportsRepo: s.repos.reports,
+        forceCloud: b.forceCloud,
+        skipCache: b.skipCache,
         allowTinyTestStub: process.env.NODE_ENV === 'test' && Boolean(b.image?.dataUrl) && (b.image?.dataUrl?.length ?? 0) < 900,
       });
       res.json(result);
@@ -148,10 +161,14 @@ export function aiController(s: Services) {
       if (!b.category || !b.title) {
         throw badRequest('Cần truyền reportId hoặc cặp { category, title }.');
       }
+      const cleanTitle = sanitizeUserText(b.title, 140);
+      if (cleanTitle.length < 4) {
+        throw badRequest('Tiêu đề sự cố cần tối thiểu 4 ký tự để phân tích tác chiến AI.', 'ai_input_too_short');
+      }
       const briefing = await s.gemini.generateTacticalBriefing({
         category: b.category,
-        title: b.title,
-        description: b.description,
+        title: cleanTitle,
+        description: b.description ? sanitizeUserText(b.description, 800) : undefined,
         severity: b.severity,
         isEmergency: b.isEmergency,
         wardCode: b.wardCode,
@@ -167,8 +184,12 @@ export function aiController(s: Services) {
       const last = b.messages[b.messages.length - 1];
       if (last.role !== 'user') throw badRequest('Tin nhắn cuối phải là của người dùng.');
       const history = b.messages.map((m) => ({ role: m.role, text: sanitizeUserText(m.text) }));
-      const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, last.text);
-      const instantAnswer = s.chat.resolveInstantAnswer(ctx, last.text, b.locale);
+      const cleanLastText = history[history.length - 1]?.text ?? '';
+      if (!cleanLastText) {
+        throw badRequest('Nội dung tin nhắn không hợp lệ hoặc bị trống sau khi làm sạch.', 'ai_input_too_short');
+      }
+      const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, cleanLastText);
+      const instantAnswer = s.chat.resolveInstantAnswer(ctx, cleanLastText, b.locale);
 
       res.set({
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -189,7 +210,7 @@ export function aiController(s: Services) {
         for await (const chunk of s.gemini.chatStream(
           history,
           ctx.text,
-          () => s.chat.localAnswer(ctx, last.text, b.locale),
+          () => s.chat.localAnswer(ctx, cleanLastText, b.locale),
           b.wardCode,
           instantAnswer,
         )) {
@@ -200,7 +221,7 @@ export function aiController(s: Services) {
         send({ done: true, mode });
       } catch (err) {
         console.error('[chat] stream lỗi:', err);
-        const safeFallback = s.chat.localAnswer(ctx, last.text, b.locale);
+        const safeFallback = s.chat.localAnswer(ctx, cleanLastText, b.locale);
         send({ delta: safeFallback, mode: 'fallback' });
         send({ done: true, mode: 'fallback' });
       }
