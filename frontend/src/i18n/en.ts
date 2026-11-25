@@ -7,6 +7,7 @@ export const en: Record<keyof typeof vi, string> = {
   'nav.map': 'Map',
   'nav.report': 'Report',
   'nav.mine': 'My Reports',
+  'nav.assistant': 'AI Assistant',
   'nav.main': 'Main navigation',
   'nav.login': 'Sign in',
   'nav.logout': 'Sign out',

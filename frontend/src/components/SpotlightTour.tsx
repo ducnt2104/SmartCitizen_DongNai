@@ -25,7 +25,7 @@ interface Rect {
 
 function findTarget(name: string): HTMLElement | null {
   const all = [...document.querySelectorAll<HTMLElement>(`[data-tour="${name}"]`)];
-  return all.find((el) => el.offsetParent !== null || getComputedStyle(el).position === 'fixed') ?? null;
+  return all.find((el) => el.getClientRects().length > 0) ?? null;
 }
 
 /** Spotlight Tour 4 bước: làm tối nền, khoét lỗ sáng quanh nút quan trọng. Tự bật 1 lần cho người mới. */
@@ -71,7 +71,9 @@ export function SpotlightTour() {
   useLayoutEffect(() => {
     if (!tourOpen) return;
     const el = findTarget(STEPS[i].target);
-    el?.scrollIntoView({ block: 'center', behavior: 'auto' });
+    if (el && !el.closest('nav.fixed, header.sticky')) {
+      el.scrollIntoView({ block: 'center', behavior: 'auto' });
+    }
     measure();
     const onResize = (): void => measure();
     window.addEventListener('resize', onResize);
