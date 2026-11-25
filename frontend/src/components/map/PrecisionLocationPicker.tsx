@@ -464,15 +464,15 @@ export function PrecisionLocationPicker({
               {fix ? ` · GPS ±${Math.round(fix.accuracy)}m` : ''}
               {exifApplied ? ' · EXIF' : ''}
             </p>
-            <a
-              href={googleMapsPlaceUrl(pin.lat, pin.lng)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-brand underline"
-            >
-              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-              {t('map.openGoogleMaps')}
-            </a>
+              <a
+                href={googleMapsPlaceUrl(pin.lat, pin.lng)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-brand/15 bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand/15"
+              >
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                {t('map.openGoogleMaps')}
+              </a>
           </div>
         )}
 

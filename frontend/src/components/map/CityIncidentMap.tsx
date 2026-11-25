@@ -304,28 +304,30 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
             {gps.fix ? ` · GPS ±${gps.fix.accuracy}m` : ''}
           </p>
         </div>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label={t('map.mode')}>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t('map.mode')}>
+          <div className="inline-flex rounded-xl border border-line bg-surface p-0.5 shadow-sm">
+            <button
+              type="button"
+              aria-pressed={mode === 'pins'}
+              className={`btn !min-h-9 !rounded-lg !px-3 !text-xs sm:!text-sm ${mode === 'pins' ? 'btn-primary' : '!bg-transparent text-muted hover:text-ink'}`}
+              onClick={() => setMode('pins')}
+            >
+              <Layers className="h-4 w-4" aria-hidden />
+              {t('map.pins')}
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === 'heat'}
+              className={`btn !min-h-9 !rounded-lg !px-3 !text-xs sm:!text-sm ${mode === 'heat' ? 'btn-primary' : '!bg-transparent text-muted hover:text-ink'}`}
+              onClick={() => setMode('heat')}
+            >
+              <Thermometer className="h-4 w-4" aria-hidden />
+              {t('map.heat')}
+            </button>
+          </div>
           <button
             type="button"
-            aria-pressed={mode === 'pins'}
-            className={`btn !min-h-10 !px-3 !text-sm ${mode === 'pins' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setMode('pins')}
-          >
-            <Layers className="h-4 w-4" aria-hidden />
-            {t('map.pins')}
-          </button>
-          <button
-            type="button"
-            aria-pressed={mode === 'heat'}
-            className={`btn !min-h-10 !px-3 !text-sm ${mode === 'heat' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setMode('heat')}
-          >
-            <Thermometer className="h-4 w-4" aria-hidden />
-            {t('map.heat')}
-          </button>
-          <button
-            type="button"
-            className="btn btn-soft !min-h-10 !px-3 !text-sm"
+            className="btn btn-soft !min-h-10 !px-3 !text-xs sm:!text-sm"
             disabled={gps.status === 'locating'}
             onClick={() => void locateMe()}
           >
@@ -336,8 +338,8 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       </div>
 
       {/* Floating Glass Filter Bar: Tìm địa chỉ/hẻm + Chọn nhanh 95 Phường/Xã + Chip Danh mục/Trạng thái */}
-      <div className="rounded-2xl border border-line/90 bg-surface/95 p-3 shadow-card backdrop-blur-md">
-        <div className="grid gap-2 md:grid-cols-[1fr_15rem_auto]">
+      <div className="rounded-[1.25rem] border border-line/85 bg-surface/95 p-3 shadow-card backdrop-blur-md">
+        <div className="grid gap-2 md:grid-cols-[1fr_17rem_auto]">
           {/* Ô tìm kiếm Địa chỉ / Con hẻm / 95 Phường Xã */}
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
@@ -396,7 +398,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
           {/* Bộ chọn nhanh 95 Phường/Xã (33 Phường, 62 Xã) */}
           <select
-            className="field !min-h-11 text-sm font-medium"
+            className="field !h-11 !min-h-11 !py-0 leading-normal text-sm font-medium"
             value={settings.scope}
             onChange={(e) => selectWardScope(e.target.value)}
             aria-label={t('scope.label')}
@@ -431,7 +433,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         </div>
 
         {/* Nhảy nhanh 5 vùng toàn Thành phố Đồng Nai */}
-        <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5" role="group" aria-label={t('map.quickRegions')}>
+        <div className="no-scrollbar mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5" role="group" aria-label={t('map.quickRegions')}>
           <button
             type="button"
             className="chip shrink-0 !min-h-8 !text-xs"
@@ -548,7 +550,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       )}
 
       {/* Chú giải mức ưu tiên & tổng số phản ánh */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-semibold" aria-label={t('map.legend')}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-2xl border border-line/85 bg-surface/90 px-3.5 py-2.5 text-xs font-semibold shadow-sm" aria-label={t('map.legend')}>
         <span className="text-muted">{filtered ? t('map.count', { n: filtered.length }) : ''}</span>
         {LEGEND_COLORS.map(([k, color, label]) => (
           <span key={k} className="inline-flex items-center gap-1.5">

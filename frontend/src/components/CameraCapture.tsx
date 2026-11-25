@@ -108,12 +108,12 @@ export function CameraCapture({ onFile, disabled, autoStart }: Props) {
       </div>
 
       {state !== 'live' && state !== 'starting' && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2.5 rounded-2xl border border-dashed border-brand/30 bg-brand-soft/30 p-3 sm:grid-cols-2">
           <button type="button" className="btn btn-primary !min-h-14" disabled={disabled} onClick={() => void start(facing)}>
             <Camera className="h-6 w-6" aria-hidden /> {t('cam.open')}
           </button>
           <button type="button" className="btn btn-ghost !min-h-14" disabled={disabled} onClick={() => fileRef.current?.click()}>
-            <ImagePlus className="h-6 w-6" aria-hidden /> {t('cam.upload')}
+            <ImagePlus className="h-6 w-6 text-brand" aria-hidden /> {t('cam.upload')}
           </button>
         </div>
       )}

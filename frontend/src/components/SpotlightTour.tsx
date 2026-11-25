@@ -72,7 +72,9 @@ export function SpotlightTour() {
     if (!tourOpen) return;
     const el = findTarget(STEPS[i].target);
     if (el && !el.closest('nav.fixed, header.sticky')) {
-      el.scrollIntoView({ block: 'center', behavior: 'auto' });
+      const box = el.getBoundingClientRect();
+      const comfortable = box.top >= 120 && box.bottom <= window.innerHeight - 80;
+      if (!comfortable) el.scrollIntoView({ block: 'center', behavior: 'auto' });
     }
     measure();
     const onResize = (): void => measure();

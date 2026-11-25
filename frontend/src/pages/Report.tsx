@@ -56,15 +56,26 @@ function StepDots({ step }: { step: number }) {
   const { t } = useI18n();
   const labels: I18nKey[] = ['report.step1', 'report.step2', 'report.step3'];
   return (
-    <ol className="grid grid-cols-3 gap-2" aria-label={t('report.steps')}>
-      {labels.map((k, i) => (
-        <li key={k} className="min-w-0" aria-current={step === i + 1 ? 'step' : undefined}>
-          <div className={`h-1.5 rounded-full ${i + 1 <= step ? 'bg-brand' : 'bg-line'}`} />
-          <p className={`mt-1 truncate text-xs font-semibold ${i + 1 === step ? 'text-brand' : 'text-muted'}`}>
-            {i + 1}. {t(k)}
-          </p>
-        </li>
-      ))}
+    <ol className="card grid grid-cols-3 gap-2 p-2.5 sm:p-3" aria-label={t('report.steps')}>
+      {labels.map((k, i) => {
+        const active = step === i + 1;
+        const done = i + 1 <= step;
+        return (
+          <li key={k} className="min-w-0" aria-current={active ? 'step' : undefined}>
+            <div className={`h-1.5 rounded-full transition-colors ${done ? 'bg-brand' : 'bg-line'}`} />
+            <p className={`mt-1.5 flex items-center gap-1 truncate text-xs font-bold ${active ? 'text-brand' : done ? 'text-ink' : 'text-muted'}`}>
+              <span
+                className={`mono inline-grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px] ${
+                  active ? 'bg-brand text-brand-ink' : done ? 'bg-brand-soft text-brand' : 'bg-surface-2 text-muted'
+                }`}
+              >
+                {i + 1}
+              </span>
+              <span className="truncate">{t(k)}</span>
+            </p>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -467,10 +478,15 @@ export default function ReportPage() {
                         type="button"
                         aria-pressed={category === c}
                         onClick={() => setCategory(c)}
-                        className={`btn !justify-start ${category === c ? 'btn-primary' : 'btn-ghost'}`}
+                        className={`btn !min-h-12 !justify-start !px-2.5 sm:!px-3 ${category === c ? 'btn-primary' : 'btn-ghost'}`}
                       >
-                        <Icon className="h-5 w-5 shrink-0" aria-hidden />{' '}
-                        <span className="min-w-0 break-words text-left leading-tight">{t(CATEGORY_META[c].labelKey)}</span>
+                        <span
+                          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg"
+                          style={category === c ? { background: 'rgba(255,255,255,0.2)' } : { background: `${CATEGORY_META[c].color}1a`, color: CATEGORY_META[c].color }}
+                        >
+                          <Icon className="h-4 w-4" aria-hidden />
+                        </span>
+                        <span className="min-w-0 break-words text-left text-xs font-semibold leading-tight sm:text-sm">{t(CATEGORY_META[c].labelKey)}</span>
                       </button>
                     );
                   })}

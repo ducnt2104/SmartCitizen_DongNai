@@ -98,8 +98,9 @@ export default function ProfilePage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <div className="card flex flex-wrap items-center gap-4 p-5">
-        <div className="grid h-14 w-14 place-items-center rounded-2xl bg-brand text-xl font-extrabold text-brand-ink">
+      <div className="card relative flex flex-wrap items-center gap-4 overflow-hidden p-5">
+        <div className="hero-gradient absolute inset-x-0 top-0 h-1.5" aria-hidden />
+        <div className="hero-gradient grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-xl font-extrabold text-brand-ink">
           {(u.name || '?').slice(0, 1).toUpperCase()}
         </div>
         <div className="min-w-0 flex-1">

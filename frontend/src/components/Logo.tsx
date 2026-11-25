@@ -27,7 +27,7 @@ export function Logo({ compact = false, dark = false }: { compact?: boolean; dar
       <LogoMark size={compact ? 30 : 36} className={compact ? 'shrink-0' : 'h-8 w-8 shrink-0 sm:h-9 sm:w-9'} />
       {!compact && (
         <span className="min-w-0 leading-tight">
-          <span className={`block truncate text-[13px] font-bold tracking-tight sm:text-base ${dark ? 'text-ioc-text' : 'text-ink'}`}>
+          <span className={`block truncate text-[12.5px] font-bold tracking-tight sm:text-base ${dark ? 'text-ioc-text' : 'text-ink'}`}>
             SmartCitizen<span className="text-accent">_</span>DongNai
           </span>
           <span className={`block truncate text-[11px] font-medium ${dark ? 'text-ioc-dim' : 'text-muted'}`}>Team Victer</span>

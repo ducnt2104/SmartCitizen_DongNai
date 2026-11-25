@@ -80,19 +80,20 @@ export default function VolunteerPage() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-3xl bg-brand p-4 text-brand-ink">
+      <div className="hero-gradient relative overflow-hidden rounded-3xl p-4 text-brand-ink sm:p-5">
+        <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-white/15 blur-xl" aria-hidden />
         <p className="text-sm font-semibold opacity-90">{t('vol.badge')} · {u.unitCode ?? '—'} · {u.wardCode ? WARD_BY_CODE[u.wardCode]?.name : ''}</p>
         <h1 className="text-2xl font-extrabold">{u.name}</h1>
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-          <div className="rounded-xl bg-white/15 p-2"><p className="mono text-xl font-bold">{fmtNum(u.volunteerHours, 1)}</p><p className="text-[11px] font-semibold">{t('vol.hours')}</p></div>
-          <div className="rounded-xl bg-white/15 p-2"><p className="mono text-xl font-bold">{fmtNum(u.points)}</p><p className="text-[11px] font-semibold">{t('vol.points')}</p></div>
-          <div className="rounded-xl bg-white/15 p-2"><p className="mono text-xl font-bold">{u.trustScore}</p><p className="text-[11px] font-semibold">{t('auth.trust')}</p></div>
+          <div className="rounded-xl border border-white/15 bg-white/15 p-2 backdrop-blur-sm"><p className="mono text-xl font-bold">{fmtNum(u.volunteerHours, 1)}</p><p className="text-[11px] font-semibold">{t('vol.hours')}</p></div>
+          <div className="rounded-xl border border-white/15 bg-white/15 p-2 backdrop-blur-sm"><p className="mono text-xl font-bold">{fmtNum(u.points)}</p><p className="text-[11px] font-semibold">{t('vol.points')}</p></div>
+          <div className="rounded-xl border border-white/15 bg-white/15 p-2 backdrop-blur-sm"><p className="mono text-xl font-bold">{u.trustScore}</p><p className="text-[11px] font-semibold">{t('auth.trust')}</p></div>
         </div>
       </div>
 
-      <div role="tablist" aria-label={t('vol.title')} className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1">
+      <div role="tablist" aria-label={t('vol.title')} className="grid grid-cols-3 gap-1 rounded-2xl border border-line/75 bg-surface-2/85 p-1">
         {([['tasks', t('vol.tabTasks'), UserCheck], ['proxy', t('vol.tabProxy'), HandHeart], ['honor', t('vol.tabHonor'), Award]] as const).map(([k, label, Icon]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-bold leading-tight ${tab === k ? 'bg-surface text-brand shadow-card' : 'text-muted'}`}>
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={`flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-xs font-bold leading-tight transition-all ${tab === k ? 'bg-surface text-brand shadow-card' : 'text-muted hover:text-ink'}`}>
             <Icon className="h-4 w-4" aria-hidden /><span className="min-w-0 break-words text-center">{label}</span>
           </button>
         ))}

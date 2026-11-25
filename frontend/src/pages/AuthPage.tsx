@@ -92,7 +92,7 @@ export default function AuthPage() {
   };
 
   const tabs = (dark: boolean): JSX.Element => (
-    <div role="tablist" aria-label={t('auth.portals')} className={`grid grid-cols-2 gap-1 rounded-xl p-1 ${dark ? 'border border-ioc-line bg-ioc-panel' : 'bg-surface-2'}`}>
+    <div role="tablist" aria-label={t('auth.portals')} className={`grid grid-cols-2 gap-1 rounded-2xl p-1 ${dark ? 'border border-ioc-line bg-ioc-panel shadow-sm' : 'border border-line/75 bg-surface-2/90 shadow-sm'}`}>
       {(['A', 'B'] as const).map((k) => (
         <button
           key={k}
@@ -100,8 +100,8 @@ export default function AuthPage() {
           role="tab"
           aria-selected={tab === k}
           onClick={() => { setTab(k); setErr(null); }}
-          className={`min-h-11 rounded-lg px-2 text-sm font-bold leading-tight ${
-            tab === k ? (dark ? 'bg-ioc-raised text-ioc-cyan' : 'bg-surface text-brand shadow-card') : dark ? 'text-ioc-dim' : 'text-muted'
+          className={`min-h-11 rounded-xl px-2 text-xs font-bold leading-tight transition-all sm:text-sm ${
+            tab === k ? (dark ? 'bg-ioc-raised text-ioc-cyan shadow-sm' : 'bg-surface text-brand shadow-card') : dark ? 'text-ioc-dim hover:text-ioc-text' : 'text-muted hover:text-ink'
           }`}
         >
           {k === 'A' ? t('auth.tabA') : t('auth.tabB')}
@@ -113,15 +113,15 @@ export default function AuthPage() {
   if (tab === 'B') {
     return (
       <div className="ioc min-h-dvh">
-        <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5">
+        <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5 sm:py-7">
           <div className="flex items-center justify-between">
             <Link to="/" aria-label={t('nav.home')}><Logo dark /></Link>
             <button type="button" className="ioc-btn !min-w-9 !px-2" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
               <SettingsIcon className="h-4 w-4" />
             </button>
           </div>
-          <div className="mt-6">{tabs(true)}</div>
-          <div className="ioc-panel mt-4 p-5">
+          <div className="mt-5">{tabs(true)}</div>
+          <div className="ioc-panel mt-4 rounded-2xl p-5 shadow-lift">
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-ioc-cyan">{t('ioc.brand')}</p>
             <h1 className="mt-1 text-xl font-bold">{t('auth.iocTitle')}</h1>
             <p className="mt-1 text-sm text-ioc-dim">{t('auth.iocIntro')}</p>
@@ -165,16 +165,16 @@ export default function AuthPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-bg">
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5">
+    <div className="min-h-dvh">
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 py-5 sm:py-7">
         <div className="flex items-center justify-between">
           <Link to="/" aria-label={t('nav.home')}><Logo /></Link>
-          <button type="button" className="btn btn-ghost !min-h-10 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
+          <button type="button" className="btn btn-ghost !min-h-10 !min-w-10 !px-2.5" onClick={() => setDrawerOpen(true)} aria-label={t('settings.title')}>
             <SettingsIcon className="h-5 w-5" />
           </button>
         </div>
-        <div className="mt-6">{tabs(false)}</div>
-        <div className="card mt-4 space-y-4 p-5">
+        <div className="mt-5">{tabs(false)}</div>
+        <div className="card mt-4 space-y-4 rounded-3xl p-5 shadow-lift">
           <h1 className="text-xl font-extrabold">{t('auth.communityTitle')}</h1>
           {session ? (
             <div className="space-y-3">

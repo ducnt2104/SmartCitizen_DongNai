@@ -322,16 +322,16 @@ export function CitizenAuthForm({
     <div
       role="tablist"
       aria-label="Chọn phương thức nhận mã OTP"
-      className="grid grid-cols-2 gap-1.5 rounded-xl border border-line bg-surface-2 p-1"
+      className="grid grid-cols-2 gap-1.5 rounded-2xl border border-line/75 bg-surface-2/85 p-1"
     >
       <button
         type="button"
         role="tab"
         aria-selected={channelTab === 'phone'}
         onClick={() => switchChannelTab('phone')}
-        className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-bold transition ${
+        className={`flex min-h-10 items-center justify-center gap-1.5 rounded-xl px-3 text-sm font-bold transition-all ${
           channelTab === 'phone'
-            ? 'bg-brand text-white shadow-sm'
+            ? 'btn-primary shadow-sm'
             : 'text-muted hover:text-ink'
         }`}
       >
@@ -343,9 +343,9 @@ export function CitizenAuthForm({
         role="tab"
         aria-selected={channelTab === 'email'}
         onClick={() => switchChannelTab('email')}
-        className={`flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-bold transition ${
+        className={`flex min-h-10 items-center justify-center gap-1.5 rounded-xl px-3 text-sm font-bold transition-all ${
           channelTab === 'email'
-            ? 'bg-brand text-white shadow-sm'
+            ? 'btn-primary shadow-sm'
             : 'text-muted hover:text-ink'
         }`}
       >
@@ -388,14 +388,14 @@ export function CitizenAuthForm({
       {!compact && <p className="text-sm text-muted">{t('auth.citizenIntro')}</p>}
 
       {/* Chuyển đổi Mã OTP thật / Mật khẩu */}
-      <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1" role="tablist">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line/70 bg-surface-2/85 p-1" role="tablist">
         <button
           type="button"
           role="tab"
           aria-selected={mode === 'otp' || mode === 'reset'}
           onClick={() => resetFormState('otp')}
-          className={`min-h-10 rounded-lg px-2 text-sm font-bold transition ${
-            mode === 'otp' || mode === 'reset' ? 'bg-surface text-brand shadow-card' : 'text-muted'
+          className={`min-h-10 rounded-xl px-2 text-sm font-bold transition-all ${
+            mode === 'otp' || mode === 'reset' ? 'bg-surface text-brand shadow-card' : 'text-muted hover:text-ink'
           }`}
         >
           <KeyRound className="mr-1 inline h-4 w-4" aria-hidden /> {t('auth.modeOtp')}
@@ -405,8 +405,8 @@ export function CitizenAuthForm({
           role="tab"
           aria-selected={mode === 'password'}
           onClick={() => resetFormState('password')}
-          className={`min-h-10 rounded-lg px-2 text-sm font-bold transition ${
-            mode === 'password' ? 'bg-surface text-brand shadow-card' : 'text-muted'
+          className={`min-h-10 rounded-xl px-2 text-sm font-bold transition-all ${
+            mode === 'password' ? 'bg-surface text-brand shadow-card' : 'text-muted hover:text-ink'
           }`}
         >
           <Lock className="mr-1 inline h-4 w-4" aria-hidden /> {t('auth.modePassword')}

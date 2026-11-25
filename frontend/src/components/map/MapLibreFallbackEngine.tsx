@@ -192,6 +192,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       };
       requestAnimationFrame(collapseMobileAttrib);
       map.on('resize', collapseMobileAttrib);
+      map.on('style.load', collapseMobileAttrib);
     } catch (err) {
       console.warn('[MapLibre] Thiết bị không hỗ trợ WebGL, kích hoạt khung dự phòng 2D:', err);
       setWebglUnavailable(true);
