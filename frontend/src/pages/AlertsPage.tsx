@@ -405,7 +405,7 @@ export default function AlertsPage() {
       setDrawDesc('');
       setDrawRoads('');
       setDrawDetour('');
-      toast('success', 'Đã phát cảnh báo địa hình lên bản đồ toàn tỉnh!');
+      toast('success', 'Đã phát cảnh báo địa hình lên bản đồ toàn thành phố!');
     } catch (err) {
       toast('error', 'Không lưu được cảnh báo', err instanceof Error ? err.message : undefined);
     } finally {
@@ -743,20 +743,20 @@ export default function AlertsPage() {
         );
       })()}
 
-      {/* Cached Daily AI Digest (DB Cache ONLY) */}
+      {/* Tóm tắt Thông minh AI 24h */}
       {digest && digest.bullets.length > 0 && (
-        <section className="rounded-2xl border border-brand/25 bg-brand-soft/45 p-3.5" aria-label="Tóm tắt tình hình 24h">
-          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+        <section className="rounded-2xl border border-brand/25 bg-gradient-to-br from-brand-soft/60 via-surface to-sky-500/10 p-4 shadow-card" aria-label="Tóm tắt tình hình 24h">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-brand">
-              <Sparkles className="h-4 w-4" aria-hidden /> Bản tin Tóm tắt AI 24h (Cache DB)
+              <Sparkles className="h-4 w-4" aria-hidden /> Tóm tắt Thông minh AI 24h · Thành phố Đồng Nai
             </span>
-            <span className="text-[11px] text-muted">Cập nhật: {fmtDate(digest.generatedAt, true)}</span>
+            <span className="text-[11px] font-medium text-muted">Cập nhật: {fmtDate(digest.generatedAt, true)}</span>
           </div>
-          <ul className="space-y-1 text-xs leading-relaxed text-ink sm:text-sm">
+          <ul className="space-y-1.5 text-xs leading-relaxed text-ink sm:text-sm">
             {digest.bullets.map((b, i) => (
               <li key={i} className="flex items-start gap-2">
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand" aria-hidden />
-                <span>{b}</span>
+                <span>{b.replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai')}</span>
               </li>
             ))}
           </ul>
@@ -1046,7 +1046,7 @@ export default function AlertsPage() {
                       {al.wardIds.slice(0, 4).map((wc) =>
                         wc === 'ALL_DONG_NAI' ? (
                           <span key={wc} className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand">
-                            Toàn tỉnh Đồng Nai
+                            Toàn Thành phố Đồng Nai
                           </span>
                         ) : (
                           <button

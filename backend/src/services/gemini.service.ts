@@ -253,14 +253,14 @@ const DAILY_DIGEST_SCHEMA: Record<string, unknown> = {
   required: ['bullets'],
 };
 
-const BULLETIN_SYSTEM = `Bạn là Biên tập viên Phân tích Dữ liệu Đô thị SmartCitizen Tỉnh Đồng Nai.
+const BULLETIN_SYSTEM = `Bạn là Biên tập viên Phân tích Dữ liệu Đô thị SmartCitizen Thành phố Đồng Nai.
 Nhiệm vụ: Đánh giá bài viết từ nguồn chính thống/báo chí và trả về DUY NHẤT JSON:
-- isRelevant: true CHỈ KHI bài viết liên quan trực tiếp tới Tỉnh Đồng Nai (hoặc khu vực Đông Nam Bộ có tác động trực tiếp đến Đồng Nai như lưu lượng xả lũ hồ Trị An, cao tốc TP.HCM - Long Thành - Dầu Giây, Biên Hòa, Long Khánh, Long Thành, Nhơn Trạch, Trảng Bom, Định Quán, Tân Phú, Xuân Lộc, Bình Phước cũ hợp nhất...) VỀ CÁC CHỦ ĐỀ: thiên tai, mưa lớn, ngập lụt, sạt lở, thủy điện xả tràn, cây đổ, tai nạn giao thông nghiêm trọng, cấm đường / thi công cầu đường, kẹt xe kéo dài, lịch/sự cố cúp điện, cúp nước, hoặc thông báo khẩn của UBND/CSGT/Sở ban ngành. Tin giải trí, thể thao, chứng khoán, quốc tế không liên quan -> isRelevant=false.
+- isRelevant: true CHỈ KHI bài viết liên quan trực tiếp tới Thành phố Đồng Nai (95 Phường/Xã, bao gồm Biên Hòa, Long Khánh, Long Thành, Nhơn Trạch, Trảng Bom, Định Quán, Tân Phú, Xuân Lộc, hồ Trị An, cao tốc TP.HCM - Long Thành - Dầu Giây...) VỀ CÁC CHỦ ĐỀ: thiên tai, mưa lớn, ngập lụt, sạt lở, thủy điện xả tràn, cây đổ, tai nạn giao thông nghiêm trọng, cấm đường / thi công cầu đường, kẹt xe kéo dài, lịch/sự cố cúp điện, cúp nước, hoặc thông báo khẩn của UBND/CSGT/Sở ban ngành. Tin giải trí, thể thao, chứng khoán, quốc tế không liên quan -> isRelevant=false.
 - category: 'disaster' | 'traffic' | 'utility' | 'official_notice'
 - severity: 1 (Chú ý), 2 (Cảnh báo), 3 (Khẩn cấp)
-- wardIds: mảng mã wardCode dạng 'DN-...' khớp 95 xã/phường Đồng Nai nếu nhận diện được, hoặc ["ALL_DONG_NAI"] nếu phạm vi toàn tỉnh / nhiều khu vực.
+- wardIds: mảng mã wardCode dạng 'DN-...' khớp 95 Phường/Xã Thành phố Đồng Nai nếu nhận diện được, hoặc ["ALL_DONG_NAI"] nếu phạm vi toàn thành phố / nhiều khu vực.
 - affectedRoads: tên các tuyến đường/cầu/quốc lộ bị ảnh hưởng (nếu có).
-- cleanSummary: tóm tắt khách quan, trung thực tối đa 2 câu tiếng Việt, không phóng đại hay suy diễn ngoài nội dung cung cấp.`;
+- cleanSummary: tóm tắt khách quan, trung thực tối đa 2 câu tiếng Việt, luôn gọi đúng địa danh "Thành phố Đồng Nai", không phóng đại hay suy diễn ngoài nội dung cung cấp.`;
 
 export interface OfficialBulletinClassification {
   isRelevant: boolean;
@@ -283,7 +283,7 @@ Từ thông tin sự cố hiện trường, hãy trả về DUY NHẤT JSON gồ
 2. equipmentAndCrew: Thiết bị, phương tiện & tổ chuyên môn cần mang theo (1 câu ≤ 160 ký tự).
 3. safetyWarning: Cảnh báo an toàn bắt buộc khi tiếp cận hiện trường (1 câu ≤ 160 ký tự).`;
 
-export const CHAT_SYSTEM = `Bạn là "Trợ lý AI Cộng đồng" của nền tảng SmartCitizen_DongNai (Team Victer) phục vụ người dân Tỉnh Đồng Nai (95 Phường/Xã).
+export const CHAT_SYSTEM = `Bạn là "Trợ lý AI Cộng đồng" của nền tảng SmartCitizen_DongNai (Team Victer) phục vụ người dân Thành phố Đồng Nai (95 Phường/Xã).
 NHIỆM VỤ: hướng dẫn gửi phản ánh hiện trường (3 bước: Chụp ảnh → Xác nhận vị trí → Gửi), tra cứu tiến độ hồ sơ, giải thích trạng thái, giới thiệu số liệu minh bạch của địa bàn.
 QUY TẮC BẮT BUỘC:
 1. Chỉ dùng số liệu và trạng thái hồ sơ nằm trong khối <DATABASE_CONTEXT> và <LOCAL_RAG_KNOWLEDGE>. Không bịa số liệu, mã hồ sơ, tiến độ.
@@ -2096,40 +2096,61 @@ export class GeminiService {
     openIncidentsCount: number;
     hotWardNames: string[];
   }): Promise<{ bullets: string[]; model: string }> {
+    const cleanSentence = (s: string): string => s.trim().replace(/\.+$/, '');
+
     const fallbackBullets = (): string[] => {
-      const topAlerts = input.activeAlerts.slice(0, 2).map((a) => a.title);
+      const highAlerts = input.activeAlerts.filter((a) => a.severity >= 2);
+      const topAlerts = input.activeAlerts
+        .slice(0, 2)
+        .map((a) => cleanSentence(a.title))
+        .filter(Boolean);
       const b1 =
         input.activeAlerts.length > 0
-          ? `Toàn tỉnh Đồng Nai hiện có ${input.activeAlerts.length} cảnh báo đang hiệu lực${topAlerts.length ? `: ${topAlerts.join('; ')}` : ''}.`
-          : 'Hiện chưa ghi nhận cảnh báo thiên tai hay sự cố giao thông khẩn cấp đang hiệu lực trên địa bàn Đồng Nai.';
+          ? `Cảnh báo đô thị: Toàn Thành phố Đồng Nai hiện có ${input.activeAlerts.length} cảnh báo đang hiệu lực${highAlerts.length ? ` (${highAlerts.length} cảnh báo mức cao/khẩn cấp)` : ''}${topAlerts.length ? ` — nổi bật: ${topAlerts.join('; ')}` : ''}.`
+          : 'Cảnh báo đô thị: Toàn Thành phố Đồng Nai hiện chưa ghi nhận cảnh báo thiên tai hay ùn tắc khẩn cấp đang hiệu lực.';
+
+      const topBulletin = input.bulletins[0] ? cleanSentence(input.bulletins[0].title) : '';
       const b2 =
         input.bulletins.length > 0
-          ? `Có ${input.bulletins.length} thông báo từ nguồn chính thống/báo chí gần nhất: ${input.bulletins[0].title}.`
-          : 'Chưa có bản tin cảnh báo chính thống mới được cập nhật trong 24 giờ gần nhất.';
+          ? `Tin chính thống: Tổng hợp ${input.bulletins.length} thông báo mới trên địa bàn Thành phố Đồng Nai, đáng chú ý: "${topBulletin}".`
+          : 'Tin chính thống: Chưa ghi nhận bản tin cảnh báo chính thống mới trong 24 giờ qua.';
+
       const b3 =
         input.hotWardNames.length > 0
-          ? `Hệ thống ghi nhận ${input.openIncidentsCount} phản ánh hiện trường đang xử lý; tập trung chú ý tại ${input.hotWardNames.slice(0, 3).join(', ')}.`
-          : `Hệ thống ghi nhận ${input.openIncidentsCount} phản ánh hiện trường đang được lực lượng chức năng tiếp nhận xử lý.`;
+          ? `Hiện trường 95 Phường/Xã: Hệ thống đang điều phối xử lý ${input.openIncidentsCount} phản ánh mở, tập trung nhiều nhất tại ${input.hotWardNames.slice(0, 3).join(', ')}.`
+          : `Hiện trường 95 Phường/Xã: Hệ thống đang tiếp nhận và điều phối xử lý ${input.openIncidentsCount} phản ánh từ người dân Thành phố Đồng Nai.`;
       return [b1, b2, b3];
     };
 
     const alertLines = input.activeAlerts
       .slice(0, 8)
-      .map((a) => `- [Mức ${a.severity} | ${a.category} | ${a.sourceLabel}] ${a.title}`)
+      .map((a) => `- [Mức ${a.severity} | ${a.category} | ${a.sourceLabel}] ${a.title}${a.affectedRoads.length ? ` (Tuyến: ${a.affectedRoads.join(', ')})` : ''}`)
       .join('\n');
     const bulletinLines = input.bulletins
       .slice(0, 6)
       .map((b) => `- [${b.sourceName}] ${b.title}: ${b.cleanSummary}`)
       .join('\n');
 
+    const DIGEST_SYSTEM = [
+      'Bạn là Trợ lý Phân tích Đô thị Thông minh (SmartCitizen AI) của Thành phố Đồng Nai.',
+      'QUY TẮC BẮT BUỘC:',
+      '1. Địa danh hành chính chuẩn là "Thành phố Đồng Nai" (gồm 95 Phường/Xã). TUYỆT ĐỐI KHÔNG viết "tỉnh Đồng Nai" hay "toàn tỉnh".',
+      '2. Trình bày như một bản tin điều hành chuyên nghiệp (phong cách ChatGPT/Gemini): rõ ràng, chính xác từng con số, tên tuyến đường, tên Phường/Xã và chuẩn chính tả tiếng Việt.',
+      '3. Chỉ sử dụng dữ liệu thực tế được cung cấp bên dưới; tuyệt đối không bịa đặt số liệu hoặc sự kiện ngoài ngữ cảnh.',
+      '4. Trả về JSON { "bullets": [string, string, string] } gồm ĐÚNG 3 gạch đầu dòng ngắn gọn (mỗi dòng 1–2 câu rõ ý, kết thúc bằng 1 dấu chấm):',
+      '   - Dòng 1 ("Cảnh báo đô thị: ..."): Tổng hợp số cảnh báo hiệu lực và các tuyến đường/điểm nóng cần lưu ý.',
+      '   - Dòng 2 ("Tin chính thống: ..."): Tóm tắt thông tin đáng chú ý nhất từ nguồn báo chí/cơ quan chức năng.',
+      '   - Dòng 3 ("Hiện trường 95 Phường/Xã: ..."): Nêu số phản ánh đang xử lý và các Phường/Xã trọng điểm.',
+    ].join('\n');
+
     if ((await this.cloudAllowed()) && (input.activeAlerts.length > 0 || input.bulletins.length > 0 || input.openIncidentsCount > 0)) {
       const prompt = [
         `Ngày: ${input.dateKey}`,
+        `Địa bàn: Thành phố Đồng Nai (95 Phường/Xã)`,
         `Số phản ánh đang xử lý: ${input.openIncidentsCount}`,
-        `Khu vực nhiều sự cố: ${input.hotWardNames.join(', ') || 'Không có'}`,
+        `Phường/Xã nhiều phản ánh nhất: ${input.hotWardNames.join(', ') || 'Chưa có điểm nóng'}`,
         `Cảnh báo đang hiệu lực (${input.activeAlerts.length}):\n${alertLines || '(Không có)'}`,
         `Tin chính thống (${input.bulletins.length}):\n${bulletinLines || '(Không có)'}`,
-        'Hãy tóm tắt thành ĐÚNG 3 gạch đầu dòng tiếng Việt súc tích, chỉ dựa trên số liệu thực tế ở trên, không bịa thêm.',
       ].join('\n\n');
 
       try {
@@ -2139,7 +2160,7 @@ export class GeminiService {
               const raw = await this.callOpenAiCompatible({
                 apiKey,
                 provider: meta.provider,
-                systemInstruction: 'Chỉ tổng hợp đúng số liệu và sự kiện được cung cấp bằng tiếng Việt thành JSON { "bullets": [...] } gồm tối đa 3 câu ngắn gọn.',
+                systemInstruction: DIGEST_SYSTEM,
                 userContent: prompt,
                 jsonMode: true,
                 temperature: 0.15,
@@ -2155,7 +2176,7 @@ export class GeminiService {
                 model: modelId,
                 contents: [{ role: 'user', parts: [{ text: prompt }] }],
                 config: {
-                  systemInstruction: 'Chỉ tổng hợp đúng số liệu và sự kiện được cung cấp bằng tiếng Việt thành JSON gồm 3 câu súc tích.',
+                  systemInstruction: DIGEST_SYSTEM,
                   temperature: 0.15,
                   responseMimeType: 'application/json',
                   responseSchema: DAILY_DIGEST_SCHEMA as never,
@@ -2170,7 +2191,9 @@ export class GeminiService {
         );
         this.ok();
         return {
-          bullets: parsed.bullets.slice(0, 3).map((b) => sanitizeUserText(b, 240)),
+          bullets: parsed.bullets
+            .slice(0, 3)
+            .map((b) => sanitizeUserText(b, 260).replace(/\b(Toàn\s+)?[Tt]ỉnh Đồng Nai\b/g, '$1Thành phố Đồng Nai')),
           model: 'gemini',
         };
       } catch (err) {

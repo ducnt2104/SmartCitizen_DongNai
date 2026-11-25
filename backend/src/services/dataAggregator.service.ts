@@ -544,7 +544,7 @@ export class DataAggregatorService {
    */
   async getDailyDigest(): Promise<DailyDigestItem> {
     const now = new Date();
-    const todayKey = now.toISOString().slice(0, 10);
+    const todayKey = `${now.toISOString().slice(0, 10)}:v2`;
 
     if (mongoose.connection.readyState === 1) {
       const hit = (await DailyDigest.findOne({
