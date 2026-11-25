@@ -67,6 +67,15 @@ interface InspectedSpot {
   loading?: boolean;
 }
 
+interface LiveZoomAddress {
+  lat: number;
+  lng: number;
+  zoom: number;
+  address: string;
+  wardName?: string;
+  loading?: boolean;
+}
+
 const REGION_DOT_COLOR: Record<string, string> = {
   trung_tam: '#2563EB',
   nam_san_bay_cang: '#0891B2',
@@ -131,9 +140,13 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
   const [bboxPoints, setBboxPoints] = useState<ReportSummary[] | null>(null);
   const [cameraCmd, setCameraCmd] = useState<CameraCommand | null>(null);
   const [inspectedSpot, setInspectedSpot] = useState<InspectedSpot | null>(null);
+  const [liveAddress, setLiveAddress] = useState<LiveZoomAddress | null>(null);
 
   const bboxAbortRef = useRef<AbortController | null>(null);
   const inspectAbortRef = useRef<AbortController | null>(null);
+  const liveGeoAbortRef = useRef<AbortController | null>(null);
+  const liveGeoTimerRef = useRef<number | null>(null);
+  const liveGeoCacheRef = useRef<Map<string, { address: string; wardName?: string }>>(new Map());
   const autoLocatedRef = useRef(false);
 
   const pushCamera = useCallback((cmd: Omit<CameraCommand, 'seq'>) => {
@@ -174,6 +187,8 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
     () => () => {
       bboxAbortRef.current?.abort();
       inspectAbortRef.current?.abort();
+      liveGeoAbortRef.current?.abort();
+      if (liveGeoTimerRef.current !== null) window.clearTimeout(liveGeoTimerRef.current);
     },
     [],
   );
@@ -200,6 +215,63 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
   const onViewportChange = useCallback(
     (bbox: MapBbox) => {
+      // Cập nhật thanh địa chỉ chi tiết trực tiếp khi người dùng phóng to (zoom >= 14.5) ở bất kỳ vị trí nào
+      if (!embedded && typeof bbox.zoom === 'number' && typeof bbox.centerLat === 'number' && typeof bbox.centerLng === 'number') {
+        if (bbox.zoom < 14.5) {
+          liveGeoAbortRef.current?.abort();
+          if (liveGeoTimerRef.current !== null) {
+            window.clearTimeout(liveGeoTimerRef.current);
+            liveGeoTimerRef.current = null;
+          }
+          setLiveAddress(null);
+        } else {
+          const lat = bbox.centerLat;
+          const lng = bbox.centerLng;
+          const z = bbox.zoom;
+          const gridKey = `${lat.toFixed(4)}:${lng.toFixed(4)}`;
+          const cachedAddr = liveGeoCacheRef.current.get(gridKey);
+          if (cachedAddr) {
+            liveGeoAbortRef.current?.abort();
+            if (liveGeoTimerRef.current !== null) {
+              window.clearTimeout(liveGeoTimerRef.current);
+              liveGeoTimerRef.current = null;
+            }
+            setLiveAddress({ lat, lng, zoom: z, address: cachedAddr.address, wardName: cachedAddr.wardName, loading: false });
+          } else {
+            setLiveAddress((prev) => ({
+              lat,
+              lng,
+              zoom: z,
+              address: bbox.localHint || prev?.address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+              wardName: prev?.wardName,
+              loading: true,
+            }));
+            if (liveGeoTimerRef.current !== null) window.clearTimeout(liveGeoTimerRef.current);
+            liveGeoTimerRef.current = window.setTimeout(() => {
+              liveGeoAbortRef.current?.abort();
+              const ctrl = new AbortController();
+              liveGeoAbortRef.current = ctrl;
+              void reverseGeocode(lat, lng, ctrl.signal)
+                .then((res) => {
+                  if (ctrl.signal.aborted) return;
+                  const niceAddr =
+                    res.source === 'out_of_bounds'
+                      ? bbox.localHint || `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+                      : res.address;
+                  const entry = { address: niceAddr, wardName: res.wardName ?? undefined };
+                  if (liveGeoCacheRef.current.size > 120) liveGeoCacheRef.current.clear();
+                  liveGeoCacheRef.current.set(gridKey, entry);
+                  setLiveAddress({ lat, lng, zoom: z, address: entry.address, wardName: entry.wardName, loading: false });
+                })
+                .catch(() => {
+                  if (ctrl.signal.aborted) return;
+                  setLiveAddress((prev) => (prev ? { ...prev, loading: false } : null));
+                });
+            }, 520);
+          }
+        }
+      }
+
       if (embedded || externalReports || !online) return;
       bboxAbortRef.current?.abort();
       const bboxParam = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
@@ -279,15 +351,11 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
 
   const inspectLocation = useCallback(
     async (lat: number, lng: number, labelHint?: string, zoomTo?: number): Promise<void> => {
-      if (!inDongNaiBBox(lat, lng)) {
-        toast('info', 'Tọa độ nằm ngoài ranh giới Thành phố Đồng Nai.');
-        return;
-      }
       inspectAbortRef.current?.abort();
       const ctrl = new AbortController();
       inspectAbortRef.current = ctrl;
 
-      const arterial = matchArterial(lat, lng, 80);
+      const arterial = inDongNaiBBox(lat, lng) ? matchArterial(lat, lng, 80) : null;
       setInspectedSpot({
         lat,
         lng,
@@ -304,12 +372,16 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
       try {
         const res = await reverseGeocode(lat, lng, ctrl.signal);
         if (ctrl.signal.aborted) return;
-        const firstPart = res.address.split(',')[0]?.trim();
+        const resolvedAddress =
+          res.source === 'out_of_bounds'
+            ? labelHint || `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+            : res.address;
+        const firstPart = resolvedAddress.split(',')[0]?.trim();
         setInspectedSpot({
           lat,
           lng,
           label: labelHint || (firstPart && firstPart !== res.wardName ? firstPart : res.wardName ?? 'Vị trí đã chọn'),
-          address: res.address,
+          address: resolvedAddress,
           wardName: res.wardName ?? undefined,
           arterialName: arterial?.name,
           loading: false,
@@ -319,7 +391,7 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
         setInspectedSpot((prev) => (prev ? { ...prev, loading: false } : null));
       }
     },
-    [pushCamera, toast],
+    [pushCamera],
   );
 
   const handlePickSuggestion = async (item: PlaceSuggestion): Promise<void> => {
@@ -633,14 +705,39 @@ export function CityIncidentMap<T extends MapPoint = MapPoint>({
           onLocate={() => void locateMe()}
           locating={gps.status === 'locating'}
           selectedPin={inspectedSpot ? { lat: inspectedSpot.lat, lng: inspectedSpot.lng, label: inspectedSpot.label } : null}
-          onMapClick={(lat, lng) => {
-            void inspectLocation(lat, lng);
+          onMapClick={(lat, lng, labelHint) => {
+            void inspectLocation(lat, lng, labelHint);
           }}
           onViewportChange={onViewportChange}
+          bottomLeftOverlay={
+            liveAddress ? (
+              <button
+                type="button"
+                onClick={() => void inspectLocation(liveAddress.lat, liveAddress.lng)}
+                className="pointer-events-auto flex max-w-[min(78vw,28rem)] items-center gap-2 rounded-2xl border border-line/80 bg-surface/95 px-3 py-2 text-left shadow-lift backdrop-blur-xl transition-colors hover:border-brand/40"
+                title="Bấm để ghim & xem chi tiết địa chỉ này"
+              >
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-xl bg-brand/12 text-brand">
+                  <MapPin className="h-3.5 w-3.5" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[11px] font-bold text-ink">
+                    <span className="truncate">{liveAddress.address}</span>
+                    {liveAddress.loading && (
+                      <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-brand" aria-hidden />
+                    )}
+                  </span>
+                  <span className="block truncate font-mono text-[10px] text-muted">
+                    Z{liveAddress.zoom.toFixed(1)} · {liveAddress.lat.toFixed(5)}, {liveAddress.lng.toFixed(5)}
+                  </span>
+                </span>
+              </button>
+            ) : undefined
+          }
           showArterials
           showFitCityButton
           tone={tone}
-          className={className ?? 'h-[62dvh]'}
+          className={className ?? 'h-[66dvh] min-h-[26rem]'}
           ariaLabel={ariaLabel ?? t('map.aria')}
         />
       )}

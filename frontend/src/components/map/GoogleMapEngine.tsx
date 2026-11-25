@@ -17,7 +17,6 @@ import { useI18n } from '../../i18n';
 import {
   createClusterElement,
   createIncidentPinElement,
-  DONG_NAI_CAMERA_RESTRICTION,
   DONG_NAI_DEFAULT_CENTER,
   DONG_NAI_GOOGLE_BOUNDS,
   getPinState,
@@ -93,7 +92,7 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   onUserPan?: () => void;
   draggablePin?: DraggablePinSpec | null;
   selectedPin?: { lat: number; lng: number; label?: string } | null;
-  onMapClick?: (lat: number, lng: number) => void;
+  onMapClick?: (lat: number, lng: number, labelHint?: string) => void;
   routeOverlay?: RouteOverlaySpec | null;
 }
 
@@ -250,7 +249,7 @@ function GoogleCameraController<T extends MapPoint>({
       const shifted = offsetLatLngByPadding(cameraCommand.lat, cameraCommand.lng, targetZoom, followPadding);
       map.panTo(shifted);
     } else if (cameraCommand.kind === 'zoomDelta' && typeof cameraCommand.delta === 'number') {
-      map.setZoom(Math.min(20, Math.max(7, (map.getZoom() ?? 12) + cameraCommand.delta)));
+      map.setZoom(Math.min(22, Math.max(2, (map.getZoom() ?? 12) + cameraCommand.delta)));
     }
   }, [map, cameraCommand, reports, followPadding]);
 
@@ -760,12 +759,8 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
           disableDefaultUI
           scaleControl
           clickableIcons={!p.crosshairActive}
-          minZoom={7}
-          maxZoom={20}
-          restriction={{
-            latLngBounds: DONG_NAI_CAMERA_RESTRICTION,
-            strictBounds: false,
-          }}
+          minZoom={2}
+          maxZoom={22}
           className="h-full w-full"
           onDragstart={() => {
             dragRef.current?.(true);
@@ -787,6 +782,9 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
                 minLat: sw.lat(),
                 maxLng: ne.lng(),
                 maxLat: ne.lat(),
+                zoom: m.getZoom() ?? undefined,
+                centerLat: c?.lat(),
+                centerLng: c?.lng(),
               });
             }
           }}

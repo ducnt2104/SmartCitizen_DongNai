@@ -2,10 +2,7 @@ import * as maplibregl from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef, useState } from 'react';
 import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
-import {
-  buildDongNaiWardZonesGeoJson,
-  DONG_NAI_OUTER_SHADE_POLYGON,
-} from '../../data/dongNaiBoundary';
+import { buildDongNaiWardZonesGeoJson } from '../../data/dongNaiBoundary';
 import { useI18n } from '../../i18n';
 import { QUICK_PLACES } from '../../lib/geoClient';
 import {
@@ -15,7 +12,6 @@ import {
   createGeoJsonCircle,
   createIncidentPinElement,
   DONG_NAI_ADMIN_MASK_POLYGON,
-  DONG_NAI_CAMERA_RESTRICTION,
   DONG_NAI_MAPLIBRE_BOUNDS,
   getPinState,
   loadDetailedVectorStyle,
@@ -113,6 +109,79 @@ function buildOverlaysGeoJson(
   return { type: 'FeatureCollection', features };
 }
 
+const INTERACTIVE_POI_LAYERS = ['poi_r1', 'poi_r7', 'poi_r20', 'poi_transit', 'sc-poi-unranked', 'airport'];
+const STREET_DETAIL_LAYERS = ['highway-name-major', 'highway-name-minor', 'highway-name-path'];
+
+function readFeatureName(props: Record<string, unknown> | null | undefined, lang: 'vi' | 'en'): string {
+  if (!props) return '';
+  const candidates =
+    lang === 'en'
+      ? [props['name:en'], props.name_en, props['name:latin'], props.name]
+      : [props['name:vi'], props.name, props['name:latin']];
+  for (const v of candidates) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+function queryLocalAddressHint(
+  map: maplibregl.Map,
+  point: maplibregl.PointLike,
+  lang: 'vi' | 'en',
+  boxRadiusPx = 0,
+): { poi?: string; houseNumber?: string; street?: string; subLocality?: string; combined?: string } {
+  const existingLayers = [
+    ...INTERACTIVE_POI_LAYERS,
+    'sc-housenumber',
+    ...STREET_DETAIL_LAYERS,
+    'label_other',
+  ].filter((id) => Boolean(map.getLayer(id)));
+  if (existingLayers.length === 0) return {};
+
+  try {
+    const pt = maplibregl.Point.convert(point);
+    const geom: maplibregl.PointLike | [maplibregl.PointLike, maplibregl.PointLike] =
+      boxRadiusPx > 0
+        ? [
+            [pt.x - boxRadiusPx, pt.y - boxRadiusPx],
+            [pt.x + boxRadiusPx, pt.y + boxRadiusPx],
+          ]
+        : pt;
+    const feats = map.queryRenderedFeatures(geom, { layers: existingLayers });
+    let poi = '';
+    let houseNumber = '';
+    let street = '';
+    let subLocality = '';
+
+    for (const f of feats) {
+      const lid = f.layer.id;
+      const props = (f.properties ?? {}) as Record<string, unknown>;
+      if (!poi && INTERACTIVE_POI_LAYERS.includes(lid)) {
+        poi = readFeatureName(props, lang);
+      } else if (!houseNumber && lid === 'sc-housenumber' && props.housenumber) {
+        houseNumber = String(props.housenumber).trim();
+      } else if (!street && STREET_DETAIL_LAYERS.includes(lid)) {
+        street = readFeatureName(props, lang);
+      } else if (!subLocality && lid === 'label_other') {
+        subLocality = readFeatureName(props, lang);
+      }
+      if (poi && houseNumber && street) break;
+    }
+
+    const streetLine = [houseNumber, street].filter(Boolean).join(' ').trim();
+    const combined = [poi, streetLine, !poi && !streetLine ? subLocality : ''].filter(Boolean).join(' · ');
+    return {
+      poi: poi || undefined,
+      houseNumber: houseNumber || undefined,
+      street: street || undefined,
+      subLocality: subLocality || undefined,
+      combined: combined || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 function buildHeatmapGeoJson<T extends MapPoint>(reports: T[]): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
@@ -190,14 +259,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
   const fallbackToRasterStyle = (map: maplibregl.Map, reason: string): void => {
     clearVectorWatchdog();
     if (vectorFailedRef.current) return;
-    console.warn('[MapLibre] Chuyển sang nền Esri World_Street_Map do:', reason);
+    console.warn('[MapLibre] Chuyển sang nền CARTO/Esri dự phòng do:', reason);
     vectorFailedRef.current = true;
     vectorActiveRef.current = false;
     vectorLoadedRef.current = false;
-    if (surfaceRef.current === 'roadmap' || surfaceRef.current === 'dark') {
-      styleParsedRef.current = false;
-      map.setStyle(buildMapLibreStyle(surfaceRef.current));
-    }
+    styleParsedRef.current = false;
+    map.setStyle(buildMapLibreStyle(surfaceRef.current));
   };
 
   const applyVectorStyleWithWatchdog = (map: maplibregl.Map, vecStyle: maplibregl.StyleSpecification): void => {
@@ -208,12 +275,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     map.setStyle(vecStyle);
     vectorWatchdogRef.current = window.setTimeout(() => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        fallbackToRasterStyle(map, 'vector load timeout (7.5s)');
+        fallbackToRasterStyle(map, 'vector load timeout (10s)');
       }
-    }, 7500);
+    }, 10000);
   };
 
-  // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi unmount
+  // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; mở khóa kéo/zoom tự do toàn diện như Google Maps
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -225,12 +292,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         style: buildMapLibreStyle(p.surface),
         center: [p.initialCenter.lng, p.initialCenter.lat],
         zoom: p.initialZoom,
-        minZoom: 7,
-        maxZoom: 20,
-        maxBounds: [
-          [DONG_NAI_CAMERA_RESTRICTION.west, DONG_NAI_CAMERA_RESTRICTION.south],
-          [DONG_NAI_CAMERA_RESTRICTION.east, DONG_NAI_CAMERA_RESTRICTION.north],
-        ],
+        minZoom: 2,
+        maxZoom: 22,
         attributionControl: { compact: true },
       });
       map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left');
@@ -256,7 +319,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     const vectorAbort = new AbortController();
 
     const applyDetailedVectorIfSupported = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
-      if ((targetSurface !== 'roadmap' && targetSurface !== 'dark') || vectorFailedRef.current) {
+      if (vectorFailedRef.current) {
         clearVectorWatchdog();
         vectorActiveRef.current = false;
         vectorLoadedRef.current = false;
@@ -271,11 +334,22 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     const emitViewport = (): void => {
       if (viewportRef.current) {
         const b = map.getBounds();
+        const c = map.getCenter();
+        const z = map.getZoom();
+        let localHint: string | null = null;
+        if (z >= 14.2) {
+          const centerPx = map.project(c);
+          localHint = queryLocalAddressHint(map, centerPx, langRef.current, 42).combined ?? null;
+        }
         viewportRef.current({
           minLng: b.getWest(),
           minLat: b.getSouth(),
           maxLng: b.getEast(),
           maxLat: b.getNorth(),
+          zoom: z,
+          centerLat: c.lat,
+          centerLng: c.lng,
+          localHint,
         });
       }
     };
@@ -358,6 +432,20 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       emitViewport();
     });
 
+    map.on('mousemove', (ev) => {
+      if (crosshairActiveRef.current) return;
+      const hoverLayers = [...INTERACTIVE_POI_LAYERS, 'sc-admin-hub-labels', 'sc-admin-all-ward-labels'].filter((id) =>
+        Boolean(map.getLayer(id)),
+      );
+      if (hoverLayers.length === 0) return;
+      try {
+        const hit = map.queryRenderedFeatures(ev.point, { layers: hoverLayers });
+        map.getCanvas().style.cursor = hit.length > 0 ? 'pointer' : '';
+      } catch {
+        // Bỏ qua khi style đang chuyển đổi
+      }
+    });
+
     map.on('click', (ev) => {
       if (crosshairActiveRef.current) {
         const curZoom = map.getZoom();
@@ -372,15 +460,22 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       if (target?.closest('.sc-map-pin, .sc-cluster, .maplibregl-ctrl, .maplibregl-marker')) {
         return;
       }
+      const local = queryLocalAddressHint(map, ev.point, langRef.current, 10);
+      if (local.poi) {
+        onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng, local.poi);
+        return;
+      }
       const adminLayerIds = ['sc-admin-hub-labels', 'sc-admin-all-ward-labels'].filter((id) => Boolean(map.getLayer(id)));
       const adminHit = adminLayerIds.length > 0 ? map.queryRenderedFeatures(ev.point, { layers: adminLayerIds })[0] : undefined;
       if (adminHit && adminHit.geometry.type === 'Point') {
         const [lng, lat] = adminHit.geometry.coordinates;
+        const wardLabel = typeof adminHit.properties?.name === 'string' ? adminHit.properties.name : undefined;
         map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 360 });
-        onMapClickRef.current?.(lat, lng);
+        onMapClickRef.current?.(lat, lng, wardLabel);
         return;
       }
-      onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng);
+      const clickHint = [local.houseNumber, local.street].filter(Boolean).join(' ').trim() || local.subLocality;
+      onMapClickRef.current?.(ev.lngLat.lat, ev.lngLat.lng, clickHint || undefined);
     });
 
     const handleResize = () => map.resize();
@@ -423,7 +518,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     return () => window.cancelAnimationFrame(id);
   }, [p.followPadding?.bottom, p.followPadding?.top, p.followPadding?.left]);
 
-  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Đường) mượt không hủy instance Map
+  // 2) Đổi lớp nền (Đường phố Vector / Vệ tinh + Địa chỉ Vector / Bản đồ tối) mượt không hủy instance Map
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -433,7 +528,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     surfaceRef.current = p.surface;
     langRef.current = lang;
 
-    if ((p.surface === 'roadmap' || p.surface === 'dark') && !vectorFailedRef.current) {
+    if (!vectorFailedRef.current) {
       let cancelled = false;
       const ctrl = new AbortController();
       const targetSurface = p.surface;
@@ -492,7 +587,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       });
     } else if (cmd.kind === 'zoomDelta' && typeof cmd.delta === 'number') {
       map.easeTo({
-        zoom: Math.min(20, Math.max(7, map.getZoom() + cmd.delta)),
+        zoom: Math.min(22, Math.max(2, map.getZoom() + cmd.delta)),
         duration: 180,
       });
     }
@@ -610,27 +705,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           'road_trunk_primary_casing',
         ].find((lid) => Boolean(map.getLayer(lid))) ?? overlayBeforeId;
 
-      // Lớp phủ mờ nhẹ ngoài ranh giới thực & phân khu màu tinh tế 95 ĐVHC 2 cấp đặt dưới mạng đường/sông
-      if (!map.getSource('sc-outer-shade')) {
-        map.addSource('sc-outer-shade', {
-          type: 'geojson',
-          data: DONG_NAI_OUTER_SHADE_POLYGON,
-        });
-        map.addLayer(
-          {
-            id: 'sc-outer-shade-fill',
-            type: 'fill',
-            source: 'sc-outer-shade',
-            maxzoom: 13.6,
-            paint: {
-              'fill-color': isRoadmap ? '#CBD5E1' : '#020617',
-              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, isRoadmap ? 0.22 : 0.34, 11, 0.1, 13.2, 0],
-            },
-          },
-          tintBeforeLayerId,
-        );
-      }
-
+      // Không làm mờ khu vực ngoài ranh giới Đồng Nai để bản đồ mở toàn diện không giới hạn như Google Maps.
+      // Giữ phân khu màu rất nhẹ 95 ĐVHC ở tầm nhìn tổng quan và ẩn dần khi phóng to để lộ rõ chi tiết phố/hẻm/nhà.
       if (!map.getSource('sc-ward-zones')) {
         map.addSource('sc-ward-zones', {
           type: 'geojson',
@@ -641,7 +717,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             id: 'sc-ward-zones-fill',
             type: 'fill',
             source: 'sc-ward-zones',
-            maxzoom: 14.6,
+            maxzoom: 13.8,
             paint: {
               'fill-color': ['get', 'fillColor'],
               'fill-opacity': [
@@ -649,12 +725,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
                 ['linear'],
                 ['zoom'],
                 7.2,
-                isRoadmap ? 0.16 : 0.13,
+                isRoadmap ? 0.12 : 0.1,
                 10.5,
-                isRoadmap ? 0.11 : 0.09,
-                13.0,
-                isRoadmap ? 0.04 : 0.04,
-                14.4,
+                isRoadmap ? 0.08 : 0.07,
+                12.8,
+                0.03,
+                13.8,
                 0,
               ],
             },
@@ -666,12 +742,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             id: 'sc-ward-zones-line',
             type: 'line',
             source: 'sc-ward-zones',
-            maxzoom: 14.8,
+            maxzoom: 14.5,
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': isRoadmap ? ['get', 'borderColor'] : '#64748B',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.65, 11, 1.0, 13.5, 1.25],
-              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.26, 12.5, 0.34, 14.6, 0],
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.6, 11, 0.9, 13.5, 1.1],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.24, 12.5, 0.28, 14.4, 0],
             },
           },
           overlayBeforeId,
@@ -692,8 +768,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': isRoadmap ? '#60A5FA' : '#38BDF8',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 6.5, 12, 8.5],
-              'line-opacity': isRoadmap ? 0.24 : 0.28,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4.5, 12, 7.5],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.18, 13, 0.2, 16, 0.08],
             },
           },
           overlayBeforeId,
@@ -706,8 +782,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             layout: { 'line-cap': 'round', 'line-join': 'round' },
             paint: {
               'line-color': isRoadmap ? '#2563EB' : '#38BDF8',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.2, 12, 3.0],
-              'line-opacity': 0.92,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 12, 2.4, 16, 1.5],
+              'line-dasharray': [4, 2.5],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.85, 14, 0.72, 17, 0.4],
             },
           },
           overlayBeforeId,
@@ -727,13 +804,13 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           id: 'sc-admin-hub-labels',
           type: 'symbol',
           source: 'sc-admin-wards',
-          minzoom: 7.0,
+          minzoom: 6.5,
           maxzoom: 10.2,
           filter: ['==', ['get', 'isHub'], true],
           layout: {
             'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
-            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.8, 10.0, 12.8],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 6.5, 10.2, 10.0, 12.6],
             'text-max-width': 10,
             'text-padding': 6,
             'text-variable-anchor': ['center', 'top', 'bottom'],
@@ -752,12 +829,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           minzoom: 10.2,
           maxzoom: 15.8,
           paint: {
-            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 3.8, 2.8],
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 3.6, 2.6],
             'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#1D4ED8', '#0F766E'],
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,
-            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.92, 15.8, 0],
-            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.96, 15.8, 0],
+            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.9, 15.8, 0],
+            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.95, 15.8, 0],
           },
         });
 
@@ -766,7 +843,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           type: 'symbol',
           source: 'sc-admin-wards',
           minzoom: 10.2,
-          maxzoom: 16.2,
+          maxzoom: 18.8,
           layout: {
             'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
@@ -775,21 +852,23 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
               ['linear'],
               ['zoom'],
               10.2,
-              ['case', ['==', ['get', 'kind'], 'Phường'], 11.5, 10.2],
-              13.5,
-              ['case', ['==', ['get', 'kind'], 'Phường'], 13.5, 12],
+              ['case', ['==', ['get', 'kind'], 'Phường'], 11.4, 10.2],
+              14.0,
+              ['case', ['==', ['get', 'kind'], 'Phường'], 13.4, 12.0],
+              17.5,
+              ['case', ['==', ['get', 'kind'], 'Phường'], 14.5, 13.0],
             ],
             'text-offset': [0, 0.85],
             'text-anchor': 'top',
             'text-max-width': 10,
-            'text-padding': 5,
+            'text-padding': 6,
             'text-optional': true,
           },
           paint: {
             'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
             'text-halo-color': haloColor,
             'text-halo-width': 2.2,
-            'text-opacity': ['interpolate', ['linear'], ['zoom'], 15.2, 0.96, 16.2, 0],
+            'text-opacity': ['interpolate', ['linear'], ['zoom'], 15.8, 0.94, 17.5, 0.65, 18.8, 0],
           },
         });
       }

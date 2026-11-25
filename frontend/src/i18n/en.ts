@@ -243,7 +243,7 @@ export const en: Record<keyof typeof vi, string> = {
   'map.errorHint': 'Switched to safe recovery mode. Tap retry to reload the map view.',
   'map.fitCity': 'All Dong Nai City',
   'map.lowAccuracy': 'Current GPS accuracy is ±{m}m (weak indoor signal). Pan the map manually or step outdoors for higher precision.',
-  'map.searchWardPlaceholder': 'Search all 95 Wards/Communes (e.g. Long Thanh, Binh Phuoc, Ta Lai)…',
+  'map.searchWardPlaceholder': 'Search any address, street, POI, landmark, or 95 Dong Nai wards…',
   'map.quickRegions': 'Quick-jump regions',
   'map.statusAll': 'All statuses',
   'map.nearMe': 'Near me',

@@ -241,7 +241,7 @@ export const vi = {
   'map.errorHint': 'Đã chuyển sang chế độ an toàn. Bấm thử lại để làm mới khung bản đồ.',
   'map.fitCity': 'Toàn TP. Đồng Nai',
   'map.lowAccuracy': 'Sai số GPS hiện tại là ±{m}m (tín hiệu yếu trong nhà). Hãy kéo bản đồ hoặc bật GPS ngoài trời để định vị chính xác hơn.',
-  'map.searchWardPlaceholder': 'Tìm nhanh 95 Phường/Xã (vd: Long Thành, Bình Phước, Tà Lài)…',
+  'map.searchWardPlaceholder': 'Tìm số nhà, tên đường, địa điểm, quán ăn, bệnh viện hoặc 95 Phường/Xã…',
   'map.quickRegions': 'Khu vực nhảy nhanh',
   'map.statusAll': 'Mọi trạng thái',
   'map.nearMe': 'Quanh tôi',

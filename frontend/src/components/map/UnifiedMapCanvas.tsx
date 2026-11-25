@@ -1,4 +1,4 @@
-import { Compass, Globe2, Layers, LocateFixed, MapPin, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
+import { Compass, Globe2, Layers, LocateFixed, MapPin, Maximize2, Minimize2, Minus, Moon, Plus, ShieldCheck } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useId, useState, type ComponentType, type ReactNode } from 'react';
 import { DONG_NAI_CITY_CENTER } from '@shared/constants';
 import { useI18n } from '../../i18n';
@@ -55,7 +55,7 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   crosshairPin?: { onChange: (lat: number, lng: number) => void } | null;
   draggablePin?: DraggablePinSpec | null;
   selectedPin?: { lat: number; lng: number; label?: string } | null;
-  onMapClick?: (lat: number, lng: number) => void;
+  onMapClick?: (lat: number, lng: number, labelHint?: string) => void;
   routeOverlay?: RouteOverlaySpec | null;
   onLocate?: () => void;
   locating?: boolean;
@@ -65,6 +65,7 @@ export interface UnifiedMapCanvasProps<T extends MapPoint = MapPoint> {
   showLayerSwitcher?: boolean;
   showFitCityButton?: boolean;
   showZoomButtons?: boolean;
+  showFullscreenButton?: boolean;
   showFallbackBadge?: boolean;
   topOverlay?: ReactNode;
   bottomLeftOverlay?: ReactNode;
@@ -85,7 +86,17 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
   const defaultSurface: MapSurfaceStyle = p.tone === 'ioc' ? 'dark' : 'roadmap';
   const [surface, setSurface] = useState<MapSurfaceStyle>(defaultSurface);
   const [dragging, setDragging] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [internalCmd, setInternalCmd] = useState<CameraCommand | null>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [expanded]);
 
   useEffect(() => {
     setSurface((cur) => (cur === 'hybrid' ? 'hybrid' : p.tone === 'ioc' ? 'dark' : 'roadmap'));
@@ -144,11 +155,15 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
 
   return (
     <div
-      className={`relative overflow-hidden rounded-[1.35rem] border ${
+      className={`${
+        expanded
+          ? 'fixed inset-0 z-[90] h-[100dvh] w-[100vw] rounded-none border-0'
+          : `relative overflow-hidden rounded-[1.35rem] border ${p.className ?? 'h-[58dvh]'}`
+      } ${
         isDarkFrame
           ? 'border-ioc-line bg-ioc-bg shadow-[0_18px_48px_-14px_rgba(2,6,23,0.65)]'
           : 'border-line/80 bg-surface-2 shadow-[0_18px_48px_-14px_rgba(15,23,42,0.16)]'
-      } ${p.className ?? 'h-[58dvh]'}`}
+      }`}
       role="application"
       aria-label={p.ariaLabel ?? t('map.aria')}
     >
@@ -229,10 +244,22 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
         </div>
       )}
 
-      {/* Cụm nút điều khiển nổi bên phải (Zoom +/-, Toàn TP. Đồng Nai, Vị trí của tôi) */}
+      {/* Cụm nút điều khiển nổi bên phải (Toàn màn hình, Zoom +/-, Toàn TP. Đồng Nai, Vị trí của tôi) */}
       <div
         className={`absolute ${p.controlsBottomClassName ?? 'bottom-2.5 sm:bottom-3'} right-2.5 z-[35] flex flex-col items-end gap-2 sm:right-3`}
       >
+        {p.showFullscreenButton !== false && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="grid h-9 w-9 place-items-center rounded-2xl border border-line bg-surface/95 text-ink shadow-lift backdrop-blur-sm hover:bg-surface-2 sm:h-10 sm:w-10"
+            aria-label={expanded ? 'Thu gọn bản đồ' : 'Mở rộng toàn màn hình'}
+            title={expanded ? 'Thu gọn bản đồ (Esc)' : 'Mở rộng toàn màn hình'}
+          >
+            {expanded ? <Minimize2 className="h-4 w-4 text-brand" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
+        )}
+
         {p.showZoomButtons !== false && (
           <div className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface/95 shadow-lift backdrop-blur-sm">
             <button
