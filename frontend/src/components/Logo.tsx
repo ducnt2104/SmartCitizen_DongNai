@@ -18,7 +18,7 @@ export function LogoMark({
       width={size}
       height={size}
       decoding="async"
-      className={`rounded-full object-contain select-none ${className}`}
+      className={`rounded-full bg-white/95 object-contain shadow-sm ring-1 ring-brand/15 select-none ${className}`}
     />
   );
 }

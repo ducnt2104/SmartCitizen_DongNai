@@ -13,6 +13,7 @@ export function CommunityLayout() {
   const { t } = useI18n();
   return (
     <div className="flex min-h-dvh flex-col">
+      <div className="h-1 w-full bg-gradient-to-r from-brand via-brand-2 to-emerald-500" aria-hidden />
       <a href="#main" className="sr-only-focusable fixed left-2 top-2 z-[4000] rounded-lg bg-brand px-3 py-2 text-brand-ink">
         {t('nav.skip')}
       </a>
