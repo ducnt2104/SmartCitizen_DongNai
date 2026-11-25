@@ -147,12 +147,6 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
         </Suspense>
       </MapErrorBoundary>
 
-      {p.topOverlay && (
-        <div className="pointer-events-none absolute inset-x-3 top-3 z-[40] flex flex-col gap-2">
-          {p.topOverlay}
-        </div>
-      )}
-
       {/* Tâm ngắm cố định giữa màn hình kiểu Google Maps / Grab (mũi kim chạm chính xác điểm (50%, 50%) = map.getCenter()) */}
       {p.crosshairPin && (
         <div className="pointer-events-none absolute inset-0 z-[30] grid place-items-center" aria-hidden>
@@ -177,38 +171,44 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
         </div>
       )}
 
-      {/* Bộ chuyển 3 chế độ bản đồ: Đường phố (Roadmap Clean) / Vệ tinh + Đường (Hybrid) / Địa hình · Tối */}
-      {p.showLayerSwitcher !== false && (
-        <div
-          className={`absolute right-3 ${p.topOverlay ? 'bottom-3 left-3 right-auto sm:bottom-auto sm:left-auto sm:right-3 sm:top-3' : 'top-3'} z-[35] inline-flex items-center gap-0.5 rounded-xl border border-line/85 bg-surface/95 p-1 text-xs font-semibold shadow-lift backdrop-blur-md`}
-          role="group"
-          aria-label={t('map.baseLayer')}
-        >
-          {(
-            [
-              ['roadmap', t('map.layer.light'), Layers],
-              ['hybrid', t('map.layer.satellite'), Compass],
-              ['dark', t('map.layer.dark'), Moon],
-            ] as const
-          ).map(([id, label, Icon]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={surface === id}
-              onClick={() => setSurface(id)}
-              className={`inline-flex min-h-9 items-center gap-1 rounded-lg px-2.5 transition-colors ${
-                surface === id ? 'bg-brand text-brand-ink' : 'text-ink hover:bg-surface-2'
-              }`}
+      {/* Thanh trên của bản đồ: sắp xếp thông tin GPS (trái) + bộ chuyển lớp bản đồ (phải) không chồng lấn trên mobile */}
+      {(p.topOverlay || p.showLayerSwitcher !== false) && (
+        <div className="pointer-events-none absolute inset-x-2.5 top-2.5 z-[35] flex flex-wrap items-start justify-between gap-1.5 sm:inset-x-3 sm:top-3">
+          {p.topOverlay && <div className="pointer-events-auto max-w-full">{p.topOverlay}</div>}
+
+          {p.showLayerSwitcher !== false && (
+            <div
+              className="no-scrollbar pointer-events-auto ml-auto inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-line/85 bg-surface/95 p-0.5 text-[11px] font-semibold shadow-lift backdrop-blur-md sm:p-1 sm:text-xs"
+              role="group"
+              aria-label={t('map.baseLayer')}
             >
-              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-              <span className="whitespace-nowrap">{label}</span>
-            </button>
-          ))}
+              {(
+                [
+                  ['roadmap', t('map.layer.light'), Layers],
+                  ['hybrid', t('map.layer.satellite'), Compass],
+                  ['dark', t('map.layer.dark'), Moon],
+                ] as const
+              ).map(([id, label, Icon]) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={surface === id}
+                  onClick={() => setSurface(id)}
+                  className={`inline-flex min-h-8 shrink-0 items-center gap-1 rounded-lg px-2 transition-colors sm:min-h-9 sm:px-2.5 ${
+                    surface === id ? 'bg-brand text-brand-ink' : 'text-ink hover:bg-surface-2'
+                  }`}
+                >
+                  <Icon className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" aria-hidden />
+                  <span className="whitespace-nowrap">{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Cụm nút điều khiển nổi bên phải (Zoom +/-, Toàn TP. Đồng Nai, Vị trí của tôi) */}
-      <div className="absolute bottom-3 right-3 z-[35] flex flex-col items-end gap-2">
+      <div className="absolute bottom-2.5 right-2.5 z-[35] flex flex-col items-end gap-2 sm:bottom-3 sm:right-3">
         {p.showZoomButtons !== false && (
           <div className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface/95 shadow-lift backdrop-blur-sm">
             <button
@@ -236,7 +236,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
           <button
             type="button"
             onClick={() => dispatchCamera({ kind: 'fitCity' })}
-            className="grid h-11 w-11 place-items-center rounded-full border border-line bg-surface/95 text-ink shadow-lift backdrop-blur-sm hover:bg-surface-2"
+            className="grid h-10 w-10 place-items-center rounded-full border border-line bg-surface/95 text-ink shadow-lift backdrop-blur-sm hover:bg-surface-2 sm:h-11 sm:w-11"
             aria-label={t('map.fitCity')}
             title={t('map.fitCity')}
           >
@@ -249,7 +249,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
             type="button"
             onClick={p.onLocate}
             disabled={p.locating}
-            className="grid h-11 w-11 place-items-center rounded-full border border-line bg-surface/95 text-brand shadow-lift backdrop-blur-sm hover:bg-surface-2 disabled:opacity-60"
+            className="grid h-10 w-10 place-items-center rounded-full border border-line bg-surface/95 text-brand shadow-lift backdrop-blur-sm hover:bg-surface-2 disabled:opacity-60 sm:h-11 sm:w-11"
             aria-label={t('map.locate')}
             title={t('map.locate')}
           >
@@ -262,9 +262,7 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
       {!googleAvailable && p.showFallbackBadge !== false && (
         <div
           title={t('map.fallbackHint')}
-          className={`pointer-events-auto absolute ${
-            p.topOverlay ? 'bottom-14 left-3 sm:bottom-3' : 'bottom-3 left-3'
-          } z-[32] inline-flex items-center gap-1.5 rounded-full border border-line/80 bg-surface/90 px-2.5 py-1 text-[11px] font-semibold text-muted shadow-card backdrop-blur-sm`}
+          className="pointer-events-auto absolute bottom-2.5 left-2.5 z-[32] inline-flex items-center gap-1.5 rounded-full border border-line/80 bg-surface/90 px-2.5 py-1 text-[11px] font-semibold text-muted shadow-card backdrop-blur-sm sm:bottom-3 sm:left-3"
         >
           <ShieldCheck className="h-3.5 w-3.5 text-brand" aria-hidden />
           <span>{t('map.fallbackBadge')}</span>
@@ -272,7 +270,11 @@ export function UnifiedMapCanvas<T extends MapPoint = MapPoint>(p: UnifiedMapCan
       )}
 
       {p.bottomLeftOverlay && (
-        <div className="pointer-events-none absolute bottom-3 left-3 z-[33]">
+        <div
+          className={`pointer-events-none absolute left-2.5 z-[33] sm:left-3 ${
+            !googleAvailable && p.showFallbackBadge !== false ? 'bottom-12' : 'bottom-2.5 sm:bottom-3'
+          }`}
+        >
           {p.bottomLeftOverlay}
         </div>
       )}

@@ -23,11 +23,11 @@ export function LogoMark({ size = 36, className = '' }: { size?: number; classNa
 
 export function Logo({ compact = false, dark = false }: { compact?: boolean; dark?: boolean }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-2">
-      <LogoMark size={compact ? 30 : 38} />
+    <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 sm:gap-2">
+      <LogoMark size={compact ? 30 : 36} className={compact ? 'shrink-0' : 'h-8 w-8 shrink-0 sm:h-9 sm:w-9'} />
       {!compact && (
         <span className="min-w-0 leading-tight">
-          <span className={`block truncate text-base font-bold tracking-tight ${dark ? 'text-ioc-text' : 'text-ink'}`}>
+          <span className={`block truncate text-[13px] font-bold tracking-tight sm:text-base ${dark ? 'text-ioc-text' : 'text-ink'}`}>
             SmartCitizen<span className="text-accent">_</span>DongNai
           </span>
           <span className={`block truncate text-[11px] font-medium ${dark ? 'text-ioc-dim' : 'text-muted'}`}>Team Victer</span>

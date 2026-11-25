@@ -19,14 +19,14 @@ export function CommunityLayout() {
       <Header />
       <OfflineBanner />
       <TopNav />
-      <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-3 pb-28 pt-4 md:pb-10">
+      <main id="main" className="mx-auto w-full max-w-5xl flex-1 px-3 pb-6 pt-4 md:pb-10">
         <RouteErrorBoundary>
           <Suspense fallback={<RouteLoadingSkeleton />}>
             <Outlet />
           </Suspense>
         </RouteErrorBoundary>
       </main>
-      <footer className="border-t border-line bg-surface px-3 py-5 pb-28 text-center md:pb-5">
+      <footer className="border-t border-line bg-surface px-3 py-5 pb-24 text-center md:pb-5">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-2">
           <Logo compact />
           <p className="text-sm font-semibold text-ink">{t('footer.credit')}</p>

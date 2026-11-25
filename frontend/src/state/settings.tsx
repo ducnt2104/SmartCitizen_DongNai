@@ -42,6 +42,8 @@ interface Ctx {
   setDrawerOpen: (v: boolean) => void;
   tourOpen: boolean;
   setTourOpen: (v: boolean) => void;
+  assistantOpen: boolean;
+  setAssistantOpen: (v: boolean) => void;
 }
 
 const SettingsContext = createContext<Ctx | null>(null);
@@ -50,6 +52,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(load);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -74,8 +77,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ settings, set, toggleSenior, drawerOpen, setDrawerOpen, tourOpen, setTourOpen }),
-    [settings, set, toggleSenior, drawerOpen, tourOpen],
+    () => ({ settings, set, toggleSenior, drawerOpen, setDrawerOpen, tourOpen, setTourOpen, assistantOpen, setAssistantOpen }),
+    [settings, set, toggleSenior, drawerOpen, tourOpen, assistantOpen],
   );
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }

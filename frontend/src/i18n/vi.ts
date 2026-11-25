@@ -5,6 +5,7 @@ export const vi = {
   'nav.map': 'Bản đồ',
   'nav.report': 'Báo cáo',
   'nav.mine': 'Của tôi',
+  'nav.assistant': 'Trợ lý AI',
   'nav.main': 'Điều hướng chính',
   'nav.login': 'Đăng nhập',
   'nav.logout': 'Đăng xuất',
