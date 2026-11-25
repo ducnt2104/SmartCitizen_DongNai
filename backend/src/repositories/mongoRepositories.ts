@@ -1,10 +1,35 @@
 import mongoose from 'mongoose';
-import type { AuditEntry, Report, Role } from '../shared/types';
+import type { AuditEntry, DynamicAiConfig, Report, Role } from '../shared/types';
 import { buildMongoConnectOptions } from '../config/db';
-import { AuditLogModel, OtpModel, ReportModel, SessionModel, UserModel } from '../models';
+import {
+  AiConfigModel,
+  AiEvaluationModel,
+  AuditLogModel,
+  ImageFingerprintModel,
+  OtpModel,
+  ReportModel,
+  SessionModel,
+  UserModel,
+} from '../models';
 import type {
-  AuditRepository, NearbyQuery, OtpRecord, OtpRepository, ReportQuery, ReportRepository, Repositories,
-  SessionRecord, SessionRepository, UserRecord, UserRepository,
+  AiConfigRepository,
+  AiEvaluationRecord,
+  AiEvaluationRepository,
+  AuditRepository,
+  DbHealthStats,
+  FingerprintRepository,
+  ImageFingerprintRecord,
+  NearbyQuery,
+  OtpRecord,
+  OtpRepository,
+  ReportQuery,
+  ReportRepository,
+  Repositories,
+  SessionRecord,
+  SessionRepository,
+  UserFilterQuery,
+  UserRecord,
+  UserRepository,
 } from './types';
 
 type Doc = Record<string, unknown>;
@@ -81,7 +106,7 @@ class MongoReportRepo implements ReportRepository {
     return ReportModel.countDocuments({ reporterId: String(reporterId), createdAt: { $gte: sinceIso }, source: 'user' });
   }
   async count(): Promise<number> {
-    return ReportModel.estimatedDocumentCount();
+    return ReportModel.countDocuments();
   }
 }
 
@@ -103,12 +128,94 @@ class MongoUserRepo implements UserRepository {
   async save(user: UserRecord): Promise<void> {
     await UserModel.replaceOne({ id: user.id }, user, { upsert: true });
   }
+  async delete(id: string): Promise<boolean> {
+    const res = await UserModel.deleteOne({ id: String(id) });
+    return (res.deletedCount ?? 0) > 0;
+  }
   async list(role?: Role): Promise<UserRecord[]> {
-    const docs = (await UserModel.find(role ? { role } : {}).lean()) as Doc[];
+    const docs = (await UserModel.find(role ? { role } : {}).sort({ createdAt: -1 }).lean()) as Doc[];
+    return docs.map((d) => strip<UserRecord>(d)!);
+  }
+  async query(filter: UserFilterQuery = {}): Promise<UserRecord[]> {
+    const f: Record<string, unknown> = {};
+    if (filter.role) f.role = filter.role;
+    if (filter.wardCode) f.wardCode = filter.wardCode;
+    if (filter.isActive !== undefined) f.revoked = filter.isActive ? { $ne: true } : true;
+    if (filter.q && filter.q.trim()) {
+      const escaped = filter.q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(escaped, 'i');
+      f.$or = [{ name: re }, { email: re }, { phone: re }, { staffCode: re }, { id: re }];
+    }
+    const docs = (await UserModel.find(f).sort({ createdAt: -1 }).lean()) as Doc[];
     return docs.map((d) => strip<UserRecord>(d)!);
   }
   async count(): Promise<number> {
-    return UserModel.estimatedDocumentCount();
+    return UserModel.countDocuments();
+  }
+}
+
+class MongoFingerprintRepo implements FingerprintRepository {
+  async save(fp: ImageFingerprintRecord): Promise<void> {
+    await ImageFingerprintModel.replaceOne(
+      { id: fp.id },
+      { ...fp, location: { type: 'Point', coordinates: [fp.lng, fp.lat] } },
+      { upsert: true },
+    );
+  }
+  async findNearbyRecent(lat: number, lng: number, radiusM: number, sinceIso: string): Promise<ImageFingerprintRecord[]> {
+    const docs = (await ImageFingerprintModel.find({
+      createdAt: { $gte: sinceIso },
+      location: { $geoWithin: { $centerSphere: [[lng, lat], radiusM / 6378100] } },
+    })
+      .sort({ createdAt: -1 })
+      .limit(120)
+      .lean()) as Doc[];
+    return docs.map((d) => {
+      const { location, ...rest } = d;
+      void location;
+      return strip<ImageFingerprintRecord>(rest)!;
+    });
+  }
+  async listByReport(reportId: string): Promise<ImageFingerprintRecord[]> {
+    const docs = (await ImageFingerprintModel.find({ reportId: String(reportId) }).lean()) as Doc[];
+    return docs.map((d) => {
+      const { location, ...rest } = d;
+      void location;
+      return strip<ImageFingerprintRecord>(rest)!;
+    });
+  }
+  async count(): Promise<number> {
+    return ImageFingerprintModel.countDocuments();
+  }
+}
+
+class MongoEvaluationRepo implements AiEvaluationRepository {
+  async append(rec: AiEvaluationRecord): Promise<void> {
+    await AiEvaluationModel.create(rec);
+  }
+  async listByReport(reportId: string): Promise<AiEvaluationRecord[]> {
+    const docs = (await AiEvaluationModel.find({ reportId: String(reportId) }).sort({ createdAt: -1 }).lean()) as Doc[];
+    return docs.map((d) => strip<AiEvaluationRecord>(d)!);
+  }
+  async recent(limit = 100): Promise<AiEvaluationRecord[]> {
+    const docs = (await AiEvaluationModel.find().sort({ createdAt: -1 }).limit(limit).lean()) as Doc[];
+    return docs.map((d) => strip<AiEvaluationRecord>(d)!);
+  }
+  async count(): Promise<number> {
+    return AiEvaluationModel.countDocuments();
+  }
+}
+
+class MongoAiConfigRepo implements AiConfigRepository {
+  async get(): Promise<DynamicAiConfig | null> {
+    const doc = (await AiConfigModel.findOne({ key: 'global' }).lean()) as Doc | null;
+    if (!doc) return null;
+    const { key, ...rest } = doc;
+    void key;
+    return strip<DynamicAiConfig>(rest);
+  }
+  async save(cfg: DynamicAiConfig): Promise<void> {
+    await AiConfigModel.replaceOne({ key: 'global' }, { key: 'global', ...cfg }, { upsert: true });
   }
 }
 
@@ -159,23 +266,85 @@ class MongoSessionRepo implements SessionRepository {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export async function createMongoRepositories(uri: string): Promise<Repositories> {
-  await mongoose.connect(uri, buildMongoConnectOptions());
-  await Promise.all([
-    ReportModel.syncIndexes(),
-    UserModel.syncIndexes(),
-    AuditLogModel.syncIndexes(),
-    OtpModel.syncIndexes(),
-    SessionModel.syncIndexes(),
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await mongoose.connect(uri, buildMongoConnectOptions());
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      console.error(`[mongodb] Lần kết nối ${attempt}/3 thất bại:`, err instanceof Error ? err.message : err);
+      if (attempt < 3) await sleep(1000 * attempt);
+    }
+  }
+  if (lastErr) throw lastErr;
+
+  // Dùng createIndexes() thay cho syncIndexes() để không drop index cũ gây xung đột trên MongoDB Atlas
+  await Promise.allSettled([
+    ReportModel.createIndexes(),
+    UserModel.createIndexes(),
+    ImageFingerprintModel.createIndexes(),
+    AiEvaluationModel.createIndexes(),
+    AiConfigModel.createIndexes(),
+    AuditLogModel.createIndexes(),
+    OtpModel.createIndexes(),
+    SessionModel.createIndexes(),
   ]);
+
+  const reports = new MongoReportRepo();
+  const users = new MongoUserRepo();
+  const fingerprints = new MongoFingerprintRepo();
+  const evaluations = new MongoEvaluationRepo();
+  const aiConfig = new MongoAiConfigRepo();
+  const audit = new MongoAuditRepo();
+  const otps = new MongoOtpRepo();
+  const sessions = new MongoSessionRepo();
+
+  const ping = async (): Promise<boolean> => {
+    if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) return false;
+    await mongoose.connection.db.admin().ping();
+    return true;
+  };
+
+  const healthStats = async (): Promise<DbHealthStats> => {
+    const t0 = performance.now();
+    const ok = await ping().catch(() => false);
+    const latencyMs = Math.round((performance.now() - t0) * 10) / 10;
+    if (!ok) {
+      return { ok: false, latencyMs, counts: { reports: 0, users: 0, fingerprints: 0, evaluations: 0, auditLogs: 0 } };
+    }
+    const [rCnt, uCnt, fCnt, eCnt, aCnt] = await Promise.all([
+      reports.count(),
+      users.count(),
+      fingerprints.count(),
+      evaluations.count(),
+      AuditLogModel.countDocuments(),
+    ]);
+    return {
+      ok: true,
+      latencyMs,
+      counts: { reports: rCnt, users: uCnt, fingerprints: fCnt, evaluations: eCnt, auditLogs: aCnt },
+    };
+  };
+
   return {
     mode: 'mongodb',
-    reports: new MongoReportRepo(),
-    users: new MongoUserRepo(),
-    audit: new MongoAuditRepo(),
-    otps: new MongoOtpRepo(),
-    sessions: new MongoSessionRepo(),
-    ping: async () => mongoose.connection.readyState === 1,
+    reports,
+    users,
+    fingerprints,
+    evaluations,
+    aiConfig,
+    audit,
+    otps,
+    sessions,
+    ping,
+    healthStats,
     close: async () => {
       await mongoose.disconnect();
     },

@@ -1,9 +1,20 @@
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
+import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-dotenv.config();
+// Nạp .env từ cả thư mục gốc monorepo lẫn backend/.env để không bao giờ bị rơi mất MONGODB_URI do khác cwd
+for (const candidate of [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), '../.env'),
+  path.resolve(__dirname, '../../.env'),
+  path.resolve(__dirname, '../../../.env'),
+]) {
+  if (fs.existsSync(candidate)) {
+    dotenv.config({ path: candidate, override: false });
+  }
+}
 
 export interface EnvValidationIssue {
   key: string;
@@ -136,6 +147,19 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
 
   const geminiApiKey = readTrimmed(source, 'GEMINI_API_KEY') ?? '';
   const geminiModel = readTrimmed(source, 'GEMINI_MODEL') || 'gemini-3.5-flash';
+  const allowCloudAiFallback = parseBoolEnv(source, 'ALLOW_CLOUD_AI_FALLBACK', false, issues);
+
+  // Local AI & High-Speed Rust CV Engine
+  const cvEngineUrl = readTrimmed(source, 'CV_ENGINE_URL') || 'http://127.0.0.1:8001';
+  const autoSpawnCvEngine = parseBoolEnv(source, 'AUTO_SPAWN_CV_ENGINE', nodeEnv !== 'test', issues);
+  const ollamaBaseUrl = readTrimmed(source, 'OLLAMA_BASE_URL') || 'http://127.0.0.1:11434';
+  const ollamaModel = readTrimmed(source, 'OLLAMA_MODEL') || 'qwen2.5:3b';
+  const llamaCppBaseUrl = readTrimmed(source, 'LLAMA_CPP_BASE_URL') ?? '';
+
+  // Super Admin bootstrap (không hardcode mật khẩu nhạy cảm trong client)
+  const superAdminCode = readTrimmed(source, 'SUPER_ADMIN_CODE') || 'SUPER-ADMIN';
+  const superAdminEmail = readTrimmed(source, 'SUPER_ADMIN_EMAIL') || 'superadmin@dongnai.gov.vn';
+  const superAdminPassword = readTrimmed(source, 'SUPER_ADMIN_PASSWORD') ?? '';
 
   const mongoUri = readTrimmed(source, 'MONGODB_URI') ?? '';
   if (mongoUri !== '' && !/^mongodb(\+srv)?:\/\/.+/.test(mongoUri)) {
@@ -143,9 +167,10 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
       key: 'MONGODB_URI',
       status: 'INVALID',
       detail: 'Chuỗi kết nối MongoDB không đúng định dạng URI.',
-      hint: 'Dùng dạng mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/smartcitizen_dongnai hoặc để trống để dùng Local JSON Store.',
+      hint: 'Dùng dạng mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/smartcitizen_dongnai hoặc để trống khi chạy dev local.',
     });
   }
+  const allowJsonFallback = parseBoolEnv(source, 'ALLOW_JSON_FALLBACK', false, issues);
 
   const rawJwtSecret = readTrimmed(source, 'JWT_SECRET') ?? '';
   if (isProd) {
@@ -180,7 +205,6 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     });
   }
 
-  // ── Nhà cung cấp OTP thật (Resend / SMTP / Twilio / eSMS) ──
   const rawOtpProvider = readTrimmed(source, 'OTP_PROVIDER') || 'auto';
   let otpProvider: OtpProviderConfig = 'auto';
   const parsedOtpProv = otpProviderSchema.safeParse(rawOtpProvider.toLowerCase());
@@ -242,7 +266,6 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     throw new Error(`\n${formatEnvErrorReport(issues, rawNodeEnv || nodeEnv)}`);
   }
 
-  /** Dev/test không có JWT_SECRET: sinh ngẫu nhiên mỗi lần chạy. */
   const jwtSecret = rawJwtSecret.length >= 16 ? rawJwtSecret : crypto.randomBytes(32).toString('hex');
   const jwtSecretEphemeral = rawJwtSecret.length < 16;
   const otpPepper = readTrimmed(source, 'OTP_PEPPER') || jwtSecret;
@@ -253,7 +276,17 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
     port,
     geminiApiKey,
     geminiModel,
+    allowCloudAiFallback,
+    cvEngineUrl,
+    autoSpawnCvEngine,
+    ollamaBaseUrl,
+    ollamaModel,
+    llamaCppBaseUrl,
+    superAdminCode,
+    superAdminEmail,
+    superAdminPassword,
     mongoUri,
+    allowJsonFallback,
     jwtSecret,
     jwtSecretEphemeral,
     otpPepper,
