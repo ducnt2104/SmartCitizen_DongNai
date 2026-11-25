@@ -139,6 +139,7 @@ export function alertsController(s: Services) {
       const rawCat = typeof req.query.category === 'string' ? (req.query.category as AlertCategory) : undefined;
       const category = rawCat && VALID_ALERT_CATS.has(rawCat) ? rawCat : undefined;
       const limit = Math.min(Math.max(1, Number(req.query.limit) || 30), 100);
+      await s.aggregator.ensureFreshBulletins();
       await sendAlertCached(
         req,
         res,

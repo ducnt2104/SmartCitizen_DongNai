@@ -44,16 +44,89 @@ export interface OfficialFeedSource {
 }
 
 export const OFFICIAL_RSS_FEEDS: readonly OfficialFeedSource[] = [
-  { sourceName: 'Báo Đồng Nai (Tin mới)', url: 'https://baodongnai.com.vn/rss/news/tin-moi.rss' },
+  { sourceName: 'Báo Đồng Nai', url: 'https://baodongnai.com.vn/rss/news/tin-moi.rss' },
   { sourceName: 'Báo Đồng Nai (Xã hội)', url: 'https://baodongnai.com.vn/rss/news/xa-hoi.rss' },
   { sourceName: 'Báo Đồng Nai (Chính quyền)', url: 'https://baodongnai.com.vn/rss/news/chinh-quyen.rss' },
-  { sourceName: 'VnExpress (Thời sự)', url: 'https://vnexpress.net/rss/thoi-su.rss' },
-  { sourceName: 'Tuổi Trẻ (Thời sự)', url: 'https://tuoitre.vn/rss/thoi-su.rss' },
-  { sourceName: 'Thanh Niên (Thời sự)', url: 'https://thanhnien.vn/rss/thoi-su.rss' },
+  { sourceName: 'Tuổi Trẻ Online', url: 'https://tuoitre.vn/rss/thoi-su.rss' },
+  { sourceName: 'VnExpress', url: 'https://vnexpress.net/rss/thoi-su.rss' },
+  { sourceName: 'Báo Thanh Niên', url: 'https://thanhnien.vn/rss/thoi-su.rss' },
 ] as const;
 
-const SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const SYNC_INTERVAL_MS = 15 * 60 * 1000;
 const DIGEST_TTL_MS = 2 * 60 * 60 * 1000;
+
+function classifyRssEntryDeterministic(input: {
+  title: string;
+  description: string;
+  sourceName: string;
+}): {
+  isRelevant: boolean;
+  category: AlertCategory;
+  severity: AlertSeverity;
+  wardIds: string[];
+  affectedRoads: string[];
+  cleanSummary: string;
+} {
+  const cleanSummary = input.description.replace(/\s+/g, ' ').trim() || input.title.trim();
+  const norm = stripVnDiacritics(`${input.title} ${cleanSummary}`);
+  const isDongNaiSource = stripVnDiacritics(input.sourceName).includes('dong nai');
+
+  const hasDongNaiKeyword =
+    /\b(dong nai|bien hoa|tran bien|long thanh|nhon trach|trang bom|long khanh|xuan loc|dinh quan|tan phu|vinh cuu|cam my|thong nhat|binh phuoc|dong xoai|chon thanh|binh long|phuoc long|loc ninh|bu dang|bu dop|bu gia map|quoc lo 51|ql51|ql 51|quoc lo 1a|ql1a|quoc lo 20|ql20|dong khoi|vo nguyen giap|pham van thuan|bui van hoa|tri an|cat tien|san bay long thanh|cao toc bien hoa|cau dong nai|cau an hao|cau hoa an)\b/.test(
+      norm,
+    );
+
+  const isDisaster =
+    /\b(ngap lut|ngap ung|mua lon|mua to|mua giong|bao|ap thap|trieu cuong|sat lo|loc xoay|thien tai|lu quet|lu lut|canh bao thoi tiet|khi tuong|thuy van|chay rung|nang nong)\b/.test(
+      norm,
+    );
+  const isTraffic =
+    /\b(giao thong|phan luong|thi cong|ket xe|un tac|tai nan|cam duong|sua duong|quoc lo|cao toc|tinh lo|ql51|ql1a|ql20|dt768|dt769|dong khoi|vo nguyen giap|nut giao)\b/.test(
+      norm,
+    );
+  const isUtility =
+    /\b(cup dien|mat dien|ngung cap dien|dien luc|cup nuoc|mat nuoc|cap nuoc|nuoc sach|ubnd|chinh quyen|thong bao|nghi quyet|sap nhap|phuong|xa)\b/.test(
+      norm,
+    );
+
+  const isRelevant = isDongNaiSource || hasDongNaiKeyword || isDisaster;
+  const category: AlertCategory = isDisaster
+    ? 'disaster'
+    : isTraffic
+      ? 'traffic'
+      : isUtility
+        ? 'utility'
+        : 'official_notice';
+
+  const severity: AlertSeverity =
+    /\b(khan cap|ngap sau|chia cat|bao lon|lu quet|sap cau|tai nan nghiem trong|mat dien dien rong)\b/.test(norm)
+      ? 3
+      : isDisaster || isTraffic
+        ? 2
+        : 1;
+
+  const matchedWards = DONG_NAI_WARDS.filter((w) => {
+    const shortNorm = stripVnDiacritics(w.shortName);
+    return shortNorm.length >= 4 && norm.includes(shortNorm);
+  })
+    .slice(0, 4)
+    .map((w) => w.wardCode);
+  const wardIds = matchedWards.length > 0 ? matchedWards : ['ALL_DONG_NAI'];
+
+  const roadMatches: Array<[RegExp, string]> = [
+    [/\b(quoc lo 1a|ql1a|ql 1a)\b/, 'Quốc lộ 1A'],
+    [/\b(quoc lo 51|ql51|ql 51)\b/, 'Quốc lộ 51'],
+    [/\b(quoc lo 20|ql20|ql 20)\b/, 'Quốc lộ 20'],
+    [/\bvo nguyen giap\b/, 'Võ Nguyên Giáp'],
+    [/\bdong khoi\b/, 'Đồng Khởi'],
+    [/\bpham van thuan\b/, 'Phạm Văn Thuận'],
+    [/\bbui van hoa\b/, 'Bùi Văn Hòa'],
+    [/\b(dt 768|dt768)\b/, 'ĐT 768'],
+  ];
+  const affectedRoads = roadMatches.filter(([re]) => re.test(norm)).map(([, label]) => label);
+
+  return { isRelevant, category, severity, wardIds, affectedRoads, cleanSummary };
+}
 
 export type FetcherLike = (url: string, init?: { timeoutMs?: number; headers?: Record<string, string> }) => Promise<Response>;
 
@@ -152,6 +225,8 @@ export class DataAggregatorService {
   private timer: NodeJS.Timeout | null = null;
   private warmupTimer: NodeJS.Timeout | null = null;
   private lastSyncSummary: SyncRunSummary | null = null;
+  private lastRssSyncAtMs = 0;
+  private rssSyncInFlight: Promise<void> | null = null;
   private digestInFlight: Promise<DailyDigestItem> | null = null;
   private readonly fallbackDigestFile: string;
   private readonly seenHashMemory = new Set<string>();
@@ -441,6 +516,18 @@ export class DataAggregatorService {
     fs.writeFileSync(bulletinsFile, JSON.stringify([item, ...existing].slice(0, 250)), 'utf8');
   }
 
+  async ensureFreshBulletins(): Promise<void> {
+    if (Date.now() - this.lastRssSyncAtMs < SYNC_INTERVAL_MS) return;
+    if (this.rssSyncInFlight) return this.rssSyncInFlight;
+    this.rssSyncInFlight = this.syncOfficialBulletins()
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        this.rssSyncInFlight = null;
+      });
+    return this.rssSyncInFlight;
+  }
+
   async syncOfficialBulletins(
     fetcher: FetcherLike = safeFetchOfficial,
     feeds: readonly OfficialFeedSource[] = OFFICIAL_RSS_FEEDS,
@@ -457,26 +544,25 @@ export class DataAggregatorService {
 
     for (const feed of feeds) {
       try {
-        const res = await fetcher(feed.url, { timeoutMs: 6000 });
+        const res = await fetcher(feed.url, { timeoutMs: 7000 });
         if (!res.ok) {
           feedErrors.push(`${feed.sourceName}: HTTP ${res.status}`);
           continue;
         }
         const xml = await res.text();
-        const items = parseRssItems(xml).slice(0, 12);
+        const items = parseRssItems(xml).slice(0, 15);
 
         for (const entry of items) {
           scannedCount += 1;
           const sourceUrlHash = sha256(`${entry.link}|${entry.title}`);
           if (await this.hasBulletinHash(sourceUrlHash)) {
-            continue; // Tuyệt đối không gọi Gemini lại cho bài đã lưu
+            continue;
           }
 
-          const classified = await this.gemini.classifyOfficialBulletin({
+          const classified = classifyRssEntryDeterministic({
             title: entry.title,
-            summary: entry.description,
+            description: entry.description,
             sourceName: feed.sourceName,
-            sourceUrl: entry.link,
           });
 
           if (!classified.isRelevant) {
@@ -486,9 +572,9 @@ export class DataAggregatorService {
 
           const bulletin: OfficialBulletinItem = {
             id: newId('blt'),
-            title: entry.title.slice(0, 220),
+            title: entry.title.trim(),
             cleanSummary: classified.cleanSummary,
-            category: classified.category as AlertCategory,
+            category: classified.category,
             severity: classified.severity,
             wardIds: classified.wardIds,
             affectedRoads: classified.affectedRoads,
@@ -501,12 +587,11 @@ export class DataAggregatorService {
           await this.saveBulletin(bulletin);
           savedCount += 1;
 
-          // Tự động đưa vào bản đồ/luồng cảnh báo nếu liên quan thiên tai, giao thông, điện/nước hoặc mức >= 2
+          // Tự động đưa vào bản đồ/luồng cảnh báo nếu liên quan thiên tai, giao thông hoặc điện/nước
           if (
             bulletin.category === 'disaster' ||
             bulletin.category === 'traffic' ||
-            bulletin.category === 'utility' ||
-            bulletin.severity >= 2
+            bulletin.category === 'utility'
           ) {
             const firstWardCode = bulletin.wardIds.find((c) => WARD_BY_CODE[c]);
             const ward = firstWardCode ? WARD_BY_CODE[firstWardCode] : WARD_BY_CODE['DN-TB'];
@@ -535,6 +620,7 @@ export class DataAggregatorService {
       }
     }
 
+    this.lastRssSyncAtMs = Date.now();
     return { scannedCount, savedCount, alertsCreated, feedErrors };
   }
 

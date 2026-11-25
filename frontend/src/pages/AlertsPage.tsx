@@ -111,6 +111,17 @@ function WeatherGlyphInk({ kind, isDay = true, className = 'h-5 w-5' }: { kind: 
   }
 }
 
+function formatPubDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${hh}:${mm} ${dd}/${mo}/${yyyy}`;
+}
+
 function weatherKindFallbackGradient(): string {
   return 'linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%)';
 }
@@ -377,6 +388,7 @@ export default function AlertsPage() {
   const [bulletins, setBulletins] = useState<OfficialBulletinItem[]>([]);
   const [digest, setDigest] = useState<DailyDigestItem | null>(null);
   const [loading, setLoading] = useState(true);
+  const [feedError, setFeedError] = useState<string | null>(null);
   const [filterGroup, setFilterGroup] = useState<FilterGroup>('all');
   const [selectedAlert, setSelectedAlert] = useState<CivicAlertItem | null>(null);
   const [inspectWardCode, setInspectWardCode] = useState<string | null>(null);
@@ -419,6 +431,7 @@ export default function AlertsPage() {
 
   const loadAll = useCallback(async (forceRefresh = false) => {
     setLoading(true);
+    setFeedError(null);
     let active = true;
     try {
       const [wRes, aRes, bRes, dRes] = await Promise.allSettled([
@@ -447,8 +460,8 @@ export default function AlertsPage() {
           },
         ),
         fastFetch<{ items: OfficialBulletinItem[] }>(
-          '/api/bulletins?limit=20',
-          () => api('/api/bulletins?limit=20'),
+          '/api/bulletins?limit=30',
+          () => api('/api/bulletins?limit=30'),
           {
             staleMs: 60_000,
             forceRefresh,
@@ -482,6 +495,9 @@ export default function AlertsPage() {
       if (dRes.status === 'fulfilled') {
         setDigest(dRes.value);
       }
+      if (aRes.status === 'rejected' && bRes.status === 'rejected') {
+        setFeedError('Mất kết nối mạng hoặc máy chủ tin tức tạm gián đoạn. Vui lòng thử lại.');
+      }
     } finally {
       setLoading(false);
     }
@@ -492,24 +508,32 @@ export default function AlertsPage() {
 
   useEffect(() => {
     void loadAll();
+    const timer = window.setInterval(() => {
+      void loadAll(true);
+    }, 15 * 60_000);
+    return () => window.clearInterval(timer);
   }, [loadAll]);
 
   const filteredAlerts = useMemo(() => {
-    return alerts.filter((a) => {
-      if (filterGroup === 'disaster') return a.category === 'disaster';
-      if (filterGroup === 'traffic') return a.category === 'traffic';
-      if (filterGroup === 'utility_official') return a.category === 'utility' || a.category === 'official_notice';
-      return true;
-    });
+    return alerts
+      .filter((a) => {
+        if (filterGroup === 'disaster') return a.category === 'disaster';
+        if (filterGroup === 'traffic') return a.category === 'traffic';
+        if (filterGroup === 'utility_official') return a.category === 'utility' || a.category === 'official_notice';
+        return true;
+      })
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   }, [alerts, filterGroup]);
 
   const filteredBulletins = useMemo(() => {
-    return bulletins.filter((b) => {
-      if (filterGroup === 'disaster') return b.category === 'disaster';
-      if (filterGroup === 'traffic') return b.category === 'traffic';
-      if (filterGroup === 'utility_official') return b.category === 'utility' || b.category === 'official_notice';
-      return true;
-    });
+    return bulletins
+      .filter((b) => {
+        if (filterGroup === 'disaster') return b.category === 'disaster';
+        if (filterGroup === 'traffic') return b.category === 'traffic';
+        if (filterGroup === 'utility_official') return b.category === 'utility' || b.category === 'official_notice';
+        return true;
+      })
+      .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
   }, [bulletins, filterGroup]);
 
   const runRouteCheck = async (queryText?: string): Promise<void> => {
@@ -1437,13 +1461,21 @@ export default function AlertsPage() {
           </div>
 
           <div className="max-h-[58dvh] space-y-3 overflow-y-auto pr-1">
-            {loading && alerts.length === 0 ? (
-              <div className="card flex items-center justify-center gap-2 py-12 text-sm text-muted">
-                <Spinner /> Đang tải luồng cảnh báo thực tế…
+            {feedError && (
+              <div className="card flex flex-wrap items-center justify-between gap-2 border-amber-500/35 bg-amber-500/10 p-3 text-xs font-semibold text-amber-900 dark:text-amber-200">
+                <span>{feedError}</span>
+                <button type="button" onClick={() => void loadAll(true)} className="btn btn-soft !min-h-8 !px-3 !text-xs">
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Tải lại tin
+                </button>
               </div>
-            ) : filteredAlerts.length === 0 ? (
+            )}
+            {loading && alerts.length === 0 && bulletins.length === 0 ? (
+              <div className="card flex items-center justify-center gap-2 py-12 text-sm text-muted">
+                <Spinner /> Đang cập nhật bản tin & cảnh báo từ nguồn RSS chính thống…
+              </div>
+            ) : filteredAlerts.length === 0 && filteredBulletins.length === 0 ? (
               <div className="card p-6 text-center text-sm text-muted">
-                Hiện chưa có cảnh báo hiệu lực nào trong nhóm này.
+                Hiện chưa có cảnh báo hoặc bản tin chính thống nào trong nhóm này.
               </div>
             ) : (
               filteredAlerts.map((al) => {
@@ -1456,17 +1488,17 @@ export default function AlertsPage() {
                       </span>
                       <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-muted">
                         {al.isVerifiedOfficial ? (
-                          <CheckCircle2 className="h-3 w-3 text-ok" aria-hidden />
+                          <CheckCircle2 className="h-3.5 w-3.5 text-ok" aria-hidden />
                         ) : (
-                          <AlertTriangle className="h-3 w-3 text-amber-600" aria-hidden />
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-600" aria-hidden />
                         )}
                         {al.sourceLabel}
                       </span>
-                      <span className="ml-auto text-[11px] text-muted">{fmtDate(al.createdAt, true)}</span>
+                      <span className="mono ml-auto text-[11px] text-muted">{formatPubDateTime(al.createdAt)}</span>
                     </div>
 
                     <h3 className="font-bold text-ink">{al.title}</h3>
-                    <p className="text-xs leading-relaxed text-muted sm:text-sm">{al.description}</p>
+                    <p className="line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">{al.description}</p>
 
                     {al.detourNote && (
                       <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-900 dark:text-amber-200">
@@ -1519,7 +1551,7 @@ export default function AlertsPage() {
                           <a
                             href={al.sourceUrl}
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
                           >
                             <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Nguồn tin
@@ -1554,7 +1586,7 @@ export default function AlertsPage() {
               })
             )}
 
-            {/* Thông báo chính thống & Bản tin Thời tiết dạng bài báo */}
+            {/* Thông báo chính thống & Bản tin Thời tiết dạng bài báo RSS */}
             {filteredBulletins.length > 0 && (
               <div className="space-y-2.5 pt-2">
                 <h2 className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-ink">
@@ -1566,21 +1598,22 @@ export default function AlertsPage() {
                     <span className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-brand to-brand-2" aria-hidden />
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                       <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-0.5 font-bold text-brand">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-ok" aria-hidden />
                         {b.sourceName}
                       </span>
-                      <span className="font-medium text-muted">{fmtDate(b.publishedAt, true)}</span>
+                      <span className="mono font-medium text-muted">{formatPubDateTime(b.publishedAt)}</span>
                     </div>
                     <h3 className="mt-2 text-sm font-extrabold leading-snug text-ink sm:text-base">{b.title}</h3>
-                    <p className="mt-1.5 text-xs leading-relaxed text-muted sm:text-sm">{b.cleanSummary}</p>
+                    <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted sm:text-sm">{b.cleanSummary}</p>
                     <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2">
-                      <span className="text-[11px] font-semibold text-muted">Nguồn chính thống Đồng Nai</span>
+                      <span className="text-[11px] font-semibold text-muted">Xác thực nguồn RSS chính thống</span>
                       <a
                         href={b.sourceUrl}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
                       >
-                        <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Đọc bài chi tiết
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden /> Nguồn tin
                       </a>
                     </div>
                   </article>
