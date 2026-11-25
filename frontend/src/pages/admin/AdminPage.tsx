@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { normalizeRole } from '@shared/constants';
 import { ScopePicker } from '../../components/Header';
-import { Logo } from '../../components/Logo';
+import { Logo, LogoMark } from '../../components/Logo';
 import { CityIncidentMap, type MapMode } from '../../components/map';
 import { OfflineBanner } from '../../components/OfflineBanner';
 import { ReportDetail } from '../../components/ReportDetail';
@@ -86,9 +86,7 @@ export default function AdminPage() {
         <div className={`flex h-14 shrink-0 items-center border-b border-ioc-line ${collapsed ? 'justify-center px-2' : 'px-3.5'}`}>
           <Link to="/" aria-label={t('nav.home')} className="min-w-0 overflow-hidden">
             {collapsed ? (
-              <span className="mono grid h-9 w-9 place-items-center rounded-lg bg-ioc-raised text-xs font-extrabold text-ioc-cyan">
-                IOC
-              </span>
+              <LogoMark size={36} className="h-9 w-9 shrink-0" />
             ) : (
               <Logo dark />
             )}

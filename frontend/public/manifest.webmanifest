@@ -1,11 +1,11 @@
 {
-  "name": "SmartCitizen_DongNai — Team Victer",
+  "name": "SMARTCITIZEN ĐỒNG NAI — Kết nối - Sáng tạo - Phát triển",
   "short_name": "SmartCitizen",
-  "description": "Phản ánh hiện trường & điều phối đô thị thông minh TP. Đồng Nai",
+  "description": "Kết nối - Sáng tạo - Phát triển · Phản ánh hiện trường & điều phối đô thị thông minh TP. Đồng Nai",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F8FAFC",
   "theme_color": "#0B57D0",
   "lang": "vi",
-  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "icons": [{ "src": "/favicon.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }]
 }

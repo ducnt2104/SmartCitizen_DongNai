@@ -28,7 +28,7 @@ export function CommunityLayout() {
       </main>
       <footer className="border-t border-line/80 bg-surface/90 px-3 py-6 pb-24 text-center backdrop-blur-sm md:pb-6">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-2">
-          <Logo compact />
+          <Logo stacked />
           <p className="text-sm font-semibold text-ink">{t('footer.credit')}</p>
           <p className="text-xs text-muted">{t('footer.tagline')}</p>
         </div>

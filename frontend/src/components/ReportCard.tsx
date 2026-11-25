@@ -8,17 +8,19 @@ export function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientR
   const { t, fmtDate } = useI18n();
   const thumb = r.photos[0]?.thumbnailUrl ?? r.photos[0]?.url;
   return (
-    <button type="button" onClick={() => onOpen(r)} className="card flex w-full items-stretch gap-3 p-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/35 hover:shadow-lift active:scale-[0.99]">
+    <button type="button" onClick={() => onOpen(r)} className="card group flex w-full items-stretch gap-3 p-3 text-left transition-all hover:-translate-y-0.5 hover:border-brand/35 hover:shadow-lift active:scale-[0.99]">
       {thumb ? (
-        <img
-          src={thumb}
-          alt=""
-          width={80}
-          height={80}
-          loading="lazy"
-          decoding="async"
-          className="aspect-square h-20 w-20 shrink-0 rounded-xl border border-line/80 object-cover shadow-sm"
-        />
+        <span className="aspect-square h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-line/80 bg-surface-2 shadow-sm">
+          <img
+            src={thumb}
+            alt=""
+            width={80}
+            height={80}
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          />
+        </span>
       ) : (
         <CategoryIcon r={r} />
       )}
@@ -38,7 +40,7 @@ export function ReportCard({ r, onOpen }: { r: ClientReport; onOpen: (r: ClientR
           <span>{fmtDate(r.createdAt, false)}</span>
         </span>
       </span>
-      <ChevronRight className="my-auto h-5 w-5 shrink-0 text-muted" aria-hidden />
+      <ChevronRight className="my-auto h-5 w-5 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-brand" aria-hidden />
     </button>
   );
 }

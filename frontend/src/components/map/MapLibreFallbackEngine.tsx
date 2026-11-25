@@ -2,6 +2,10 @@ import * as maplibregl from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import { useEffect, useRef, useState } from 'react';
 import { ARTERIAL_ROADS, haversineMeters } from '@shared/geo';
+import {
+  buildDongNaiWardZonesGeoJson,
+  DONG_NAI_OUTER_SHADE_POLYGON,
+} from '../../data/dongNaiBoundary';
 import { useI18n } from '../../i18n';
 import { QUICK_PLACES } from '../../lib/geoClient';
 import {
@@ -204,9 +208,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     map.setStyle(vecStyle);
     vectorWatchdogRef.current = window.setTimeout(() => {
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
-        fallbackToRasterStyle(map, 'vector load timeout (4.5s)');
+        fallbackToRasterStyle(map, 'vector load timeout (7.5s)');
       }
-    }, 4500);
+    }, 7500);
   };
 
   // 1) Khởi tạo MapLibre một lần duy nhất mỗi lần mount; dọn sạch 100% tài nguyên khi unmount
@@ -569,11 +573,11 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           type: 'line',
           source: 'sc-overlays',
           filter: ['==', ['get', 'kind'], 'arterial'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
             'line-color': '#F59E0B',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.6, 13, 2.4, 15, 3],
-            'line-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.65, 13, 0.4, 14.5, 0],
-            'line-dasharray': [4, 2],
+            'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 2.2, 11, 2.8],
+            'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.34, 10.6, 0.22, 11.8, 0],
           },
         });
         map.addLayer({
@@ -594,23 +598,120 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
         });
       }
 
-      // Lớp địa giới và 95 Đơn vị hành chính mới (33 Phường, 62 Xã) đặt trực tiếp lên bản đồ thay cho nhãn cũ của OSM
+      const isRoadmap = p.surface === 'roadmap';
+      const overlayBeforeId = map.getLayer('sc-accuracy-fill') ? 'sc-accuracy-fill' : undefined;
+      const tintBeforeLayerId =
+        [
+          'water',
+          'waterway_river',
+          'building',
+          'road_service_track_casing',
+          'road_minor_casing',
+          'road_trunk_primary_casing',
+        ].find((lid) => Boolean(map.getLayer(lid))) ?? overlayBeforeId;
+
+      // Lớp phủ mờ nhẹ ngoài ranh giới thực & phân khu màu tinh tế 95 ĐVHC 2 cấp đặt dưới mạng đường/sông
+      if (!map.getSource('sc-outer-shade')) {
+        map.addSource('sc-outer-shade', {
+          type: 'geojson',
+          data: DONG_NAI_OUTER_SHADE_POLYGON,
+        });
+        map.addLayer(
+          {
+            id: 'sc-outer-shade-fill',
+            type: 'fill',
+            source: 'sc-outer-shade',
+            maxzoom: 13.6,
+            paint: {
+              'fill-color': isRoadmap ? '#CBD5E1' : '#020617',
+              'fill-opacity': ['interpolate', ['linear'], ['zoom'], 7, isRoadmap ? 0.22 : 0.34, 11, 0.1, 13.2, 0],
+            },
+          },
+          tintBeforeLayerId,
+        );
+      }
+
+      if (!map.getSource('sc-ward-zones')) {
+        map.addSource('sc-ward-zones', {
+          type: 'geojson',
+          data: buildDongNaiWardZonesGeoJson(),
+        });
+        map.addLayer(
+          {
+            id: 'sc-ward-zones-fill',
+            type: 'fill',
+            source: 'sc-ward-zones',
+            maxzoom: 14.6,
+            paint: {
+              'fill-color': ['get', 'fillColor'],
+              'fill-opacity': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                7.2,
+                isRoadmap ? 0.16 : 0.13,
+                10.5,
+                isRoadmap ? 0.11 : 0.09,
+                13.0,
+                isRoadmap ? 0.04 : 0.04,
+                14.4,
+                0,
+              ],
+            },
+          },
+          tintBeforeLayerId,
+        );
+        map.addLayer(
+          {
+            id: 'sc-ward-zones-line',
+            type: 'line',
+            source: 'sc-ward-zones',
+            maxzoom: 14.8,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': isRoadmap ? ['get', 'borderColor'] : '#64748B',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7.5, 0.65, 11, 1.0, 13.5, 1.25],
+              'line-opacity': ['interpolate', ['linear'], ['zoom'], 7.5, 0.26, 12.5, 0.34, 14.6, 0],
+            },
+          },
+          overlayBeforeId,
+        );
+      }
+
+      // Lớp địa giới thực Thành phố Đồng Nai & 95 Đơn vị hành chính 2 cấp (33 Phường, 62 Xã)
       if (!map.getSource('sc-city-boundary')) {
         map.addSource('sc-city-boundary', {
           type: 'geojson',
           data: DONG_NAI_ADMIN_MASK_POLYGON,
         });
-        map.addLayer({
-          id: 'sc-city-boundary-line',
-          type: 'line',
-          source: 'sc-city-boundary',
-          paint: {
-            'line-color': p.surface === 'roadmap' ? '#1A73E8' : '#60A5FA',
-            'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.6, 12, 2.6],
-            'line-opacity': 0.55,
-            'line-dasharray': [3, 2],
+        map.addLayer(
+          {
+            id: 'sc-city-boundary-glow',
+            type: 'line',
+            source: 'sc-city-boundary',
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': isRoadmap ? '#60A5FA' : '#38BDF8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 6.5, 12, 8.5],
+              'line-opacity': isRoadmap ? 0.24 : 0.28,
+            },
           },
-        });
+          overlayBeforeId,
+        );
+        map.addLayer(
+          {
+            id: 'sc-city-boundary-line',
+            type: 'line',
+            source: 'sc-city-boundary',
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': isRoadmap ? '#2563EB' : '#38BDF8',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.2, 12, 3.0],
+              'line-opacity': 0.92,
+            },
+          },
+          overlayBeforeId,
+        );
       }
 
       if (!map.getSource('sc-admin-wards') && map.getStyle()?.glyphs) {
@@ -618,10 +719,9 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           type: 'geojson',
           data: buildDongNaiWardsGeoJson(),
         });
-        const isRoadmap = p.surface === 'roadmap';
-        const phuongColor = isRoadmap ? '#0B57D0' : '#93C5FD';
-        const xaColor = isRoadmap ? '#334155' : '#E2E8F0';
-        const haloColor = isRoadmap ? 'rgba(255, 255, 255, 0.96)' : 'rgba(15, 23, 42, 0.88)';
+        const phuongColor = isRoadmap ? '#1E40AF' : '#93C5FD';
+        const xaColor = isRoadmap ? '#0F766E' : '#6EE7B7';
+        const haloColor = isRoadmap ? 'rgba(255, 255, 255, 0.98)' : 'rgba(9, 14, 28, 0.92)';
 
         map.addLayer({
           id: 'sc-admin-hub-labels',
@@ -633,15 +733,15 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           layout: {
             'text-field': ['get', 'name'],
             'text-font': ['Noto Sans Bold'],
-            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.5, 10.0, 12.5],
+            'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10.8, 10.0, 12.8],
             'text-max-width': 10,
-            'text-padding': 5,
+            'text-padding': 6,
             'text-variable-anchor': ['center', 'top', 'bottom'],
           },
           paint: {
-            'text-color': phuongColor,
+            'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
             'text-halo-color': haloColor,
-            'text-halo-width': 2.2,
+            'text-halo-width': 2.4,
           },
         });
 
@@ -652,12 +752,12 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
           minzoom: 10.2,
           maxzoom: 15.8,
           paint: {
-            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 4, 3.2],
-            'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#0B57D0', '#0F766E'],
+            'circle-radius': ['case', ['==', ['get', 'kind'], 'Phường'], 3.8, 2.8],
+            'circle-color': ['case', ['==', ['get', 'kind'], 'Phường'], '#1D4ED8', '#0F766E'],
             'circle-stroke-color': '#ffffff',
             'circle-stroke-width': 1.5,
-            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.9, 15.8, 0],
-            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.95, 15.8, 0],
+            'circle-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.92, 15.8, 0],
+            'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 14.8, 0.96, 15.8, 0],
           },
         });
 
@@ -682,12 +782,13 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
             'text-offset': [0, 0.85],
             'text-anchor': 'top',
             'text-max-width': 10,
-            'text-padding': 3,
+            'text-padding': 5,
+            'text-optional': true,
           },
           paint: {
             'text-color': ['case', ['==', ['get', 'kind'], 'Phường'], phuongColor, xaColor],
             'text-halo-color': haloColor,
-            'text-halo-width': 2,
+            'text-halo-width': 2.2,
             'text-opacity': ['interpolate', ['linear'], ['zoom'], 15.2, 0.96, 16.2, 0],
           },
         });
