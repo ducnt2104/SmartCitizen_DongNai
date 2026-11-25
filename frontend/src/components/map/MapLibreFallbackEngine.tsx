@@ -14,7 +14,7 @@ import {
   DONG_NAI_CAMERA_RESTRICTION,
   DONG_NAI_MAPLIBRE_BOUNDS,
   getPinState,
-  loadDetailedVectorRoadmapStyle,
+  loadDetailedVectorStyle,
   PIN_STATE_COLOR,
   PIN_STATE_RANK,
   type MapPoint,
@@ -175,14 +175,14 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     let vectorDisposed = false;
     const vectorAbort = new AbortController();
 
-    const applyDetailedVectorIfRoadmap = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
-      if (targetSurface !== 'roadmap' || vectorFailedRef.current) {
+    const applyDetailedVectorIfSupported = (targetSurface: typeof p.surface, targetLang: 'vi' | 'en'): void => {
+      if ((targetSurface !== 'roadmap' && targetSurface !== 'dark') || vectorFailedRef.current) {
         vectorActiveRef.current = false;
         vectorLoadedRef.current = false;
         return;
       }
-      void loadDetailedVectorRoadmapStyle(targetLang, vectorAbort.signal).then((vecStyle) => {
-        if (vectorDisposed || !vecStyle || surfaceRef.current !== 'roadmap' || vectorFailedRef.current) return;
+      void loadDetailedVectorStyle(targetSurface, targetLang, vectorAbort.signal).then((vecStyle) => {
+        if (vectorDisposed || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
         vectorActiveRef.current = true;
         vectorLoadedRef.current = false;
         map.setStyle(vecStyle);
@@ -211,7 +211,7 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       }
       setStyleReadySeq((n) => n + 1);
       emitViewport();
-      applyDetailedVectorIfRoadmap(p.surface, lang);
+      applyDetailedVectorIfSupported(p.surface, lang);
     });
 
     map.on('style.load', () => {
@@ -227,8 +227,8 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
       if (vectorActiveRef.current && !vectorLoadedRef.current && !vectorFailedRef.current) {
         vectorFailedRef.current = true;
         vectorActiveRef.current = false;
-        if (surfaceRef.current === 'roadmap') {
-          map.setStyle(buildMapLibreStyle('roadmap'));
+        if (surfaceRef.current === 'roadmap' || surfaceRef.current === 'dark') {
+          map.setStyle(buildMapLibreStyle(surfaceRef.current));
         }
       }
     });
@@ -282,15 +282,16 @@ export function MapLibreFallbackEngine<T extends MapPoint = MapPoint>(p: SharedE
     surfaceRef.current = p.surface;
     langRef.current = lang;
 
-    if (p.surface === 'roadmap' && !vectorFailedRef.current) {
+    if ((p.surface === 'roadmap' || p.surface === 'dark') && !vectorFailedRef.current) {
       let cancelled = false;
       const ctrl = new AbortController();
+      const targetSurface = p.surface;
       if (surfaceChanged) {
         vectorActiveRef.current = false;
-        map.setStyle(buildMapLibreStyle('roadmap'));
+        map.setStyle(buildMapLibreStyle(targetSurface));
       }
-      void loadDetailedVectorRoadmapStyle(lang, ctrl.signal).then((vecStyle) => {
-        if (cancelled || !vecStyle || surfaceRef.current !== 'roadmap' || vectorFailedRef.current) return;
+      void loadDetailedVectorStyle(targetSurface, lang, ctrl.signal).then((vecStyle) => {
+        if (cancelled || !vecStyle || surfaceRef.current !== targetSurface || vectorFailedRef.current) return;
         vectorActiveRef.current = true;
         vectorLoadedRef.current = false;
         map.setStyle(vecStyle);

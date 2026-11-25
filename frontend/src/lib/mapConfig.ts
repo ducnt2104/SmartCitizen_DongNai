@@ -250,8 +250,9 @@ export function googleMapsPlaceUrl(lat: number, lng: number): string {
 }
 
 export const OPENFREEMAP_VECTOR_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+export const OPENFREEMAP_DARK_STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
 
-let cachedVectorStylePromise: Promise<StyleSpecification | null> | null = null;
+const cachedVectorStylePromises: Partial<Record<'roadmap' | 'dark', Promise<StyleSpecification | null>>> = {};
 
 function cloneAndLocalizeVectorStyle(base: StyleSpecification, lang: 'vi' | 'en'): StyleSpecification {
   const nameExpr: unknown =
@@ -265,6 +266,7 @@ function cloneAndLocalizeVectorStyle(base: StyleSpecification, lang: 'vi' | 'en'
       if (layer.type !== 'symbol') return layer;
       const layout = layer.layout as Record<string, unknown> | undefined;
       if (!layout || !('text-field' in layout) || layer.id.includes('shield')) return layer;
+      if (JSON.stringify(layout['text-field']).includes('"ref"')) return layer;
       return {
         ...layer,
         layout: {
@@ -278,17 +280,19 @@ function cloneAndLocalizeVectorStyle(base: StyleSpecification, lang: 'vi' | 'en'
 
 /**
  * Nạp Vector Tile Style chi tiết (đường hẻm, tòa nhà 3D, POI trường/chợ/bệnh viện, tên đường tiếng Việt)
- * tương đương độ chi tiết Google Maps; tự động trả về null để rơi về Esri Street Map nếu offline/CSP chặn.
+ * tương đương độ chi tiết Google Maps; tự động trả về null để rơi về Esri nếu offline/CSP chặn.
  */
-export async function loadDetailedVectorRoadmapStyle(
+export async function loadDetailedVectorStyle(
+  surface: 'roadmap' | 'dark',
   lang: 'vi' | 'en',
   signal?: AbortSignal,
 ): Promise<StyleSpecification | null> {
   if (typeof fetch === 'undefined') return null;
-  if (!cachedVectorStylePromise) {
+  const styleUrl = surface === 'dark' ? OPENFREEMAP_DARK_STYLE_URL : OPENFREEMAP_VECTOR_STYLE_URL;
+  if (!cachedVectorStylePromises[surface]) {
     const ctrl = new AbortController();
     const timer = typeof window !== 'undefined' ? window.setTimeout(() => ctrl.abort(), 3500) : null;
-    cachedVectorStylePromise = fetch(OPENFREEMAP_VECTOR_STYLE_URL, {
+    cachedVectorStylePromises[surface] = fetch(styleUrl, {
       headers: { Accept: 'application/json' },
       signal: ctrl.signal,
     })
@@ -299,7 +303,7 @@ export async function loadDetailedVectorRoadmapStyle(
         return json;
       })
       .catch(() => {
-        cachedVectorStylePromise = null;
+        delete cachedVectorStylePromises[surface];
         return null;
       })
       .finally(() => {
@@ -307,16 +311,23 @@ export async function loadDetailedVectorRoadmapStyle(
       });
   }
 
-  const base = await cachedVectorStylePromise;
+  const base = await cachedVectorStylePromises[surface];
   if (!base || signal?.aborted) return null;
   return cloneAndLocalizeVectorStyle(base, lang);
 }
 
+export function loadDetailedVectorRoadmapStyle(
+  lang: 'vi' | 'en',
+  signal?: AbortSignal,
+): Promise<StyleSpecification | null> {
+  return loadDetailedVectorStyle('roadmap', lang, signal);
+}
+
 /**
- * Cấu hình Style cho MapLibre GL JS:
+ * Cấu hình Style cho MapLibre GL JS (100% không watermark API key):
  *  - `roadmap`: Esri World Street Map (chi tiết tên đường, hẻm, địa danh, zoom 0-19) — CSP-safe & dự phòng cho Vector.
- *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation + Nhãn địa danh tiếng Việt.
- *  - `dark`: Carto Dark Matter @2x cho chế độ tối / Trung tâm điều hành IOC.
+ *  - `hybrid`: Ảnh vệ tinh Esri World Imagery + Mạng lưới đường Esri World Transportation + Nhãn địa danh Esri.
+ *  - `dark`: Esri World Dark Gray Base + Reference cho chế độ tối / IOC (và dự phòng cho Vector Dark).
  */
 export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification {
   if (surface === 'hybrid') {
@@ -339,22 +350,20 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
           maxzoom: 19,
           attribution: '© Esri',
         },
-        'carto-labels': {
+        'esri-places': {
           type: 'raster',
           tiles: [
-            'https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          maxzoom: 20,
-          attribution: '© OpenStreetMap © CARTO',
+          maxzoom: 19,
+          attribution: '© Esri',
         },
       },
       layers: [
         { id: 'esri-sat-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 22 },
         { id: 'esri-transport-layer', type: 'raster', source: 'esri-transport', minzoom: 0, maxzoom: 22 },
-        { id: 'carto-labels-layer', type: 'raster', source: 'carto-labels', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-places-layer', type: 'raster', source: 'esri-places', minzoom: 0, maxzoom: 22 },
       ],
     };
   }
@@ -363,19 +372,29 @@ export function buildMapLibreStyle(surface: MapSurfaceStyle): StyleSpecification
     return {
       version: 8,
       sources: {
-        'carto-dark': {
+        'esri-dark': {
           type: 'raster',
           tiles: [
-            'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-            'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
           ],
           tileSize: 256,
-          maxzoom: 20,
-          attribution: '© OpenStreetMap © CARTO',
+          maxzoom: 16,
+          attribution: '© Esri, HERE, Garmin, OpenStreetMap contributors',
+        },
+        'esri-dark-ref': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+          maxzoom: 16,
+          attribution: '© Esri',
         },
       },
-      layers: [{ id: 'carto-dark-layer', type: 'raster', source: 'carto-dark', minzoom: 0, maxzoom: 22 }],
+      layers: [
+        { id: 'esri-dark-layer', type: 'raster', source: 'esri-dark', minzoom: 0, maxzoom: 22 },
+        { id: 'esri-dark-ref-layer', type: 'raster', source: 'esri-dark-ref', minzoom: 0, maxzoom: 22 },
+      ],
     };
   }
 
