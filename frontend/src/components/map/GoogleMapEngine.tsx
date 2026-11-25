@@ -80,6 +80,8 @@ export interface SharedEngineProps<T extends MapPoint = MapPoint> {
   onDraggingChange?: (dragging: boolean) => void;
   onUserPan?: () => void;
   draggablePin?: DraggablePinSpec | null;
+  selectedPin?: { lat: number; lng: number; label?: string } | null;
+  onMapClick?: (lat: number, lng: number) => void;
   routeOverlay?: RouteOverlaySpec | null;
 }
 
@@ -537,12 +539,15 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
           }
         }}
         onClick={(ev) => {
-          if (p.crosshairActive && ev.detail.latLng) {
+          if (!ev.detail.latLng) return;
+          if (p.crosshairActive) {
             ev.map.panTo(ev.detail.latLng);
             if ((ev.map.getZoom() ?? 12) < 14) {
               ev.map.setZoom(15);
             }
+            return;
           }
+          p.onMapClick?.(ev.detail.latLng.lat, ev.detail.latLng.lng);
         }}
       >
         <GoogleCameraController
@@ -618,6 +623,21 @@ export function GoogleMapEngine<T extends MapPoint = MapPoint>(p: SharedEnginePr
             ) : (
               <div className="sc-user-dot" aria-hidden />
             )}
+          </AdvancedMarker>
+        )}
+
+        {p.selectedPin && (
+          <AdvancedMarker
+            position={{ lat: p.selectedPin.lat, lng: p.selectedPin.lng }}
+            zIndex={970}
+            title={p.selectedPin.label ?? 'Vị trí đã chọn'}
+          >
+            <div className="flex flex-col items-center drop-shadow-md">
+              <div className="grid h-8 w-8 place-items-center rounded-full border-2 border-white bg-rose-600 text-white shadow-md">
+                <span className="h-2.5 w-2.5 rounded-full bg-white" />
+              </div>
+              <div className="-mt-0.5 h-2.5 w-1 rounded-b-full bg-rose-600" />
+            </div>
           </AdvancedMarker>
         )}
 

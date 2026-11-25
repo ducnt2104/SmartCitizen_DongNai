@@ -36,9 +36,22 @@ export class GeoService {
       if (!res.ok) {
         result = resolveAdminUnit({ lat, lng });
       } else {
-        const json = (await res.json()) as { address?: Record<string, string>; display_name?: string };
+        const json = (await res.json()) as { name?: string; address?: Record<string, string>; display_name?: string };
         const a = json.address ?? {};
-        const street = [a.house_number, a.road].filter(Boolean).join(' ').trim();
+        const roadPart = [a.house_number, a.road || a.pedestrian || a.footway || a.residential || a.path]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const poiPart = (json.name || a.amenity || a.shop || a.building || a.office || '').trim();
+        const areaPart = (a.neighbourhood || a.quarter || a.hamlet || '').trim();
+        const street = [
+          poiPart && !roadPart.toLowerCase().includes(poiPart.toLowerCase()) ? poiPart : '',
+          roadPart,
+          !roadPart ? areaPart : '',
+        ]
+          .filter(Boolean)
+          .join(', ')
+          .trim();
         const rawArea = [
           a.suburb,
           a.quarter,
