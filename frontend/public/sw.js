@@ -1,8 +1,8 @@
 /* Service Worker v3: mở app tức thì khi ngoại tuyến (app shell + tài nguyên build + tile bản đồ đã xem).
  * Dữ liệu nghiệp vụ nằm ở IndexedDB (Dexie) nên SW KHÔNG cache /api và KHÔNG cache nhầm HTML cho chunk .js/.css. */
-const SHELL = 'sc-shell-v7';
-const TILES = 'sc-tiles-v7';
-const ASSETS = 'sc-assets-v7';
+const SHELL = 'sc-shell-v8';
+const TILES = 'sc-tiles-v8';
+const ASSETS = 'sc-assets-v8';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

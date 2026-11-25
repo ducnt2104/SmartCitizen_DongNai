@@ -76,27 +76,27 @@ export function FloatingSosWidget() {
     <>
       <section
         aria-label="Thanh gọi khẩn cấp SOS 113/114/115"
-        className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-rose-500/35 bg-rose-50/95 px-3 py-2.5 shadow-sm dark:bg-rose-950/35"
+        className="mb-3 flex w-full flex-col gap-2 rounded-2xl border border-rose-500/35 bg-rose-50/95 p-2.5 shadow-sm dark:bg-rose-950/35 sm:flex-row sm:items-center sm:justify-between"
       >
         <button
           type="button"
           onClick={handleOpen}
           aria-label="Mở bảng gọi khẩn cấp SOS 1 chạm"
-          className="inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-extrabold text-white shadow-sm transition-colors hover:bg-rose-700 active:scale-[0.99] sm:flex-initial sm:text-base"
+          className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-base font-extrabold text-white shadow-sm transition-colors hover:bg-rose-700 active:scale-[0.99] sm:w-auto sm:flex-initial"
         >
           <PhoneCall className="h-5 w-5 shrink-0" aria-hidden />
-          <span>SOS Khẩn cấp 113 / 114 / 115</span>
+          <span>SOS 113/114/115 · Gọi khẩn cấp</span>
         </button>
 
-        <div className="flex w-full items-center justify-between gap-1.5 sm:w-auto sm:justify-end">
+        <div className="grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center">
           {(['113', '114', '115'] as const).map((num) => (
             <a
               key={num}
               href={`tel:${num}`}
-              className="mono inline-flex min-h-12 flex-1 items-center justify-center gap-1 rounded-xl border border-rose-500/30 bg-surface px-3 text-sm font-extrabold text-rose-700 transition-colors hover:bg-rose-100 dark:text-rose-200 dark:hover:bg-rose-900/50 sm:flex-initial"
+              className="mono inline-flex min-h-12 items-center justify-center gap-1.5 rounded-xl border border-rose-500/30 bg-surface px-3 text-sm font-extrabold text-rose-700 transition-colors hover:bg-rose-100 dark:text-rose-200 dark:hover:bg-rose-900/50"
               aria-label={`Gọi khẩn cấp ${num}`}
             >
-              <PhoneCall className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <PhoneCall className="h-4 w-4 shrink-0" aria-hidden />
               <span>{num}</span>
             </a>
           ))}

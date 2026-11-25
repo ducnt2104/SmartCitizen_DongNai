@@ -14,7 +14,7 @@ export function BottomNav() {
     { to: '/report', icon: Camera, label: t('nav.report'), end: false, tour: undefined, isAlert: false },
   ] as const;
 
-  const labelCls = settings.senior ? 'text-[12.5px]' : 'text-[11px] sm:text-xs';
+  const labelCls = settings.senior ? 'text-[14px]' : 'text-[13px]';
 
   return (
     <nav
@@ -35,14 +35,14 @@ export function BottomNav() {
               }}
               className={({ isActive }) => {
                 const active = isActive && !assistantOpen;
-                return `flex min-h-[3.75rem] w-full flex-col items-center justify-center gap-1 px-0.5 py-1.5 text-center font-bold transition-colors ${labelCls} ${
+                return `flex min-h-[4rem] w-full flex-col items-center justify-center gap-1 px-0.5 py-1.5 text-center font-bold transition-colors ${labelCls} ${
                   active
                     ? isAlert
                       ? 'text-rose-600'
                       : 'text-brand'
                     : isAlert
                       ? 'text-rose-700/90 hover:text-rose-600'
-                      : 'text-ink/80 hover:text-ink'
+                      : 'text-ink/85 hover:text-ink'
                 }`;
               }}
             >
@@ -51,7 +51,7 @@ export function BottomNav() {
                 return (
                   <>
                     <span
-                      className={`grid h-7 w-[min(2.85rem,86%)] place-items-center rounded-full transition-all ${
+                      className={`grid h-8 w-[min(3rem,88%)] place-items-center rounded-full transition-all ${
                         active
                           ? isAlert
                             ? 'bg-rose-500/15 ring-1 ring-rose-500/30'
@@ -59,7 +59,7 @@ export function BottomNav() {
                           : ''
                       }`}
                     >
-                      <Icon className="h-5 w-5" aria-hidden />
+                      <Icon className="h-6 w-6" aria-hidden />
                     </span>
                     <span className="w-full truncate leading-tight">{label}</span>
                   </>
@@ -76,12 +76,12 @@ export function BottomNav() {
             aria-expanded={assistantOpen}
             aria-label={t('chat.open')}
             onClick={() => setAssistantOpen(!assistantOpen)}
-            className={`flex min-h-[3.75rem] w-full flex-col items-center justify-center gap-1 px-0.5 py-1.5 text-center font-bold transition-colors ${labelCls} ${
-              assistantOpen ? 'text-brand' : 'text-ink/80 hover:text-ink'
+            className={`flex min-h-[4rem] w-full flex-col items-center justify-center gap-1 px-0.5 py-1.5 text-center font-bold transition-colors ${labelCls} ${
+              assistantOpen ? 'text-brand' : 'text-ink/85 hover:text-ink'
             }`}
           >
-            <span className={`grid h-7 w-[min(2.85rem,86%)] place-items-center rounded-full transition-all ${assistantOpen ? 'bg-brand-soft ring-1 ring-brand/25' : ''}`}>
-              <Bot className="h-5 w-5" aria-hidden />
+            <span className={`grid h-8 w-[min(3rem,88%)] place-items-center rounded-full transition-all ${assistantOpen ? 'bg-brand-soft ring-1 ring-brand/25' : ''}`}>
+              <Bot className="h-6 w-6" aria-hidden />
             </span>
             <span className="w-full truncate leading-tight">{t('nav.assistant')}</span>
           </button>
