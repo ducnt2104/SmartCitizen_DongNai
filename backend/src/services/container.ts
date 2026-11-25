@@ -100,6 +100,6 @@ export function createServices(repos: Repositories): Services {
     aggregator,
     reports: new ReportService(repos, gemini, trust, audit, cvEngine, cache, mediaService, stage2, alerts),
     staff,
-    chat: new ChatService(repos, rag),
+    chat: new ChatService(repos, rag, alerts),
   };
 }

@@ -1,8 +1,9 @@
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../shared/dongNaiWards';
 import { computeStats, toClientReport } from '../shared/report';
-import type { Category, Report } from '../shared/types';
+import type { Category, CivicAlertItem, OfficialBulletinItem, Report, WeatherSnapshotItem } from '../shared/types';
 import type { Repositories, UserRecord } from '../repositories/types';
 import { canSee } from './access';
+import type { AlertsAndWardsService } from './alertsAndWards.service';
 import { sanitizeUserText } from './gemini.service';
 import type { DirectLocalIntentHit, LocalRagService } from './localRag.service';
 
@@ -77,6 +78,7 @@ export class ChatService {
   constructor(
     private readonly repos: Repositories,
     private readonly rag?: LocalRagService,
+    private readonly alerts?: AlertsAndWardsService,
   ) {}
 
   async buildContext(user: UserRecord | null, wardCode: string | undefined, lastUserText: string): Promise<ChatContext> {
@@ -84,27 +86,24 @@ export class ChatService {
     const scopeLabel = scope === 'city' ? 'Toàn TP. Đồng Nai (95 xã, phường)' : WARD_BY_CODE[wardCode!].name;
     const directIntent = this.rag ? this.rag.matchDirectIntent(lastUserText, wardCode) : null;
 
-    // Nếu câu hỏi là hướng dẫn phổ biến (đã khớp Direct Intent độ tin cậy cao), trả lời ngay < 5ms không cần RAG/DB!
-    if (directIntent && directIntent.confidence >= 0.9) {
-      const emptyStats = computeStats([], scope);
-      return {
-        text: `Địa bàn đang xem: ${scopeLabel}\nTổng số ĐVHC TP. Đồng Nai: ${DONG_NAI_WARDS.length} (33 Phường, 62 Xã).`,
-        found: [],
-        mine: [],
-        scopeLabel,
-        stats: emptyStats,
-        ragHits: [],
-        directIntent,
-      };
-    }
-
     const ragHits = (this.rag ? this.rag.retrieve(lastUserText, 3, wardCode) : []).map((h) => ({
       title: h.doc.title,
       content: h.doc.content,
     }));
 
-    // Đọc tối đa 200 hồ sơ gần nhất với giới hạn thời gian 120ms (không quét vô hạn collection)
-    const all = await withFastFallback(this.repos.reports.list({ limit: 200 }), 120, [] as Report[]);
+    // Đọc song song hồ sơ, thời tiết Open-Meteo, cảnh báo ngập/thi công và bản tin RSS chính thống
+    const [all, weatherSnapshots, activeAlerts, recentBulletins] = await Promise.all([
+      withFastFallback(this.repos.reports.list({ limit: 200 }), 120, [] as Report[]),
+      this.alerts
+        ? withFastFallback(this.alerts.getLatestWeatherSnapshots(), 150, [] as WeatherSnapshotItem[])
+        : Promise.resolve([] as WeatherSnapshotItem[]),
+      this.alerts
+        ? withFastFallback(this.alerts.listAlerts({ wardId: wardCode, status: 'active', limit: 8 }), 150, [] as CivicAlertItem[])
+        : Promise.resolve([] as CivicAlertItem[]),
+      this.alerts
+        ? withFastFallback(this.alerts.listBulletins({ wardId: wardCode, limit: 6 }), 150, [] as OfficialBulletinItem[])
+        : Promise.resolve([] as OfficialBulletinItem[]),
+    ]);
     const visible = all.filter((r) => canSee(user, r));
     const inScope = scope === 'city' ? all : all.filter((r) => r.wardCode === wardCode);
     const stats = computeStats(inScope.map(toClientReport), scope);
@@ -114,11 +113,40 @@ export class ChatService {
     const mine = user ? visible.filter((r) => r.reporterId === user.id).slice(0, 5) : [];
 
     const lines: string[] = [
-      `Địa bàn đang xem: ${scopeLabel}`,
+      `Địa bàn đang chọn: ${scopeLabel}`,
+      `Số điện thoại khẩn cấp tại Đồng Nai: Công an 113 | PCCC & Cứu nạn 114 | Cấp cứu y tế 115.`,
       `Tổng phản ánh: ${stats.total}; đã hoàn thành: ${stats.resolved} (${stats.resolvedPct}%); chưa hoàn thành: ${stats.open}; thời gian xử lý trung bình: ${stats.avgDays} ngày; khẩn cấp đang mở: ${stats.emergency}.`,
       `Theo nhóm: rác thải ${stats.byCategory.rac_thai}, đèn đường ${stats.byCategory.den_duong}, ngập nước ${stats.byCategory.ngap_nuoc}, mặt đường ${stats.byCategory.mat_duong}, khác ${stats.byCategory.khac}.`,
       `Tổng số ĐVHC TP. Đồng Nai: ${DONG_NAI_WARDS.length} (33 Phường, 62 Xã).`,
     ];
+
+    const matchedWeather =
+      (wardCode ? weatherSnapshots.find((w) => w.wardCode === wardCode) : undefined) ?? weatherSnapshots[0];
+    if (matchedWeather) {
+      lines.push(
+        `Thời tiết trực tiếp Open-Meteo (${matchedWeather.regionName}): ${matchedWeather.weatherLabel}, nhiệt độ ${matchedWeather.temperatureC}°C, độ ẩm ${matchedWeather.humidityPct}%, xác suất mưa ${matchedWeather.precipitationProbabilityPct}%, lượng mưa hiện tại ${matchedWeather.precipitationMm}mm (24h: ${matchedWeather.precipitation24hMm}mm), gió giật ${matchedWeather.windGustsKmh} km/h, mức nguy cơ: ${matchedWeather.riskLevel}${matchedWeather.isHazard ? ' (CẢNH BÁO NGUY HIỂM)' : ''}.`,
+      );
+    }
+    if (activeAlerts.length > 0) {
+      lines.push(
+        'Cảnh báo thiên tai / ngập lụt / giao thông đang kích hoạt:',
+        ...activeAlerts.map(
+          (a) =>
+            `- [${a.severity.toUpperCase()} · ${a.category}] ${a.title}${a.affectedRoads.length ? ` (Tuyến đường: ${a.affectedRoads.join(', ')})` : ''}${a.detourNote ? ` — Lộ trình tránh: ${a.detourNote}` : ''}: ${a.description.slice(0, 180)}`,
+        ),
+      );
+    } else {
+      lines.push('Cảnh báo hiện trường đang kích hoạt: Hiện chưa ghi nhận cảnh báo ngập lụt/cấm đường khẩn cấp nào.');
+    }
+    if (recentBulletins.length > 0) {
+      lines.push(
+        'Bản tin báo chí & chính quyền mới nhất:',
+        ...recentBulletins.map(
+          (b) =>
+            `- [${b.sourceName}] ${b.title}${b.affectedRoads.length ? ` (${b.affectedRoads.join(', ')})` : ''}: ${b.cleanSummary.slice(0, 140)}`,
+        ),
+      );
+    }
     const describe = (r: Report): string => {
       const last = r.timeline[r.timeline.length - 1];
       return `- ${r.code}: "${r.title}" (${CAT_VI[r.category]}, ${WARD_BY_CODE[r.wardCode]?.name}) — trạng thái: ${STATUS_VI[r.status]}; ưu tiên: ${r.priority}; ${r.clusterCount} người cùng phản ánh; hạn xử lý: ${r.slaDueAt ?? 'chưa đặt'}; cập nhật gần nhất: ${last?.note ?? 'không có'}.`;

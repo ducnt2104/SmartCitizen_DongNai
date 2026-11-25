@@ -8,7 +8,7 @@ import { useSettings } from '../state/settings';
 interface Msg {
   role: 'user' | 'model';
   text: string;
-  mode?: 'gemini' | 'fallback';
+  mode?: 'gemini' | 'ollama' | 'fallback';
   error?: boolean;
 }
 
@@ -99,11 +99,11 @@ export function ChatWidget() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let acc = '';
-    let mode: 'gemini' | 'fallback' = 'fallback';
+    let mode: 'gemini' | 'ollama' | 'fallback' = 'fallback';
     const wardCode = settings.scope.startsWith('ward:') ? settings.scope.slice(5) : undefined;
     try {
       await streamChat(
-        { messages: history.map((m) => ({ role: m.role, text: m.text })), wardCode, locale: lang },
+        { messages: history.slice(-10).map((m) => ({ role: m.role, text: m.text })), wardCode, locale: lang },
         (c) => {
           if (c.delta) {
             acc += c.delta;
@@ -126,7 +126,7 @@ export function ChatWidget() {
     }
   }, [busy, msgs, settings.scope, lang, t]);
 
-  const chips: Array<Parameters<typeof t>[0]> = ['chat.q1', 'chat.q2', 'chat.q3'];
+  const chips: Array<Parameters<typeof t>[0]> = ['chat.q1', 'chat.q2', 'chat.q3', 'chat.q4'];
 
   if (!open) return null;
 
@@ -182,12 +182,31 @@ export function ChatWidget() {
                       : 'rounded-bl-md border border-line/70 bg-surface-2 text-ink'
                 }`}
               >
-                {m.text || <span className="inline-flex gap-1" aria-label={t('chat.thinking')}><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /><i className="h-2 w-2 animate-pulse rounded-full bg-muted" /></span>}
+                {m.text || (
+                  <span className="inline-flex items-center gap-2 text-sm text-muted" aria-label={t('chat.thinking')}>
+                    <span className="inline-flex gap-1">
+                      <i className="h-2 w-2 animate-pulse rounded-full bg-brand/70" />
+                      <i className="h-2 w-2 animate-pulse rounded-full bg-brand/70 [animation-delay:150ms]" />
+                      <i className="h-2 w-2 animate-pulse rounded-full bg-brand/70 [animation-delay:300ms]" />
+                    </span>
+                    <span>{t('chat.thinking')}</span>
+                  </span>
+                )}
               </div>
             </div>
           ))}
           <div ref={endRef} />
         </div>
+
+        {msgs.length > 0 && !busy && (
+          <div className="flex gap-1.5 overflow-x-auto border-t border-line/60 px-3 py-2">
+            {chips.map((k) => (
+              <button key={k} type="button" className="chip shrink-0 text-xs" onClick={() => void send(t(k))}>
+                {t(k)}
+              </button>
+            ))}
+          </div>
+        )}
 
         <form
           className="flex items-center gap-2 border-t border-line p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-3"

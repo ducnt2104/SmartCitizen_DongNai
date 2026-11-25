@@ -189,7 +189,6 @@ export function aiController(s: Services) {
         throw badRequest('Nội dung tin nhắn không hợp lệ hoặc bị trống sau khi làm sạch.', 'ai_input_too_short');
       }
       const ctx = await s.chat.buildContext(req.user ?? null, b.wardCode, cleanLastText);
-      const instantAnswer = s.chat.resolveInstantAnswer(ctx, cleanLastText, b.locale);
 
       res.set({
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -212,7 +211,7 @@ export function aiController(s: Services) {
           ctx.text,
           () => s.chat.localAnswer(ctx, cleanLastText, b.locale),
           b.wardCode,
-          instantAnswer,
+          null,
         )) {
           if (closed) break;
           mode = chunk.mode;
