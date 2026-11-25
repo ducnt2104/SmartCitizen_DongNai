@@ -43,7 +43,7 @@ export const vi = {
   // ── Trang chủ ──
   'home.tagline': 'Cổng phản hồi của người dân Thành phố Đồng Nai',
   'home.heroTitle': 'Thấy sự cố? Báo cáo trong 3 bước.',
-  'home.heroText': 'Chụp ảnh — AI tự điền đơn — gửi. Hồ sơ hiển thị ngay trên thiết bị, kể cả khi mất mạng.',
+  'home.heroText': 'Chụp ảnh — AI tự điền đơn — gửi. Hồ sơ hiển thị ngay trên thiết bị.',
   'home.cta': 'Báo cáo ngay',
   'home.kpiTitle': 'Minh bạch cộng đồng',
   'home.kpiTotal': 'Phản ánh',
