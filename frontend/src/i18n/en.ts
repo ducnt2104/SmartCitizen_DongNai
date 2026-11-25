@@ -45,7 +45,7 @@ export const en: Record<keyof typeof vi, string> = {
   // ── Home ──
   'home.tagline': 'Dong Nai City Citizen Feedback Portal',
   'home.heroTitle': 'Spot an issue? Report it in 3 steps.',
-  'home.heroText': 'Take a photo — AI fills the form — submit. Records appear instantly on your device, even offline.',
+  'home.heroText': 'Take a photo — AI fills the form — submit. Records appear instantly on your device.',
   'home.cta': 'Report now',
   'home.kpiTitle': 'Community transparency',
   'home.kpiTotal': 'Reports',
