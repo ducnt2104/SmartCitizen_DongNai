@@ -132,7 +132,15 @@ export const en: Record<keyof typeof vi, string> = {
   'report.addressHintField': 'Street address / Landmark',
   'report.addressHintPlaceholder': 'House number, street, alley, or nearest landmark…',
   'report.authOk': 'Valid on-site photo',
-  'report.authLow': 'Photo appears unclear or captured from another screen',
+  'report.authLow': 'Photo will be flagged for optional officer verification',
+  'report.screenshotSoftWarn': 'This image looks like a screenshot or lacks original camera metadata ({pct}% confidence). You can still submit normally — a soft review flag will be attached for IOC inspection.',
+  'report.softFlagCitizenNote': 'Your report will still be accepted smoothly and flagged for quick IOC manual verification.',
+  'report.softReviewPreview': 'Your report will be accepted normally with a soft review flag for the IOC officer.',
+  'report.sendFailedTitle': 'Could not send report yet',
+  'report.sendFailedEdit': 'Edit report',
+  'report.sendFailedRetry': 'Retry sending',
+  'report.sendFailedRemove': 'Remove from queue',
+  'report.editOutboxBanner': 'Editing queued report: {reason}',
   'report.category': 'Incident category',
   'report.titleField': 'Title',
   'report.descField': 'Description',
@@ -392,6 +400,8 @@ export const en: Record<keyof typeof vi, string> = {
   'outbox.failed': 'Failed',
   'outbox.attempts': '{n} attempt(s)',
   'outbox.failedToast': 'Failed to sync an item in Outbox Queue',
+  'outbox.edit': 'Edit',
+  'outbox.remove': 'Remove from queue',
 
   // ── Authentication & Profile ──
   'auth.portals': 'Choose portal',
@@ -613,6 +623,8 @@ export const en: Record<keyof typeof vi, string> = {
   'ioc.staffStatusRevoked': 'Revoked',
   'ioc.staffRevokeBtn': 'Revoke',
   'ioc.staffRestoreBtn': 'Restore',
+  'ioc.softFlagTitle': 'AI soft warning (manual review recommended)',
+  'ioc.softFlagBadge': 'Check photo',
 
   // ── 404 ──
   'notFound.title': 'Page not found',

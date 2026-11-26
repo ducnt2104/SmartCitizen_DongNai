@@ -319,7 +319,15 @@ export function QueueView({ scope, isCity, online }: { scope: string; isCity: bo
                             {r.seniorSubmitted && <span className="text-[10px] font-bold text-ioc-amber">{t('badge.senior')}</span>}
                           </td>
                           <td className="whitespace-nowrap px-3 py-1.5 text-xs text-ioc-dim">{WARD_BY_CODE[r.wardCode]?.name}</td>
-                          <td className="whitespace-nowrap px-3 py-1.5 text-xs">{t(STATUS_KEY[r.status])}{r.quarantine && <span className="ml-1 text-ioc-amber">· {t(`quarantine.${r.quarantine.reason}` as I18nKey)}</span>}</td>
+                          <td className="whitespace-nowrap px-3 py-1.5 text-xs">
+                            {t(STATUS_KEY[r.status])}
+                            {r.quarantine && <span className="ml-1 text-ioc-amber">· {t(`quarantine.${r.quarantine.reason}` as I18nKey)}</span>}
+                            {!r.quarantine && (r.needsManualReview || r.aiFlag || r.ai?.moderationDecision === 'HUMAN_REVIEW') && (
+                              <span className="ml-1 rounded bg-ioc-amber/20 px-1.5 py-0.5 text-[10px] font-semibold text-ioc-amber">
+                                {t('ioc.softFlagBadge')}
+                              </span>
+                            )}
+                          </td>
                           <td className="mono px-3 py-1.5 text-right text-xs">{r.clusterCount}<span className="text-ioc-dim"> · {r.confirmCount}✓</span></td>
                           <td className="px-3 py-1.5 text-right">{r.status === 'resolved' || r.status === 'quarantined' ? <span className="mono text-xs text-ioc-dim">—</span> : <SlaClock iso={r.slaDueAt} dark />}</td>
                         </tr>

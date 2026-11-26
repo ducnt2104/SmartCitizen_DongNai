@@ -46,7 +46,7 @@ export interface BeforeAfterSsimResult {
   summary: string;
 }
 
-const COMMON_SCREEN_RATIOS = [9 / 19.5, 9 / 20, 9 / 21, 9 / 18, 9 / 16, 16 / 9, 18 / 9, 16 / 10, 3 / 4, 4 / 3];
+const COMMON_SCREEN_RATIOS = [9 / 19.5, 9 / 20, 9 / 21, 9 / 18, 9 / 16, 16 / 9, 18 / 9, 16 / 10];
 
 // Bảng cosine 32x32 tiền tính toán cho pHash 2D-DCT siêu nhanh
 const DCT_SIZE = 32;
@@ -330,18 +330,19 @@ export function computeEdgeStatsAndScreenshot(
   }
   const flatRatio = blocks ? flat / blocks : 0;
 
-  const matchesScreenRatio = COMMON_SCREEN_RATIOS.some((r) => Math.abs(aspect - r) < 0.02);
+  const matchesScreenRatio = COMMON_SCREEN_RATIOS.some((r) => Math.abs(aspect - r) < 0.018);
   let conf = 0;
-  if (!hasCameraExif) conf += 0.25;
-  if (matchesScreenRatio) conf += 0.22;
-  if (flatRatio > 0.55) conf += 0.35;
-  else if (flatRatio > 0.4) conf += 0.16;
-  if (sharpEdgeDensity > 0.42) conf += 0.32;
-  else if (sharpEdgeDensity > 0.28) conf += 0.14;
+  // Ảnh tải từ máy tính/Zalo/Messenger thường mất EXIF, chỉ cộng trọng số rất nhẹ
+  if (!hasCameraExif) conf += 0.06;
+  if (matchesScreenRatio) conf += 0.18;
+  if (flatRatio > 0.72) conf += 0.42;
+  else if (flatRatio > 0.56) conf += 0.18;
+  if (sharpEdgeDensity > 0.56) conf += 0.34;
+  else if (sharpEdgeDensity > 0.42) conf += 0.16;
   if (hasCameraExif) conf *= 0.35;
 
   const screenshotConfidence = Math.round(Math.min(1, conf) * 100) / 100;
-  const likelyScreenshot = screenshotConfidence >= 0.65 || (flatRatio > 0.62 && sharpEdgeDensity > 0.35);
+  const likelyScreenshot = screenshotConfidence >= 0.72 || (flatRatio > 0.74 && sharpEdgeDensity > 0.45);
 
   return {
     blurScore,

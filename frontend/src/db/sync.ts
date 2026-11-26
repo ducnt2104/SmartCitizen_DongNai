@@ -5,8 +5,10 @@ import { db, putSetting, type OutboxItem, type OutboxKind } from './localDb';
 
 export type SyncEventDetail =
   | { type: 'report_result'; localId: string; outcome: string; messageCode: string; report: ClientReport }
-  | { type: 'item_failed'; item: OutboxItem; message: string }
+  | { type: 'item_failed'; item: OutboxItem; message: string; notify?: boolean }
   | { type: 'synced'; at: number };
+
+const lastNotifiedErrorById = new Map<string, string>();
 
 export const syncBus = new EventTarget();
 const emit = (d: SyncEventDetail): void => {
@@ -142,6 +144,7 @@ export async function processOutbox(): Promise<void> {
       await db.outboxQueue.update(item.id, { state: 'sending' });
       try {
         await sendOne(item);
+        lastNotifiedErrorById.delete(item.id);
       } catch (err) {
         const attempts = item.attempts + 1;
         if (err instanceof NetworkError || (err instanceof ApiError && err.status >= 500)) {
@@ -150,8 +153,20 @@ export async function processOutbox(): Promise<void> {
           await db.outboxQueue.update(item.id, { state: 'waiting_auth', lastError: err.message });
         } else if (err instanceof ApiError && err.status === 429) {
           const waitSec = Math.min(60, Math.max(5, err.retryAfter ?? 15));
-          await db.outboxQueue.update(item.id, { state: 'pending', attempts, nextAttemptAt: Date.now() + waitSec * 1000, lastError: err.message });
-          emit({ type: 'item_failed', item, message: `${err.message} (Tự thử lại sau ${waitSec}s)` });
+          if (attempts >= 4) {
+            const msg = `${err.message} (Hệ thống đã thử tự động ${attempts} lần — bấm Thử gửi lại hoặc Sửa lại đơn)`;
+            await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: msg });
+            const notify = lastNotifiedErrorById.get(item.id) !== msg;
+            lastNotifiedErrorById.set(item.id, msg);
+            emit({ type: 'item_failed', item: { ...item, state: 'failed', attempts, lastError: msg }, message: msg, notify });
+          } else {
+            const msg = `${err.message} (Tự thử lại sau ${waitSec}s)`;
+            await db.outboxQueue.update(item.id, { state: 'pending', attempts, nextAttemptAt: Date.now() + waitSec * 1000, lastError: msg });
+            // Không lặp lại toast khi đang tự chờ retry 429 ở nền
+            const notify = attempts === 1 && lastNotifiedErrorById.get(item.id) !== err.message;
+            if (notify) lastNotifiedErrorById.set(item.id, err.message);
+            emit({ type: 'item_failed', item, message: msg, notify });
+          }
         } else {
           const message = err instanceof Error ? err.message : String(err);
           // Rollback Optimistic UI nếu lượt "Cùng xác nhận (+1)" bị máy chủ từ chối (4xx)
@@ -169,12 +184,14 @@ export async function processOutbox(): Promise<void> {
             } catch { /* bỏ qua nếu storage không khả dụng */ }
           }
           if (item.kind === 'create_report' || item.kind === 'proxy_report') {
+            // Xóa bản nháp lạc quan khỏi /mine nhưng GIỮ lại trong outboxQueue ở trạng thái failed để người dùng Sửa lại / Thử gửi lại / Xóa
             await db.reports.delete(item.targetId);
-            await db.outboxQueue.delete(item.id);
-          } else {
-            await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: message });
           }
-          emit({ type: 'item_failed', item, message });
+          const updatedItem: OutboxItem = { ...item, state: 'failed', attempts, lastError: message };
+          await db.outboxQueue.update(item.id, { state: 'failed', attempts, lastError: message });
+          const notify = lastNotifiedErrorById.get(item.id) !== message;
+          lastNotifiedErrorById.set(item.id, message);
+          emit({ type: 'item_failed', item: updatedItem, message, notify });
         }
       }
     }
@@ -184,11 +201,13 @@ export async function processOutbox(): Promise<void> {
 }
 
 export async function retryFailed(id: string): Promise<void> {
-  await db.outboxQueue.update(id, { state: 'pending', nextAttemptAt: 0, lastError: null });
+  lastNotifiedErrorById.delete(id);
+  await db.outboxQueue.update(id, { state: 'pending', attempts: 0, nextAttemptAt: 0, lastError: null });
   void processOutbox();
 }
 
 export async function discardOutboxItem(id: string): Promise<void> {
+  lastNotifiedErrorById.delete(id);
   const item = await db.outboxQueue.get(id);
   await db.transaction('rw', db.reports, db.outboxQueue, async () => {
     if (item && (item.kind === 'create_report' || item.kind === 'proxy_report')) await db.reports.delete(item.targetId);

@@ -2,7 +2,7 @@ import { DEPARTMENT_BY_CATEGORY } from '@shared/constants';
 import { nearestWard, matchArterial } from '@shared/geo';
 import type { Category, ClientReport, VisionResult } from '@shared/types';
 import { db } from '../db/localDb';
-import { enqueue } from '../db/sync';
+import { enqueue, processOutbox } from '../db/sync';
 import type { EdgeStatsMsg, ExtractedExifMetadata } from '../lib/imageProcessor';
 import { authStore } from './authStore';
 
@@ -143,11 +143,18 @@ export async function submitReport(input: SubmitInput, proxy: boolean): Promise<
   await db.transaction('rw', db.reports, db.outboxQueue, async () => {
     await db.reports.put(optimistic);
     await db.outboxQueue.put({
-      id: key, kind: proxy ? 'proxy_report' : 'create_report', targetId: id, payload, state: authStore.token() ? 'pending' : 'waiting_auth',
-      attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: Date.now(),
+      id: key,
+      kind: proxy ? 'proxy_report' : 'create_report',
+      targetId: id,
+      payload,
+      state: authStore.token() ? 'pending' : 'waiting_auth',
+      attempts: 0,
+      nextAttemptAt: 0,
+      lastError: null,
+      createdAt: Date.now(),
     });
   });
-  await enqueue({ id: key, kind: proxy ? 'proxy_report' : 'create_report', targetId: id, payload });
+  void processOutbox();
   return optimistic;
 }
 

@@ -239,9 +239,19 @@ describe('3-Stage AI Cascade, Anti-Spam, Binary WebP Media & Cache E2E', () => {
       computeModerationDecision({
         authenticityScore: 95,
         relevanceScore: 95,
-        isScreenCaptureOrFake: true, // screen recapture forces reject despite high raw scores
+        isScreenCaptureOrFake: true, // screen recapture routes to Soft Flag HUMAN_REVIEW (never blocks citizen)
         abuseRisk: 'NONE',
         forensicFlags: ['screen_moire'],
+      }).decision,
+    ).toBe('HUMAN_REVIEW');
+
+    expect(
+      computeModerationDecision({
+        authenticityScore: 95,
+        relevanceScore: 95,
+        isScreenCaptureOrFake: false,
+        abuseRisk: 'HIGH', // only genuine abuse/spam hard-rejects
+        forensicFlags: ['spam_promo_url'],
       }).decision,
     ).toBe('AUTO_REJECT');
 

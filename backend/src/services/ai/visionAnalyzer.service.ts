@@ -559,25 +559,43 @@ export class VisionAnalyzerService {
     const fb = input.fallbackVision();
     const wardName = input.wardCode ? WARD_BY_CODE[input.wardCode]?.name ?? 'UBND Phường/Xã' : 'UBND Phường/Xã';
     const stdCat = mapLegacyToStandardizedCategory(fb.category, input.cleanHintText || fb.title);
-    const forensicFlags = Array.from(new Set([...input.forensicSignals, ...fb.fraudFlags]));
+    const isDegraded = Boolean(errInfo?.degraded);
+    const forensicFlags = Array.from(
+      new Set([
+        ...input.forensicSignals,
+        ...fb.fraudFlags,
+        ...(isDegraded ? ['ai_cloud_fallback_manual_review'] : []),
+      ]),
+    );
     const isFake = forensicFlags.some((f) =>
       /(screenshot|screen_recapture|screen_moire|ai_or_editing|exif_editing)/i.test(f),
     );
-    const relevanceScore = fb.authenticityScore < 45 ? 35 : 82;
+    const safeAuth = isDegraded ? Math.max(60, fb.authenticityScore) : fb.authenticityScore;
+    const relevanceScore = safeAuth < 45 ? 35 : 82;
     const moderationOutcome = computeModerationDecision({
-      authenticityScore: fb.authenticityScore,
+      authenticityScore: safeAuth,
       relevanceScore,
       isScreenCaptureOrFake: isFake,
       abuseRisk: 'NONE',
       forensicFlags,
       trustSupervised: input.trustSupervised,
     });
+    const finalDecision = isDegraded ? 'HUMAN_REVIEW' : moderationOutcome.decision;
+    const needsManualReview = isDegraded || finalDecision === 'HUMAN_REVIEW' || isFake || forensicFlags.length > 0;
+    const aiFlag = isDegraded
+      ? 'ai_fallback_manual_review'
+      : isFake
+        ? 'suspected_screenshot'
+        : forensicFlags.length > 0
+          ? 'manual_review_recommended'
+          : null;
 
     return {
       ...fb,
       status: 'ANALYZED',
+      authenticityScore: safeAuth,
       fraudFlags: forensicFlags,
-      isAuthentic: !isFake && fb.authenticityScore >= 50,
+      isAuthentic: true,
       standardizedCategory: stdCat,
       suggestedUnit: suggestTwoTierUnit(stdCat, wardName),
       suggestedTitle: fb.title.slice(0, 70),
@@ -588,10 +606,15 @@ export class VisionAnalyzerService {
       forensicFlags,
       relevanceScore,
       abuseRisk: 'NONE',
-      decision: moderationOutcome.decision,
-      citizenFeedback: moderationOutcome.citizenFeedback,
-      officerReviewNotes: moderationOutcome.officerReviewNotes,
-      degraded: Boolean(errInfo?.degraded),
+      decision: finalDecision,
+      aiFlag,
+      needsManualReview,
+      softFlags: forensicFlags,
+      citizenFeedback: null,
+      officerReviewNotes: isDegraded
+        ? `Gemini AI tạm quá tải/lỗi (${errInfo?.errorCode ?? 'FALLBACK'}) — fail-open có kiểm soát để Cán bộ IOC kiểm tra thủ công.`
+        : moderationOutcome.officerReviewNotes,
+      degraded: isDegraded,
       errorCode: errInfo?.errorCode ?? null,
       errorMessage: errInfo?.errorMessage ?? null,
       upstreamStatus: errInfo?.upstreamStatus ?? null,

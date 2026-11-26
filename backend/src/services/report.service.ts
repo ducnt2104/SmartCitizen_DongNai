@@ -461,7 +461,7 @@ export class ReportService {
         hintCategory: category,
         hintText: `${input.title}. ${input.description}`,
         edge: input.edge,
-        exif: input.exif,
+        exif: input.exif ?? input.photo?.exif,
         lat: pinLat,
         lng: pinLng,
         reportId: id,
@@ -532,36 +532,24 @@ export class ReportService {
     });
 
     const isTinyTest = process.env.NODE_ENV === 'test' && isLegacyJsonStub;
-    const isHardGatekeeperViolation =
-      analysis.decision === 'AUTO_REJECT' ||
-      analysis.isAuthentic === false ||
-      analysis.authenticityScore < 60 ||
-      Boolean(rustDup?.is_duplicate) ||
-      (decision.action === 'quarantine' && (decision.reason === 'duplicate_image' || decision.reason === 'low_authenticity'));
+    // Chỉ chặn cứng (HTTP 422) khi vi phạm nội dung thực sự (spam/quấy rối/tiêu chuẩn cộng đồng), KHÔNG chặn nghi ngờ AI/CV/EXIF ảnh
+    const isHardContentViolation =
+      analysis.status === 'REJECTED_PREFILTER' ||
+      (analysis.abuseRisk === 'HIGH' && !analysis.degraded);
 
-    if (isHardGatekeeperViolation) {
+    if (isHardContentViolation) {
       const fFlags = Array.from(new Set([...(analysis.forensicFlags ?? []), ...analysis.fraudFlags]));
-      let errorCode = 'FORENSIC_REJECTED';
-      let reasonMsg =
-        analysis.citizenFeedback ||
-        (decision.action === 'quarantine' ? decision.detail : '') ||
-        'Báo cáo bị từ chối bởi cổng kiểm định AI đa tầng.';
-
-      if (Boolean(rustDup?.is_duplicate) || (decision.action === 'quarantine' && decision.reason === 'duplicate_image')) {
-        errorCode = 'DUPLICATE_IMAGE_DETECTED';
-        const matchLabel = rustDup?.match_type ? ` (${rustDup.match_type})` : '';
-        reasonMsg = `Phát hiện ảnh trùng lặp, lật hoặc cắt ghép từ sự cố đã có trong hệ thống${matchLabel}. Vui lòng chụp trực tiếp hiện trường mới.`;
-      } else if (fFlags.some((f) => /(c2pa|ai_signature|ai_smooth)/i.test(f))) {
-        errorCode = 'AI_IMAGE_DETECTED';
-      } else if (fFlags.some((f) => /(ela_tamper|editing_software)/i.test(f))) {
-        errorCode = 'EDITED_IMAGE_DETECTED';
-      } else if (fFlags.some((f) => /(screenshot|screen_recapture|moire|high_flat_ui)/i.test(f))) {
-        errorCode = 'SCREENSHOT_DETECTED';
-      } else if (fFlags.some((f) => /blurry/i.test(f))) {
-        errorCode = 'BLURRY_IMAGE';
-      } else if ((analysis.relevanceScore ?? 100) < 45) {
-        errorCode = 'IRRELEVANT_IMAGE';
+      let errorCode = 'ABUSIVE_CONTENT_REJECTED';
+      if (fFlags.some((f) => /promo|url|spam/i.test(f))) {
+        errorCode = 'SPAM_TEXT_REJECTED';
+      } else if (fFlags.some((f) => /profanity/i.test(f))) {
+        errorCode = 'PROFANITY_REJECTED';
+      } else if (fFlags.some((f) => /gibberish/i.test(f))) {
+        errorCode = 'GIBBERISH_TEXT_REJECTED';
       }
+      const reasonMsg =
+        analysis.citizenFeedback ||
+        'Nội dung phản ánh không hợp lệ (nghi spam, ký tự vô nghĩa hoặc vi phạm chuẩn mực cộng đồng). Vui lòng mô tả rõ sự cố.';
 
       await Promise.allSettled([
         this.trust.penalizeSpam(user.id),
@@ -574,9 +562,7 @@ export class ReportService {
             reasonCode: errorCode,
             authenticityScore: analysis.authenticityScore,
             forensicFlags: fFlags,
-            relatedReportId:
-              rustDup?.matched_incident_id ??
-              (decision.action === 'quarantine' ? decision.relatedReportId : null),
+            relatedReportId: null,
           },
         ),
       ]);
@@ -585,11 +571,48 @@ export class ReportService {
         authenticityScore: analysis.authenticityScore,
         forensicFlags: fFlags,
         forensics: analysis.forensics ?? null,
-        relatedReportId:
-          rustDup?.matched_incident_id ??
-          (decision.action === 'quarantine' ? decision.relatedReportId : null),
+        relatedReportId: null,
       });
     }
+
+    const softFlagsSet = new Set<string>([
+      ...(analysis.softFlags ?? []),
+      ...(analysis.forensicFlags ?? []),
+      ...analysis.fraudFlags,
+    ]);
+    if (rustDup?.is_duplicate) {
+      softFlagsSet.add(`duplicate_${rustDup.match_type || 'perceptual'}`);
+    }
+    if (decision.action === 'quarantine' && (decision.reason === 'duplicate_image' || decision.reason === 'low_authenticity')) {
+      softFlagsSet.add(decision.reason);
+    }
+    if (analysis.degraded || analysis.errorCode) {
+      softFlagsSet.add(analysis.errorCode || 'ai_cloud_fallback_manual_review');
+    }
+    const softFlags = Array.from(softFlagsSet);
+    const hasCvSoftFlag =
+      softFlags.length > 0 ||
+      Boolean(analysis.isScreenCaptureOrFake) ||
+      Boolean(rustDup?.is_duplicate) ||
+      Boolean(analysis.needsManualReview) ||
+      Boolean(analysis.degraded) ||
+      analysis.authenticityScore < 65 ||
+      (decision.action === 'quarantine' && (decision.reason === 'duplicate_image' || decision.reason === 'low_authenticity'));
+    const computedAiFlag =
+      analysis.aiFlag ??
+      (softFlags.some((f) => /(screenshot|moire|high_flat_ui)/i.test(f))
+        ? 'suspected_screenshot'
+        : softFlags.some((f) => /(c2pa|ai_signature|ai_smooth|ela_tamper|editing_software)/i.test(f))
+          ? 'suspected_ai_or_edited'
+          : softFlags.some((f) => /duplicate/i.test(f)) || rustDup?.is_duplicate
+            ? 'suspected_duplicate_crop'
+            : softFlags.some((f) => /blurry|severe_blur|bad_exposure|extreme_exposure/i.test(f))
+              ? 'low_image_clarity'
+              : analysis.degraded || analysis.errorCode
+                ? 'ai_fallback_manual_review'
+                : hasCvSoftFlag
+                  ? 'manual_review_recommended'
+                  : null);
 
     const phoneMasked = user.phone ? maskPhone(user.phone) : user.email ? `${user.email.slice(0, 2)}***` : '***';
     const actor = { id: user.id, name: user.name, role: user.role };
@@ -635,7 +658,11 @@ export class ReportService {
         ? Math.max(analysis.severity, Math.min(5, Math.max(1, input.severity)))
         : analysis.severity;
     const priority: Report['priority'] = level1 ? 'emergency' : emergency || effectiveSeverityBase >= 4 ? 'high' : 'normal';
-    const quarantined = decision.action === 'quarantine';
+    // Chỉ cách ly đối với GPS bất thường > 5km hoặc tài khoản giám sát; nghi ngờ ảnh AI/CV chuyển sang Soft Flag cho IOC duyệt
+    const quarantined =
+      decision.action === 'quarantine' &&
+      decision.reason !== 'duplicate_image' &&
+      decision.reason !== 'low_authenticity';
     const status: Report['status'] = quarantined ? 'quarantined' : 'received';
     const dept = analysis.suggestedDepartment ?? DEPARTMENT_BY_CATEGORY[category];
     const aiSuggestedLabel =
@@ -704,12 +731,14 @@ export class ReportService {
       isProxyReport: isProxy || input.isProxyReport,
       proxyVolunteerId,
       seniorSubmitted: input.seniorSubmitted || isProxy,
-      needsFieldVerification: quarantined && decision.needsFieldVerification,
+      needsFieldVerification: (quarantined && decision.needsFieldVerification) || hasCvSoftFlag,
       assignedVolunteerId: null,
       verification: null,
+      aiFlag: computedAiFlag,
+      needsManualReview: hasCvSoftFlag,
       ai: {
         authenticityScore: analysis.authenticityScore,
-        fraudFlags: analysis.fraudFlags,
+        fraudFlags: softFlags,
         confidence: analysis.confidence,
         safetyHazards: analysis.safetyHazards,
         suggestedDepartment: dept,
@@ -723,12 +752,20 @@ export class ReportService {
         relevanceScore: analysis.relevanceScore,
         abuseRisk: analysis.abuseRisk,
         isScreenCaptureOrFake: analysis.isScreenCaptureOrFake,
-        forensicFlags: analysis.forensicFlags ?? analysis.fraudFlags,
+        forensicFlags: softFlags,
         forensics: analysis.forensics ?? null,
         keyEvidenceTags: analysis.keyEvidenceTags,
-        decision: quarantined && analysis.decision === 'AUTO_REJECT' ? 'AUTO_REJECT' : analysis.decision,
-        citizenFeedback: analysis.citizenFeedback,
-        officerReviewNotes: analysis.officerReviewNotes,
+        moderationDecision: hasCvSoftFlag ? 'HUMAN_REVIEW' : (analysis.decision ?? 'AUTO_APPROVE'),
+        decision: hasCvSoftFlag ? 'HUMAN_REVIEW' : (analysis.decision ?? 'AUTO_APPROVE'),
+        aiFlag: computedAiFlag,
+        needsManualReview: hasCvSoftFlag,
+        softFlags,
+        citizenFeedback: null,
+        officerReviewNotes:
+          analysis.officerReviewNotes ||
+          (hasCvSoftFlag
+            ? `Cần Cán bộ IOC kiểm tra ảnh (soft flag: ${computedAiFlag ?? 'manual_review'}).`
+            : null),
         latencyMs: analysis.latencyMs,
         mode: analysis.mode,
       },
@@ -737,7 +774,12 @@ export class ReportService {
       quarantine: quarantined
         ? { reason: decision.reason, detail: decision.detail, at: nowIso, relatedReportId: decision.relatedReportId }
         : null,
-      possibleDuplicateOf: decision.action === 'accept' ? decision.possibleDuplicateOf : null,
+      possibleDuplicateOf:
+        decision.action === 'accept'
+          ? decision.possibleDuplicateOf
+          : decision.action === 'quarantine' && decision.reason === 'duplicate_image'
+            ? decision.relatedReportId
+            : (rustDup?.matched_incident_id ?? null),
       department: null,
       slaDueAt: new Date(Date.now() + slaHoursFor(quarantined ? 'normal' : priority) * HOUR).toISOString(),
       dispatches: [],
@@ -772,12 +814,12 @@ export class ReportService {
     this.stage2?.schedulePostProcess({
       userId: user.id,
       reportId: report.id,
-      decision: quarantined && analysis.decision === 'AUTO_REJECT' ? 'AUTO_REJECT' : analysis.decision,
+      decision: hasCvSoftFlag ? 'HUMAN_REVIEW' : (analysis.decision ?? 'AUTO_APPROVE'),
       authenticityScore: analysis.authenticityScore,
-      fraudFlags: analysis.fraudFlags,
+      fraudFlags: softFlags,
       engineMode: analysis.mode,
       latencyMs: analysis.latencyMs ?? 0,
-      summary: analysis.citizenFeedback || analysis.officerReviewNotes || analysis.description,
+      summary: analysis.officerReviewNotes || analysis.description,
     });
     const postWriteTasks: Array<Promise<unknown>> = [
       this.audit.log(actor, 'report.create', report.id, null, {
@@ -786,6 +828,8 @@ export class ReportService {
         status: report.status,
         priority: report.priority,
         quarantine: report.quarantine?.reason ?? null,
+        aiFlag: report.aiFlag ?? null,
+        needsManualReview: Boolean(report.needsManualReview),
       }),
     ];
     if (report.dispatches.length) {
