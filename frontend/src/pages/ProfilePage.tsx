@@ -1,8 +1,15 @@
 import { Award, Bell, CheckCircle2, ClipboardList, KeyRound, Lock, LogOut, Mail, MapPin, Monitor, Phone, ShieldAlert, UserRound } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { ConfirmationResult } from 'firebase/auth';
 import { Link, useNavigate } from 'react-router-dom';
 import type { AuthSession, SessionInfo, UserProfile } from '@shared/types';
 import { CitizenLogin } from '../components/CitizenLogin';
+import { validateVnPhoneLive } from '../components/auth/VnPhoneInput';
+import {
+  isFirebasePhoneClientConfigured,
+  setRuntimeFirebaseClientConfig,
+  type FirebaseClientEnv,
+} from '../components/auth/firebaseConfigClient';
 import { Spinner } from '../components/ui';
 import { normalizeRole } from '@shared/constants';
 import { DONG_NAI_WARDS, getWard } from '../data/dongNaiWards';
@@ -42,6 +49,9 @@ export default function ProfilePage() {
   const [newPhone, setNewPhone] = useState('');
   const [phoneOtp, setPhoneOtp] = useState('');
   const [phoneOtpSent, setPhoneOtpSent] = useState(false);
+  const rawDomId = useId().replace(/:/g, '');
+  const phoneRecaptchaId = `sc-profile-recaptcha-${rawDomId}`;
+  const firebasePhoneConfirmRef = useRef<ConfirmationResult | null>(null);
 
   // Danh sách phiên hoạt động
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -127,17 +137,67 @@ export default function ProfilePage() {
   const sendContactOtp = async (channel: 'email' | 'phone'): Promise<void> => {
     setBusy(true);
     setErr(null);
+    if (channel === 'phone') {
+      firebasePhoneConfirmRef.current = null;
+    }
     try {
-      const target = channel === 'email' ? newEmail.trim() : newPhone.trim();
-      await api('/api/auth/otp/send', {
+      const target =
+        channel === 'email'
+          ? newEmail.trim()
+          : (validateVnPhoneLive(newPhone).e164 ?? newPhone.trim());
+
+      const r = await api<{
+        clientSideFirebase?: boolean;
+        firebaseClientConfig?: FirebaseClientEnv | null;
+      }>('/api/auth/otp/send', {
         method: 'POST',
         body: { channel, target, purpose: channel === 'email' ? 'change_email' : 'change_phone' },
       });
+
+      if (channel === 'phone' && r.clientSideFirebase) {
+        const phoneCheck = validateVnPhoneLive(newPhone);
+        if (!phoneCheck.isValid || !phoneCheck.e164) {
+          throw new Error(phoneCheck.errorMessage ?? 'Số điện thoại Việt Nam không hợp lệ.');
+        }
+        if (r.firebaseClientConfig) {
+          setRuntimeFirebaseClientConfig(r.firebaseClientConfig);
+        }
+        if (!isFirebasePhoneClientConfigured()) {
+          const st = await api<{ firebaseClientConfig?: FirebaseClientEnv | null }>('/api/auth/otp/status').catch(() => null);
+          if (st?.firebaseClientConfig) setRuntimeFirebaseClientConfig(st.firebaseClientConfig);
+        }
+        try {
+          const { sendFirebasePhoneSms } = await import('../components/auth/firebasePhoneAuth');
+          firebasePhoneConfirmRef.current = await sendFirebasePhoneSms(phoneCheck.e164, phoneRecaptchaId);
+        } catch (fbErr) {
+          const canFallback = Boolean(
+            (fbErr as { canFallbackToDirectSms?: boolean } | null)?.canFallbackToDirectSms,
+          );
+          const st = await api<{ directSmsConfigured?: boolean }>('/api/auth/otp/status').catch(() => null);
+          if (canFallback && st?.directSmsConfigured) {
+            await api('/api/auth/otp/send', {
+              method: 'POST',
+              body: {
+                channel: 'phone',
+                target: phoneCheck.e164,
+                purpose: 'change_phone',
+                preferDirectSms: true,
+              },
+            });
+            firebasePhoneConfirmRef.current = null;
+          } else {
+            throw fbErr;
+          }
+        }
+      }
+
       if (channel === 'email') setEmailOtpSent(true);
       else setPhoneOtpSent(true);
       toast('success', 'Đã gửi mã OTP xác thực', `Kiểm tra ${target}`);
     } catch (error) {
-      setErr(error instanceof ApiError ? error.message : t('state.genericError'));
+      if (error instanceof ApiError) setErr(error.message);
+      else if (error instanceof Error && error.message) setErr(error.message);
+      else setErr(t('state.genericError'));
     } finally {
       setBusy(false);
     }
@@ -173,11 +233,20 @@ export default function ProfilePage() {
     setBusy(true);
     setErr(null);
     try {
+      let authPayload: Record<string, unknown> = { otpCode: phoneOtp.trim() };
+      if (firebasePhoneConfirmRef.current) {
+        const { confirmFirebaseOtpAndGetIdToken } = await import('../components/auth/firebasePhoneAuth');
+        const firebaseIdToken = await confirmFirebaseOtpAndGetIdToken(
+          firebasePhoneConfirmRef.current,
+          phoneOtp.trim(),
+        );
+        authPayload = { firebaseIdToken };
+      }
       const res = await api<AuthSession & { revokedOtherSessions: number }>('/api/auth/change-phone', {
         method: 'POST',
         body: {
           newPhone: newPhone.trim(),
-          otpCode: phoneOtp.trim(),
+          ...authPayload,
           ...(currentPassword ? { currentPassword } : {}),
         },
       });
@@ -185,9 +254,12 @@ export default function ProfilePage() {
       setNewPhone('');
       setPhoneOtp('');
       setPhoneOtpSent(false);
+      firebasePhoneConfirmRef.current = null;
       toast('success', 'Đã cập nhật SĐT & đá toàn bộ thiết bị khác');
     } catch (error) {
-      setErr(error instanceof ApiError ? error.message : t('state.genericError'));
+      if (error instanceof ApiError) setErr(error.message);
+      else if (error instanceof Error && error.message) setErr(error.message);
+      else setErr(t('state.genericError'));
     } finally {
       setBusy(false);
     }
@@ -346,6 +418,7 @@ export default function ProfilePage() {
 
       {/* Đổi Email / Số điện thoại (xác thực OTP + mật khẩu) */}
       <div className="card space-y-4 p-5">
+        <div id={phoneRecaptchaId} className="sr-only" aria-hidden="true" />
         <h2 className="text-base font-bold">Đổi Email / Số điện thoại liên hệ</h2>
         <form onSubmit={(e) => void handleChangeEmail(e)} className="grid gap-2 sm:grid-cols-3">
           <input

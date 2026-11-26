@@ -272,7 +272,7 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
     }
   });
 
-  it('5. SMS OTP trả SMS_PROVIDER_NOT_CONFIGURED (503) khi chưa cấu hình và giới hạn tối đa 5 lần / 15 phút / IP', async () => {
+  it('5. SMS OTP trả SMS_PROVIDER_NOT_CONFIGURED (503) khi chưa cấu hình và áp dụng ngưỡng thân thiện 30 lần / 5 phút / thiết bị (tách CGNAT)', async () => {
     services.phoneOtp.resetMemory();
     const failRes = await fetch(`${base}/api/auth/otp/send`, {
       method: 'POST',
@@ -290,21 +290,46 @@ describe('Production Hardening: Zero-Downtime SQLite Fallback, <100ms Local AI, 
       send: async () => ({ provider: 'android_gateway', delivered: true, messageId: 'ok' }),
     });
     try {
-      const phones = ['0911000001', '0911000002', '0911000003', '0911000004', '0911000005'];
-      for (const ph of phones) {
+      for (let i = 1; i <= 30; i++) {
+        const ph = `0911${String(i).padStart(6, '0')}`;
         const res = await fetch(`${base}/api/auth/otp/send`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.55' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Forwarded-For': '10.99.0.55',
+            'X-Device-Fp': 'device-cgnat-1',
+          },
           body: JSON.stringify({ channel: 'phone', phone: ph }),
         });
         expect(res.status).toBe(200);
       }
+
+      // Người dùng khác dùng chung IP 4G/Wi-Fi (khác thiết bị) vẫn gửi OTP bình thường (không khóa oan CGNAT)
+      const siblingRes = await fetch(`${base}/api/auth/otp/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': '10.99.0.55',
+          'X-Device-Fp': 'device-cgnat-2',
+        },
+        body: JSON.stringify({ channel: 'phone', phone: '0911999001' }),
+      });
+      expect(siblingRes.status).toBe(200);
+
+      // Thiết bị thứ 1 vượt ngưỡng 30/5 phút -> trả 429 kèm retryAfter rõ ràng
       const blockedIpRes = await fetch(`${base}/api/auth/otp/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.99.0.55' },
-        body: JSON.stringify({ channel: 'phone', phone: '0911000006' }),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': '10.99.0.55',
+          'X-Device-Fp': 'device-cgnat-1',
+        },
+        body: JSON.stringify({ channel: 'phone', phone: '0911999002' }),
       });
       expect(blockedIpRes.status).toBe(429);
+      const blockedBody = (await blockedIpRes.json()) as { error: { code: string; retryAfter?: number } };
+      expect(blockedBody.error.code).toBe('otp_rate_limited');
+      expect(blockedBody.error.retryAfter).toBeGreaterThan(0);
     } finally {
       services.phoneOtp.smsDispatcher.setOverrideProvider(null);
     }

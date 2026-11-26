@@ -57,10 +57,27 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
         ? err.message
         : sanitizeClientErrorMessage(err.message, err.status);
     const safeDetails = err.status >= 500 ? undefined : err.details;
+    let retryAfter: number | undefined;
+    if (err.status === 429 && safeDetails && typeof safeDetails === 'object') {
+      const d = safeDetails as Record<string, unknown>;
+      const rawRetry =
+        typeof d.retryAfter === 'number'
+          ? d.retryAfter
+          : typeof d.retryAfterSec === 'number'
+            ? d.retryAfterSec
+            : undefined;
+      if (rawRetry !== undefined && Number.isFinite(rawRetry) && rawRetry > 0) {
+        retryAfter = Math.ceil(rawRetry);
+        if (!res.getHeader('Retry-After')) {
+          res.setHeader('Retry-After', String(retryAfter));
+        }
+      }
+    }
     res.status(err.status).json({
       error: {
         code: err.code,
         message: safeMsg,
+        ...(retryAfter !== undefined ? { retryAfter } : {}),
         ...(safeDetails !== undefined ? { details: safeDetails } : {}),
       },
     });

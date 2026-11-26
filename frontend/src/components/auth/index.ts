@@ -11,4 +11,6 @@ export {
   sendFirebasePhoneSms,
   confirmFirebaseOtpAndGetIdToken,
   clearFirebaseRecaptcha,
+  FirebasePhoneAuthError,
+  mapFirebasePhoneError,
 } from './firebasePhoneAuth';

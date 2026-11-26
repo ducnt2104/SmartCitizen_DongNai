@@ -20,6 +20,7 @@ interface TargetQuotaBucket {
  */
 export class OtpSendRateLimiter {
   private readonly buckets = new Map<string, TargetQuotaBucket>();
+  private readonly pendingFirebasePrecheck = new Map<string, number>();
 
   constructor(
     private readonly cooldownMs = OTP_COOLDOWN_MS,
@@ -28,7 +29,7 @@ export class OtpSendRateLimiter {
   ) {}
 
   /** Kiểm tra hạn mức trước khi gọi nhà mạng SMS (không ghi nhận nếu gửi thất bại). */
-  assertCanSend(target: string, now = Date.now()): void {
+  assertCanSend(target: string, now = Date.now(), opts?: { allowFirebaseFallbackBypass?: boolean }): void {
     const key = target.trim().toLowerCase();
     const bucket = this.buckets.get(key);
     if (!bucket) return;
@@ -38,26 +39,39 @@ export class OtpSendRateLimiter {
     bucket.sendTimestamps = recent;
 
     const elapsedSinceLast = now - bucket.lastSentAt;
-    if (bucket.lastSentAt > 0 && elapsedSinceLast < this.cooldownMs) {
+    const precheckAt = this.pendingFirebasePrecheck.get(key);
+    const canBypassCooldownForFallback =
+      Boolean(opts?.allowFirebaseFallbackBypass) &&
+      precheckAt !== undefined &&
+      now - precheckAt <= this.cooldownMs;
+
+    if (bucket.lastSentAt > 0 && elapsedSinceLast < this.cooldownMs && !canBypassCooldownForFallback) {
       const waitSec = Math.max(1, Math.ceil((this.cooldownMs - elapsedSinceLast) / 1000));
       throw tooMany(
         `Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`,
         'otp_cooldown',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
       );
     }
 
     if (recent.length >= this.maxPerWindow) {
       const oldestInWindow = recent[0] ?? now;
-      const waitMin = Math.max(1, Math.ceil((oldestInWindow + this.windowMs - now) / 60_000));
+      const waitSec = Math.max(1, Math.ceil((oldestInWindow + this.windowMs - now) / 1000));
+      const waitMin = Math.max(1, Math.ceil(waitSec / 60));
       throw tooMany(
         `Số điện thoại này đã nhận tối đa ${this.maxPerWindow} mã OTP trong 10 phút. Vui lòng thử lại sau khoảng ${waitMin} phút.`,
         'otp_rate_limit_10m',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
       );
     }
   }
 
   /** Ghi nhận 1 lần phát SMS thành công vào cửa sổ hạn mức của SĐT. */
-  recordSent(target: string, now = Date.now()): { remainingInWindow: number; resendInSec: number } {
+  recordSent(
+    target: string,
+    now = Date.now(),
+    opts?: { isFirebasePrecheck?: boolean },
+  ): { remainingInWindow: number; resendInSec: number } {
     const key = target.trim().toLowerCase();
     const cutoff = now - this.windowMs;
     const existing = this.buckets.get(key);
@@ -68,6 +82,11 @@ export class OtpSendRateLimiter {
       lastSentAt: now,
       sendTimestamps: recent,
     });
+    if (opts?.isFirebasePrecheck) {
+      this.pendingFirebasePrecheck.set(key, now);
+    } else {
+      this.pendingFirebasePrecheck.delete(key);
+    }
 
     return {
       remainingInWindow: Math.max(0, this.maxPerWindow - recent.length),
@@ -78,9 +97,12 @@ export class OtpSendRateLimiter {
   /** Xóa trạng thái hạn mức (phục vụ cô lập giữa các ca unit test). */
   reset(target?: string): void {
     if (target) {
-      this.buckets.delete(target.trim().toLowerCase());
+      const key = target.trim().toLowerCase();
+      this.buckets.delete(key);
+      this.pendingFirebasePrecheck.delete(key);
     } else {
       this.buckets.clear();
+      this.pendingFirebasePrecheck.clear();
     }
   }
 }

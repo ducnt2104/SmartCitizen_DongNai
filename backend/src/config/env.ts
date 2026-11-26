@@ -311,15 +311,15 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env) {
   const reportsPerHour = parseIntEnv(
     source,
     'REPORTS_PER_HOUR',
-    3,
-    { min: 1, max: 1000, hint: 'Số nguyên dương 1–1000 (mặc định: 3).' },
+    20,
+    { min: 1, max: 1000, hint: 'Số nguyên dương 1–1000 (mặc định: 20).' },
     issues,
   );
   const aiVisionPerHour = parseIntEnv(
     source,
     'AI_VISION_PER_HOUR',
-    10,
-    { min: 1, max: 1000, hint: 'Số nguyên dương 1–1000 (mặc định: 10).' },
+    30,
+    { min: 1, max: 1000, hint: 'Số nguyên dương 1–1000 (mặc định: 30).' },
     issues,
   );
   const refreshTokenDays = parseIntEnv(

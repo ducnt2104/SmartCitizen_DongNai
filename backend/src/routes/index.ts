@@ -39,7 +39,7 @@ export function buildRouter(
   root.get('/healthz', h(meta.liveness));
 
   const api = Router();
-  api.get('/security/challenge', limits.publicRead, issuePowChallengeHandler);
+  api.get('/security/challenge', limits.challenge, issuePowChallengeHandler);
   api.get('/health/ping', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ ok: true, ts: Date.now() });
@@ -62,17 +62,17 @@ export function buildRouter(
   // Xác thực thật & Quản lý phiên (Strict Single-Session + Re-auth + Rotation + SSE Live Kick)
   api.use('/auth', buildAuthRouter(s));
   api.get('/auth/otp/status', limits.publicRead, h(a.otpStatus));
-  api.post('/auth/otp/request', limits.otp, sec.requirePow, sec.botTrapCheck, validateBody(schemas.otpRequest), h(a.otpRequest));
-  api.post('/auth/otp/verify', limits.login, sec.requirePow, sec.botTrapCheck, validateBody(schemas.otpVerify), h(a.otpVerify));
-  api.post('/auth/password/login', limits.login, validateBody(schemas.passwordLogin), h(a.passwordLogin));
-  api.post('/auth/password/reset', limits.login, validateBody(schemas.passwordReset), h(a.passwordReset));
-  api.post('/auth/staff/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
-  api.post('/auth/admin/login', limits.login, validateBody(schemas.staffLogin), h(a.staffLogin));
-  api.post('/auth/rescue/login', limits.login, validateBody(schemas.rescueLogin), h(a.rescueLogin));
-  api.post('/auth/reauth', auth.required, limits.login, validateBody(schemas.reauth), h(a.reauth));
-  api.post('/auth/change-password', auth.required, limits.login, validateBody(schemas.changePassword), h(a.changePassword));
-  api.post('/auth/change-email', auth.required, limits.login, validateBody(schemas.changeEmail), h(a.changeEmail));
-  api.post('/auth/change-phone', auth.required, limits.login, validateBody(schemas.changePhone), h(a.changePhone));
+  api.post('/auth/otp/request', sec.requirePow, sec.botTrapCheck, validateBody(schemas.otpRequest), limits.otp, h(a.otpRequest));
+  api.post('/auth/otp/verify', sec.requirePow, sec.botTrapCheck, validateBody(schemas.otpVerify), limits.login, h(a.otpVerify));
+  api.post('/auth/password/login', sec.botTrapCheck, validateBody(schemas.passwordLogin), limits.login, h(a.passwordLogin));
+  api.post('/auth/password/reset', sec.botTrapCheck, validateBody(schemas.passwordReset), limits.login, h(a.passwordReset));
+  api.post('/auth/staff/login', sec.botTrapCheck, validateBody(schemas.staffLogin), limits.login, h(a.staffLogin));
+  api.post('/auth/admin/login', sec.botTrapCheck, validateBody(schemas.staffLogin), limits.login, h(a.staffLogin));
+  api.post('/auth/rescue/login', sec.botTrapCheck, validateBody(schemas.rescueLogin), limits.login, h(a.rescueLogin));
+  api.post('/auth/reauth', auth.required, validateBody(schemas.reauth), limits.login, h(a.reauth));
+  api.post('/auth/change-password', auth.required, validateBody(schemas.changePassword), limits.login, h(a.changePassword));
+  api.post('/auth/change-email', auth.required, validateBody(schemas.changeEmail), limits.login, h(a.changeEmail));
+  api.post('/auth/change-phone', auth.required, validateBody(schemas.changePhone), limits.login, h(a.changePhone));
   api.get('/auth/session-events', auth.required, h(a.sessionEvents));
   api.post('/auth/refresh', limits.login, h(a.refresh));
   api.post('/auth/logout', auth.optional, h(a.logout));
@@ -90,27 +90,27 @@ export function buildRouter(
   api.get('/reports/lookup', limits.publicRead, auth.optional, h(r.lookup));
   api.get('/reports/mine', auth.required, h(r.mine));
   api.get('/reports/:id', limits.publicRead, auth.optional, h(r.get));
-  api.post('/reports', auth.required, limits.reportBurst, parseMultipartOrJson, sec.requirePow, sec.botTrapCheck, validateBody(schemas.createReport), h(r.create));
-  api.post('/reports/:id/confirm', auth.required, limits.confirm, h(r.confirm));
-  api.post('/reports/:id/attach-photo', auth.required, limits.reportBurst, parseMultipartOrJson, validateBody(schemas.attachPhoto), h(r.attachPhoto));
+  api.post('/reports', auth.required, parseMultipartOrJson, sec.requirePow, sec.botTrapCheck, validateBody(schemas.createReport), limits.reportBurst, h(r.create));
+  api.post('/reports/:id/confirm', auth.required, sec.botTrapCheck, limits.confirm, h(r.confirm));
+  api.post('/reports/:id/attach-photo', auth.required, parseMultipartOrJson, validateBody(schemas.attachPhoto), limits.reportBurst, h(r.attachPhoto));
   api.post('/reports/:id/rate', auth.required, validateBody(schemas.rate), h(r.rate));
   api.post(
     '/alerts/community',
     auth.required,
-    limits.confirm,
     sec.requirePow,
     sec.botTrapCheck,
     validateBody(schemas.createCommunityAlert),
+    limits.confirm,
     h(al.createCommunityAlert),
   );
-  api.post('/alerts/:id/confirm', auth.required, limits.confirm, sec.requirePow, h(al.confirmAlert));
+  api.post('/alerts/:id/confirm', auth.required, sec.requirePow, sec.botTrapCheck, limits.confirm, h(al.confirmAlert));
 
   // Tác vụ xác minh hiện trường (gộp về Cán bộ xử lý OFFICER & ADMIN)
   const vol = auth.requireRole('officer', 'admin');
   api.get('/volunteer/tasks', vol, h(v.tasks));
   api.post('/volunteer/tasks/:id/accept', vol, h(v.accept));
   api.post('/volunteer/tasks/:id/verify', vol, parseMultipartOrJson, validateBody(schemas.volunteerVerify), h(v.verify));
-  api.post('/volunteer/proxy-report', vol, limits.reportBurst, parseMultipartOrJson, validateBody(schemas.createReport), h(v.proxyReport));
+  api.post('/volunteer/proxy-report', vol, parseMultipartOrJson, validateBody(schemas.createReport), limits.reportBurst, h(v.proxyReport));
   api.get('/volunteer/leaderboard', limits.publicRead, auth.optional, h(v.leaderboard));
   api.get('/volunteer/logbook', vol, h(v.logbook));
 
@@ -174,7 +174,7 @@ export function buildRouter(
   api.post('/internal/aggregator/sync', h(al.internalTriggerSync));
 
   // SmartCitizen AI Brain & Computer Vision (3-Stage Cascade + Multipart Binary WebP)
-  api.post('/ai/analyze-image', limits.vision, parseMultipartOrJson, validateBody(schemas.analyzeImage), h(ai.analyzeImage));
+  api.post('/ai/analyze-image', parseMultipartOrJson, validateBody(schemas.analyzeImage), limits.vision, h(ai.analyzeImage));
   api.post('/ai/verify-resolution', staffOrRescue, parseMultipartOrJson, validateBody(schemas.verifyResolution), h(ai.verifyResolution));
   api.post('/ai/tactical-briefing', staffOrRescue, validateBody(schemas.tacticalBriefing), h(ai.tacticalBriefing));
   api.post('/ai/chat', auth.optional, limits.chat, validateBody(schemas.chat), h(ai.chat));

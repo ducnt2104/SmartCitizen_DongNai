@@ -193,7 +193,13 @@ export function createApp(
     }
     strictJsonParser(req, res, next);
   });
-  app.use(limits.global);
+  app.use((req, res, next) => {
+    if (req.path === '/api/security/challenge' || req.path === '/api/health/ping' || req.path === '/healthz') {
+      next();
+      return;
+    }
+    limits.global(req, res, next);
+  });
   app.use(sanitizeInput);
   app.use(mongoSanitize({ replaceWith: '_' }));
 

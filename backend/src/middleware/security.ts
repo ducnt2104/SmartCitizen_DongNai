@@ -8,16 +8,16 @@ import { forbidden, tooMany } from '../utils/errors';
 import { extractClientMeta } from './auth';
 import { isStrictSecurityActive } from './rateLimit';
 
-export const POW_CHALLENGE_TTL_MS = 2 * 60 * 1000; // Hết hạn sau 2 phút
-export const POW_DIFFICULTY_BITS = 13; // ~8.192 lần thử SHA-256 (~100-250ms trên trình duyệt)
-export const MIN_FORM_FILL_MS = 1500; // Submit nhanh hơn 1.5s -> nghi bot
+export const POW_CHALLENGE_TTL_MS = 10 * 60 * 1000; // Hết hạn sau 10 phút (thân thiện mạng 4G chập chờn)
+export const POW_DIFFICULTY_BITS = 8; // ~256 lần thử SHA-256 (< 5ms trên cả điện thoại yếu)
+export const MIN_FORM_FILL_MS = 500; // Submit nhanh bất thường dưới 0.5s -> nghi bot
 
 const HONEYPOT_FIELD_NAMES = ['website', 'hp_field', 'hp_email', 'companyUrl', '_hp'] as const;
 
-/** Lưu các challengeId đã sử dụng trong 2.5 phút để chống Replay Attack 100% */
+/** Lưu các challengeId đã sử dụng trong 11 phút để chống Replay Attack */
 const consumedPowChallenges = new LRUCache<string, true>({
   max: 50_000,
-  ttl: POW_CHALLENGE_TTL_MS + 30_000,
+  ttl: POW_CHALLENGE_TTL_MS + 60_000,
 });
 
 export interface PowChallengePayload {
@@ -33,9 +33,8 @@ function signPowChallenge(
   nonce: string,
   expiresAt: number,
   difficultyBits: number,
-  ip: string,
 ): string {
-  return hmacSha256(env.jwtSecret, `pow:${challengeId}:${nonce}:${expiresAt}:${difficultyBits}:${ip}`);
+  return hmacSha256(env.jwtSecret, `pow:${challengeId}:${nonce}:${expiresAt}:${difficultyBits}`);
 }
 
 export function hasLeadingZeroBits(digest: Buffer, bits: number): boolean {
@@ -63,15 +62,14 @@ export function solvePowChallenge(challenge: PowChallengePayload): string {
 }
 
 /**
- * `GET /api/security/challenge`: Cấp thử thách Proof-of-Work nhẹ (hết hạn sau 2 phút, ký HMAC).
+ * `GET /api/security/challenge`: Cấp thử thách Proof-of-Work cực nhẹ (hết hạn sau 10 phút, ký HMAC độc lập IP).
  */
-export function issuePowChallengeHandler(req: Request, res: Response): void {
-  const meta = extractClientMeta(req);
+export function issuePowChallengeHandler(_req: Request, res: Response): void {
   const challengeId = newId('pow');
   const nonce = crypto.randomBytes(16).toString('hex');
   const expiresAt = Date.now() + POW_CHALLENGE_TTL_MS;
   const difficultyBits = POW_DIFFICULTY_BITS;
-  const signature = signPowChallenge(challengeId, nonce, expiresAt, difficultyBits, meta.ip);
+  const signature = signPowChallenge(challengeId, nonce, expiresAt, difficultyBits);
 
   res.setHeader('Cache-Control', 'no-store');
   res.json({
@@ -85,7 +83,7 @@ export function issuePowChallengeHandler(req: Request, res: Response): void {
 
 export function verifyPowHeaderValue(
   rawHeader: string,
-  clientIp: string,
+  _clientIp?: string,
 ): { ok: true; challengeId: string } | { ok: false; code: string; message: string } {
   const parts = rawHeader.trim().split('.');
   if (parts.length !== 6) {
@@ -109,12 +107,12 @@ export function verifyPowHeaderValue(
   }
 
   if (Date.now() > expiresAt) {
-    return { ok: false, code: 'pow_expired', message: 'Thử thách bảo mật đã hết hạn (quá 2 phút), vui lòng thử lại.' };
+    return { ok: false, code: 'pow_expired', message: 'Phiên xác thực đã hết hạn (quá 10 phút), hệ thống đang tự làm mới.' };
   }
 
-  const expectedSig = signPowChallenge(challengeId, nonce, expiresAt, difficultyBits, clientIp);
+  const expectedSig = signPowChallenge(challengeId, nonce, expiresAt, difficultyBits);
   if (!safeEqualHex(signature.toLowerCase(), expectedSig)) {
-    return { ok: false, code: 'pow_invalid_signature', message: 'Chữ ký thử thách bảo mật không hợp lệ.' };
+    return { ok: false, code: 'pow_invalid_signature', message: 'Chữ ký thử thách bảo mật không hợp lệ, vui lòng thử lại.' };
   }
 
   if (consumedPowChallenges.has(challengeId)) {
@@ -207,10 +205,15 @@ export function securityMiddleware(s: Services) {
       const loadedAt = Number(rawLoadedAt);
       const elapsedMs = Date.now() - loadedAt;
       if (!Number.isFinite(loadedAt) || elapsedMs < MIN_FORM_FILL_MS || loadedAt > Date.now() + 60_000) {
-        logSuspectedBot(req, 'bot.timing_trap_triggered', 'Submit quá nhanh dưới 1.5s hoặc sai mốc thời gian', {
+        logSuspectedBot(req, 'bot.timing_trap_triggered', 'Submit quá nhanh dưới 0.5s hoặc sai mốc thời gian', {
           elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : null,
         });
-        next(tooMany('Thao tác gửi quá nhanh. Vui lòng kiểm tra lại thông tin và thử lại sau giây lát.', 'bot_too_fast'));
+        next(
+          tooMany('Thao tác gửi quá nhanh. Vui lòng kiểm tra lại thông tin và thử lại sau giây lát.', 'bot_too_fast', {
+            retryAfter: 2,
+            retryAfterSec: 2,
+          }),
+        );
         return;
       }
     } else if (strict && req.headers['x-require-timing'] === '1') {

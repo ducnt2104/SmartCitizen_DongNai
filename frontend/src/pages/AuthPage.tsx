@@ -15,7 +15,12 @@ type Tab = 'A' | 'B';
 
 function errText(e: unknown, t: ReturnType<typeof useI18n>['t']): string {
   if (e instanceof NetworkError) return t('auth.offlineErr');
-  if (e instanceof ApiError) return e.message;
+  if (e instanceof ApiError) {
+    if (e.status === 429 && e.retryAfter && !/\d+\s*(giây|phút|s\b)/i.test(e.message)) {
+      return `${e.message} (Thử lại sau ${e.retryAfter} giây)`;
+    }
+    return e.message;
+  }
   return t('state.genericError');
 }
 
@@ -67,6 +72,7 @@ export default function AuthPage() {
   };
 
   const internalLogin = async (): Promise<void> => {
+    if (busy) return;
     setBusy(true);
     setErr(null);
     try {

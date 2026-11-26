@@ -676,7 +676,7 @@ export default function ReportPage() {
   }, [submitted]);
 
   const submit = async (): Promise<void> => {
-    if (!photo || !pin || !category) return;
+    if (submitting || !photo || !pin || !category) return;
     if (!session && online) {
       if (!(await requireAuth())) return;
     }

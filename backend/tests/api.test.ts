@@ -199,7 +199,7 @@ describe('Bảo mật & RBAC 2 cấp', () => {
 });
 
 describe('AI Triage & chống spam', () => {
-  it('trùng ảnh dHash ≤ 5 → Cách ly; đa góc >12 + khác SĐT ≤50m → gộp Hồ sơ Mẹ; rate limit 3/giờ', async () => {
+  it('trùng ảnh dHash ≤ 5 → Cách ly; đa góc >12 + khác SĐT ≤50m → gộp Hồ sơ Mẹ; rate limit 20/giờ', async () => {
     const a = await login('0955555551');
     const b = await login('0955555552');
     const c = await login('0955555553');
@@ -244,22 +244,45 @@ describe('AI Triage & chống spam', () => {
     expect(r1.status).toBe(201);
     expect(r2.data.outcome).toBe('duplicate_submit');
 
-    // C mới có 1 đơn được lưu (dup bị Gatekeeper chặn 422 từ đầu) -> đơn 2 & 3 OK, đơn 4 bị chặn 429 (3/giờ)
-    const third = await call<any>('/api/reports', {
+    // C mới có 1 đơn được lưu (dup bị Gatekeeper chặn 422 từ đầu) -> 19 đơn tiếp theo OK (tổng 20/giờ), đơn thứ 21 bị 429
+    const extraHashes = [
+      '0000000000000000',
+      '1111111111111111',
+      '2222222222222222',
+      '3333333333333333',
+      '4444444444444444',
+      '6666666666666666',
+      '7777777777777777',
+      '8888888888888888',
+      '9696969696969696',
+      'bbbbbbbbbbbbbbbb',
+      'cccccccccccccccc',
+      'dddddddddddddddd',
+      'eeeeeeeeeeeeeeee',
+      'ffffffffffffffff',
+      '0f0f0f0f0f0f0f0f',
+      'f0f0f0f0f0f0f0f0',
+      '6969696969696969',
+      'c3c3c3c3c3c3c3c3',
+      '5a5a5a5a5a5a5a5a',
+    ];
+    for (let i = 0; i < extraHashes.length; i++) {
+      const ok = await call<any>('/api/reports', {
+        token: c,
+        body: report({
+          lat: 10.96 + i * 0.002,
+          lng: 106.86 + i * 0.002,
+          photo: { dataUrl: TINY_JPEG, dHash: extraHashes[i] },
+        }),
+      });
+      expect(ok.status).toBe(201);
+    }
+    const overflow = await call<any>('/api/reports', {
       token: c,
-      body: report({ lat: 10.96, lng: 106.86, photo: { dataUrl: TINY_JPEG, dHash: '3434343434343434' } }),
+      body: report({ lat: 11.01, lng: 106.91, photo: { dataUrl: TINY_JPEG, dHash: 'a5a5a5a5a5a5a5a5' } }),
     });
-    expect(third.status).toBe(201);
-    const fourth = await call<any>('/api/reports', {
-      token: c,
-      body: report({ lat: 10.965, lng: 106.865, photo: { dataUrl: TINY_JPEG, dHash: '5656565656565656' } }),
-    });
-    expect(fourth.status).toBe(201);
-    const fifth = await call<any>('/api/reports', {
-      token: c,
-      body: report({ lat: 10.97, lng: 106.87, photo: { dataUrl: TINY_JPEG, dHash: '7878787878787878' } }),
-    });
-    expect(fifth.status).toBe(429);
+    expect(overflow.status).toBe(429);
+    expect(overflow.data.error.retryAfter).toBeGreaterThan(0);
   });
 
   it('cùng xác nhận: mỗi tài khoản chỉ 1 lần, không tự xác nhận đơn của mình', async () => {

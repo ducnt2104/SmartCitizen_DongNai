@@ -67,7 +67,16 @@ export function createServices(repos: Repositories): Services {
   const phoneOtp = new PhoneOtpService({ otpRepo: repos.otps });
   const firebaseVerifier = new FirebasePhoneVerifier();
   const geo = new GeoService();
-  const auth = new AuthService(repos.users, repos.otps, repos.sessions, otpDelivery, trust, audit, phoneOtp);
+  const auth = new AuthService(
+    repos.users,
+    repos.otps,
+    repos.sessions,
+    otpDelivery,
+    trust,
+    audit,
+    phoneOtp,
+    firebaseVerifier,
+  );
   const alerts = new AlertsAndWardsService(repos, dataDir);
   const aggregator = new DataAggregatorService(repos, gemini, alerts, dataDir);
   const staff = new StaffService(

@@ -149,8 +149,9 @@ export async function processOutbox(): Promise<void> {
         } else if (err instanceof ApiError && err.status === 401) {
           await db.outboxQueue.update(item.id, { state: 'waiting_auth', lastError: err.message });
         } else if (err instanceof ApiError && err.status === 429) {
-          await db.outboxQueue.update(item.id, { state: 'pending', attempts, nextAttemptAt: Date.now() + 600_000, lastError: err.message });
-          emit({ type: 'item_failed', item, message: err.message });
+          const waitSec = Math.min(60, Math.max(5, err.retryAfter ?? 15));
+          await db.outboxQueue.update(item.id, { state: 'pending', attempts, nextAttemptAt: Date.now() + waitSec * 1000, lastError: err.message });
+          emit({ type: 'item_failed', item, message: `${err.message} (Tự thử lại sau ${waitSec}s)` });
         } else {
           const message = err instanceof Error ? err.message : String(err);
           // Rollback Optimistic UI nếu lượt "Cùng xác nhận (+1)" bị máy chủ từ chối (4xx)

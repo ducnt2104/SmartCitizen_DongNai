@@ -56,6 +56,7 @@ export function ReportDetail({
   const [stars, setStars] = useState(0);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!id) return null;
@@ -75,9 +76,17 @@ export function ReportDetail({
   const ward = WARD_BY_CODE[r.wardCode];
 
   const doConfirm = async (): Promise<void> => {
+    if (confirmBusy) return;
     if (!(await requireAuth())) return;
-    await confirmReport(r);
-    toast('success', t('detail.confirmed'), t('detail.confirmedText'));
+    setConfirmBusy(true);
+    try {
+      await confirmReport(r);
+      toast('success', t('detail.confirmed'), t('detail.confirmedText'));
+    } catch (err) {
+      toast('error', 'Không thể xác nhận phản ánh', err instanceof Error ? err.message : undefined);
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
   const doAttach = async (file: File | undefined): Promise<void> => {
@@ -276,8 +285,13 @@ export function ReportDetail({
         {open && (
           <div className="grid gap-2 sm:grid-cols-2">
             {canConfirm && (
-              <button type="button" className="btn btn-primary" onClick={() => void doConfirm()}>
-                <ThumbsUp className="h-5 w-5" aria-hidden /> {t('detail.confirm')} ({r.confirmCount})
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={confirmBusy}
+                onClick={() => void doConfirm()}
+              >
+                {confirmBusy ? <Spinner /> : <ThumbsUp className="h-5 w-5" aria-hidden />} {t('detail.confirm')} ({r.confirmCount})
               </button>
             )}
             {!canConfirm && !r.mine && already && <p className="rounded-xl bg-ok-soft p-3 text-center text-sm font-semibold text-ok">{t('detail.alreadyConfirmed')}</p>}

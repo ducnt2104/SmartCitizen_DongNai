@@ -69,11 +69,14 @@ export const schemas = {
     identifier,
     password: z.string().min(1).max(128),
   }),
-  passwordReset: z.object({
-    identifier,
-    code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
-    newPassword: z.string().min(8).max(128),
-  }),
+  passwordReset: z
+    .object({
+      identifier,
+      code: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số').optional(),
+      firebaseIdToken: z.string().min(20).max(8192).optional(),
+      newPassword: z.string().min(8).max(128),
+    })
+    .refine((d) => Boolean(d.code || d.firebaseIdToken), 'Vui lòng cung cấp mã OTP 6 số hoặc xác thực Firebase.'),
   reauth: z.object({
     currentPassword: z.string().min(1).max(128).optional(),
     otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số').optional(),
@@ -88,11 +91,14 @@ export const schemas = {
     otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
     currentPassword: z.string().min(1).max(128).optional(),
   }),
-  changePhone: z.object({
-    newPhone: z.string().min(8).max(24),
-    otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số'),
-    currentPassword: z.string().min(1).max(128).optional(),
-  }),
+  changePhone: z
+    .object({
+      newPhone: z.string().min(8).max(24),
+      otpCode: z.string().regex(/^\d{6}$/, 'Mã OTP gồm đúng 6 chữ số').optional(),
+      firebaseIdToken: z.string().min(20).max(8192).optional(),
+      currentPassword: z.string().min(1).max(128).optional(),
+    })
+    .refine((d) => Boolean(d.otpCode || d.firebaseIdToken), 'Vui lòng cung cấp mã OTP 6 số hoặc xác thực Firebase.'),
   staffLogin: z
     .object({
       staffCode: z.string().min(2).max(120).regex(/^[A-Za-z0-9@._+-]+$/).optional(),

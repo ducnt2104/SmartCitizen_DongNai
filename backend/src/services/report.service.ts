@@ -405,7 +405,10 @@ export class ReportService {
     const limit = isProxy ? Math.max(env.reportsPerHour, 10) : env.reportsPerHour;
     const recentCount = await this.repos.reports.countByReporterSince(user.id, new Date(Date.now() - HOUR).toISOString());
     if (recentCount >= limit) {
-      throw tooMany(`Bạn đã gửi tối đa ${limit} phản ánh trong 1 giờ. Vui lòng thử lại sau.`, 'report_rate_limited');
+      throw tooMany(`Bạn đã gửi tối đa ${limit} phản ánh trong 1 giờ. Vui lòng thử lại sau.`, 'report_rate_limited', {
+        retryAfter: 60,
+        retryAfterSec: 60,
+      });
     }
 
     const normPin = normalizeCoordinates({ lat: input.lat, lng: input.lng });

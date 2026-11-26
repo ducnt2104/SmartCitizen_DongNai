@@ -81,7 +81,9 @@ export function authController(s: Services) {
     },
     passwordReset: async (req: Request, res: Response) => {
       const b = body(req, 'passwordReset');
-      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, extractClientMeta(req));
+      const issued = await s.auth.resetPassword(b.identifier, b.code, b.newPassword, extractClientMeta(req), {
+        firebaseIdToken: b.firebaseIdToken,
+      });
       setAuthCookies(res, issued.session.token, issued.refreshToken, issued.refreshMaxAgeMs);
       res.json(issued.session);
     },
