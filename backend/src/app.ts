@@ -135,6 +135,7 @@ export function createApp(
             'https://tiles.openfreemap.org',
             'https://*.openfreemap.org',
             'https://router.project-osrm.org',
+            'https://api.weatherapi.com',
             'https://api.open-meteo.com',
             'https://geocoding-api.open-meteo.com',
           ],
@@ -167,6 +168,7 @@ export function createApp(
             'X-Reauth-Token',
             'X-Reauth-Password',
             'X-Gemini-Api-Key',
+            'X-Weather-Api-Key',
           ],
         });
         return;

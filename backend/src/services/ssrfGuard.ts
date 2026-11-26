@@ -6,6 +6,7 @@ import net from 'node:net';
  * (Chống tuyệt đối SSRF: không cho phép user truyền URL tùy ý hay truy cập host ngoài whitelist).
  */
 export const ALLOWED_OFFICIAL_DOMAINS: readonly string[] = [
+  'api.weatherapi.com',
   'api.open-meteo.com',
   'baodongnai.com.vn',
   'www.baodongnai.com.vn',

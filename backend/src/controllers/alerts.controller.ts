@@ -111,7 +111,12 @@ export function alertsController(s: Services) {
       if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
         throw badRequest('Tọa độ lat/lng không hợp lệ.');
       }
-      const key = `weather:fc:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+      const headerWeatherKey =
+        typeof req.headers['x-weather-api-key'] === 'string' ? req.headers['x-weather-api-key'].trim() : '';
+      const weatherApiKey = (process.env.WEATHERAPI_KEY?.trim() || headerWeatherKey).trim();
+      const lang = req.query.lang === 'en' ? 'en' : 'vi';
+      const key = `weather:fc:${weatherApiKey ? 'wapi' : 'om'}:${lang}:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+
       await sendAlertCached(
         req,
         res,
@@ -119,13 +124,30 @@ export function alertsController(s: Services) {
         300_000,
         'public, max-age=180, stale-while-revalidate=300',
         async () => {
-          const url =
+          const openMeteoUrl =
             `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
             '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m' +
             '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
             '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max' +
             '&timezone=auto&forecast_days=7';
-          const upstream = await safeFetchOfficial(url, { timeoutMs: 8000 });
+
+          if (weatherApiKey) {
+            const wapiUrl =
+              `https://api.weatherapi.com/v1/forecast.json?key=${encodeURIComponent(weatherApiKey)}` +
+              `&q=${lat.toFixed(5)},${lng.toFixed(5)}&days=7&aqi=yes&alerts=yes&lang=${lang}`;
+            const [wapiRes, omRes] = await Promise.allSettled([
+              safeFetchOfficial(wapiUrl, { timeoutMs: 8000 }),
+              safeFetchOfficial(openMeteoUrl, { timeoutMs: 8000 }),
+            ]);
+            if (wapiRes.status === 'fulfilled' && wapiRes.value.ok) {
+              const weatherApi = await wapiRes.value.json();
+              const openMeteo =
+                omRes.status === 'fulfilled' && omRes.value.ok ? await omRes.value.json().catch(() => null) : null;
+              return { provider: 'weatherapi', weatherApi, openMeteo };
+            }
+          }
+
+          const upstream = await safeFetchOfficial(openMeteoUrl, { timeoutMs: 8000 });
           if (!upstream.ok) {
             throw badRequest(`Open-Meteo trả về HTTP ${upstream.status}`);
           }
