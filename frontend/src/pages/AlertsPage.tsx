@@ -43,7 +43,6 @@ import type {
   DailyDigestItem,
   OfficialBulletinItem,
   RouteCheckResponse,
-  WeatherSnapshotItem,
 } from '@shared/types';
 import { DONG_NAI_WARDS, QUICK_JUMP_REGIONS, WARD_BY_CODE } from '../data/dongNaiWards';
 import { useI18n } from '../i18n';
@@ -56,6 +55,7 @@ import {
   fetchDongNaiWeather,
   searchOpenMeteoLocations,
   type DongNaiWeather,
+  type RegionalStationWeather,
   type WeatherKind,
 } from '../lib/weather';
 import { useAuthGate } from '../state/authGate';
@@ -389,8 +389,10 @@ export default function AlertsPage() {
   const isStaffOrRescue = role === 'admin' || role === 'officer' || role === 'rescue';
   const isAdmin = role === 'admin';
 
-  const [weather, setWeather] = useState<WeatherSnapshotItem[]>([]);
+  const [weather, setWeather] = useState<RegionalStationWeather[]>([]);
   const [weatherSyncAt, setWeatherSyncAt] = useState<string | null>(null);
+  const [stationsError, setStationsError] = useState<string | null>(null);
+  const [stationsLoading, setStationsLoading] = useState(true);
   const [alerts, setAlerts] = useState<CivicAlertItem[]>([]);
   const [bulletins, setBulletins] = useState<OfficialBulletinItem[]>([]);
   const [digest, setDigest] = useState<DailyDigestItem | null>(null);
@@ -436,13 +438,30 @@ export default function AlertsPage() {
   const commLoadedAtRef = useRef(Date.now());
   const [savingComm, setSavingComm] = useState(false);
 
+  const loadRegionalStations = useCallback(async () => {
+    setStationsLoading(true);
+    setStationsError(null);
+    try {
+      const res = await fetchDongNaiRegionalStations(lang);
+      setWeather(res.items);
+      setWeatherSyncAt(res.lastSyncAt);
+    } catch (err) {
+      setWeather([]);
+      setStationsError(err instanceof Error ? err.message : 'Chưa có dữ liệu trạm đo khu vực.');
+    } finally {
+      setStationsLoading(false);
+    }
+  }, [lang]);
+
   const loadAll = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setFeedError(null);
+    setStationsLoading(true);
+    setStationsError(null);
     let active = true;
     try {
       const [wRes, aRes, bRes, dRes] = await Promise.allSettled([
-        fetchDongNaiRegionalStations(lang).catch(() => api<{ items: WeatherSnapshotItem[]; lastSyncAt: string | null }>('/api/weather')),
+        fetchDongNaiRegionalStations(lang),
         fastFetch<{ items: CivicAlertItem[] }>(
           '/api/alerts?status=active&limit=100',
           () => api('/api/alerts?status=active&limit=100'),
@@ -480,6 +499,10 @@ export default function AlertsPage() {
       if (wRes.status === 'fulfilled') {
         setWeather(wRes.value.items);
         setWeatherSyncAt(wRes.value.lastSyncAt);
+        setStationsError(null);
+      } else {
+        setWeather([]);
+        setStationsError(wRes.reason instanceof Error ? wRes.reason.message : 'Chưa có dữ liệu trạm đo khu vực.');
       }
       if (aRes.status === 'fulfilled') {
         setAlerts(aRes.value.items);
@@ -495,6 +518,7 @@ export default function AlertsPage() {
       }
     } finally {
       setLoading(false);
+      setStationsLoading(false);
     }
     return () => {
       active = false;
@@ -505,9 +529,10 @@ export default function AlertsPage() {
     void loadAll();
     const timer = window.setInterval(() => {
       void loadAll(true);
+      void loadForecast();
     }, 15 * 60_000);
     return () => window.clearInterval(timer);
-  }, [loadAll]);
+  }, [loadAll, loadForecast]);
 
   const filteredAlerts = useMemo(() => {
     return alerts
@@ -794,9 +819,9 @@ export default function AlertsPage() {
             : (Math.round(forecast.uvIndex * 10) / 10).toFixed(1).replace(/\.0$/, '');
         const floodRisk = !forecast
           ? 'Đang kiểm tra'
-          : forecast.rainNext3hMm > 20 || forecast.rainNow > 10
+          : forecast.rainNext3hMm > 20 || (forecast.rainNow ?? 0) > 10
             ? 'Cao – Đề phòng ngập'
-            : forecast.rainNext3hMm >= 5 || forecast.rainNow >= 2
+            : forecast.rainNext3hMm >= 5 || (forecast.rainNow ?? 0) >= 2
               ? 'Trung bình – Lưu ý'
               : 'Thấp';
 
@@ -1019,7 +1044,9 @@ export default function AlertsPage() {
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
                         </p>
-                        <p className="mono mt-1 text-lg font-extrabold text-white">{forecast.humidity}%</p>
+                        <p className="mono mt-1 text-lg font-extrabold text-white">
+                          {forecast.humidity != null ? `${forecast.humidity}%` : '--'}
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
@@ -1032,13 +1059,16 @@ export default function AlertsPage() {
                               <span className="text-xs font-semibold text-white/85">({forecast.rainSumTodayMm}mm)</span>
                             </p>
                             <p className="mt-0.5 text-[11px] font-medium text-white/80">
-                              Hiện tại: 0% · 3h tới: {forecast.rainProbNext3h}%
+                              Hiện tại: {forecast.rainNow === 0 ? 'Không mưa (0 mm/h)' : forecast.rainNow != null ? `${forecast.rainNow} mm/h` : '--'}
                             </p>
                           </>
                         ) : (
                           <>
                             <p className="mono mt-1 text-lg font-extrabold text-white">
-                              {forecast.rainProbNow}% <span className="text-xs font-semibold text-white/85">({forecast.rainNow}mm)</span>
+                              {forecast.rainProbNow}%{' '}
+                              <span className="text-xs font-semibold text-white/85">
+                                ({forecast.rainNow === 0 ? 'Không mưa (0 mm)' : forecast.rainNow != null ? `${forecast.rainNow}mm` : '--'})
+                              </span>
                             </p>
                             {forecast.rainProbMaxToday > forecast.rainProbNow && (
                               <p className="mt-0.5 text-[11px] font-medium text-white/80">
@@ -1053,7 +1083,10 @@ export default function AlertsPage() {
                           <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Gió & Giật
                         </p>
                         <p className="mono mt-1 text-base font-extrabold text-white sm:text-lg">
-                          {forecast.windSpeed} <span className="text-xs font-semibold text-white/85">/ {forecast.windGusts} km/h</span>
+                          {forecast.windSpeed != null ? forecast.windSpeed : '--'}{' '}
+                          <span className="text-xs font-semibold text-white/85">
+                            / {forecast.windGusts != null ? `${forecast.windGusts} km/h` : '--'}
+                          </span>
                         </p>
                       </div>
                       <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
@@ -1072,7 +1105,8 @@ export default function AlertsPage() {
                           <Gauge className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Áp suất & Mây
                         </p>
                         <p className="mono mt-1 text-sm font-extrabold text-white sm:text-base">
-                          {forecast.pressureHpa} hPa · {forecast.cloudCover}%
+                          {forecast.pressureHpa != null ? `${forecast.pressureHpa} hPa` : '--'} ·{' '}
+                          {forecast.cloudCover != null ? `${forecast.cloudCover}%` : '--'}
                         </p>
                       </div>
                       <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
@@ -1154,84 +1188,119 @@ export default function AlertsPage() {
             )}
 
             {/* Thanh Thời tiết các khu vực trọng điểm Đồng Nai */}
-            {weather.length > 0 && (
+            {(weather.length > 0 || stationsError || stationsLoading) && (
               <section aria-label="Thời tiết và lượng mưa các khu vực Đồng Nai" className="card min-w-0 w-full overflow-hidden p-3.5">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-brand">
                     <CloudRain className="h-4 w-4 shrink-0" aria-hidden />
                     <span>Trạm đo Khí tượng các khu vực Đồng Nai</span>
                   </div>
-                  <span className="text-[11px] text-muted">
-                    {weatherSyncAt ? `Đồng bộ lúc: ${fmtDate(weatherSyncAt, true)}` : ''}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+                    <span>
+                      {weatherSyncAt ? `Đồng bộ lúc: ${formatPubDateTime(weatherSyncAt)} · Open-Meteo` : 'Open-Meteo'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void loadRegionalStations()}
+                      disabled={stationsLoading}
+                      className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-2 px-2 py-0.5 text-[11px] font-semibold text-ink hover:border-brand/40"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${stationsLoading ? 'animate-spin' : ''}`} aria-hidden />
+                      Làm mới
+                    </button>
+                  </div>
                 </div>
-                <div className="no-scrollbar -mx-3.5 flex flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain px-4 pb-1">
-                  {weather.map((w) => {
-                    const targetWard = WARD_BY_CODE[w.wardCode];
-                    const isSelected =
-                      !weatherLoc.isGps &&
-                      Math.abs(weatherLoc.lat - w.lat) < 0.005 &&
-                      Math.abs(weatherLoc.lng - w.lng) < 0.005;
-                    const displayTemp = isSelected && forecast ? Math.round(forecast.temp) : Math.round(w.temperatureC);
-                    const displayCondition =
-                      isSelected && forecast
-                        ? lang === 'vi'
-                          ? forecast.conditionVi
-                          : forecast.conditionEn
-                        : w.weatherLabel;
-                    const selectStation = (scrollToTop: boolean) => {
-                      setWeatherQuery('');
-                      setWeatherLoc({
-                        label: targetWard ? `${w.regionName} (${targetWard.shortName})` : w.regionName,
-                        lat: w.lat,
-                        lng: w.lng,
-                        wardCode: w.wardCode,
-                      });
-                      if (scrollToTop) {
-                        weatherTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }
-                    };
-                    return (
-                      <div
-                        key={w.regionKey}
-                        className={`min-w-[12rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors ${
-                          isSelected
-                            ? 'border-brand bg-brand-soft/60 ring-1 ring-brand/25'
-                            : w.isHazard
-                              ? 'border-rose-500/40 bg-rose-500/10'
-                              : 'border-line bg-surface-2/75 hover:border-brand/40'
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => selectStation(false)}
-                          className="w-full text-left"
+                {stationsError && weather.length === 0 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface-2/60 p-3 text-xs text-muted">
+                    <span>Chưa có dữ liệu trạm đo khu vực ({stationsError}).</span>
+                    <button
+                      type="button"
+                      onClick={() => void loadRegionalStations()}
+                      className="btn btn-soft !min-h-8 !px-3 !text-xs"
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                ) : (
+                  <div className="no-scrollbar -mx-3.5 flex flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain px-4 pb-1">
+                    {weather.map((w) => {
+                      const targetWard = WARD_BY_CODE[w.wardCode];
+                      const isSelected =
+                        !weatherLoc.isGps &&
+                        Math.abs(weatherLoc.lat - w.lat) < 0.005 &&
+                        Math.abs(weatherLoc.lng - w.lng) < 0.005;
+                      const displayTemp =
+                        isSelected && forecast ? Math.round(forecast.temp) : w.temperatureC;
+                      const displayCondition =
+                        isSelected && forecast
+                          ? lang === 'vi'
+                            ? forecast.conditionVi
+                            : forecast.conditionEn
+                          : w.weatherLabel;
+                      const selectStation = (scrollToTop: boolean) => {
+                        setWeatherQuery('');
+                        setWeatherLoc({
+                          label: targetWard ? `${w.regionName} (${targetWard.shortName})` : w.regionName,
+                          lat: w.lat,
+                          lng: w.lng,
+                          wardCode: w.wardCode,
+                        });
+                        if (scrollToTop) {
+                          weatherTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      };
+                      return (
+                        <div
+                          key={w.regionKey}
+                          className={`min-w-[12.5rem] shrink-0 rounded-2xl border p-2.5 text-left transition-colors ${
+                            isSelected
+                              ? 'border-brand bg-brand-soft/60 ring-1 ring-brand/25'
+                              : w.isHazard
+                                ? 'border-rose-500/40 bg-rose-500/10'
+                                : 'border-line bg-surface-2/75 hover:border-brand/40'
+                          }`}
                         >
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
-                            <span className="mono text-xs font-extrabold text-brand">{displayTemp}°C</span>
-                          </div>
-                          <p className="mt-1 text-[11px] font-semibold text-muted">{displayCondition}</p>
-                          <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                            <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
-                              Mưa: {w.precipitationMm}mm/h
-                            </span>
-                            <span className="inline-flex items-center gap-0.5 text-muted">
-                              <Wind className="h-3 w-3" aria-hidden /> {w.windGustsKmh}km/h
-                            </span>
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => selectStation(true)}
-                          className="mt-2 text-[10.5px] font-bold text-brand hover:underline"
-                        >
-                          Xem hồ sơ khu vực →
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
+                          <button
+                            type="button"
+                            onClick={() => selectStation(false)}
+                            className="w-full text-left"
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
+                              <span className="mono text-xs font-extrabold text-brand">
+                                {displayTemp != null ? `${displayTemp}°C` : '--'}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[11px] font-semibold text-muted">{displayCondition}</p>
+                            <p className="mt-1 text-[11px] font-medium text-ink">
+                              {w.precipitationMm === 0
+                                ? 'Không mưa (0 mm/h)'
+                                : w.precipitationMm != null
+                                  ? `Mưa: ${w.precipitationMm} mm/h`
+                                  : 'Mưa: --'}
+                            </p>
+                            <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
+                              <span>
+                                Ẩm: <strong className="text-ink">{w.humidityPct != null ? `${w.humidityPct}%` : '--'}</strong>
+                              </span>
+                              <span className="inline-flex items-center gap-0.5">
+                                <Wind className="h-3 w-3" aria-hidden />{' '}
+                                {w.windGustsKmh != null ? `${w.windGustsKmh}km/h` : '--'}
+                              </span>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => selectStation(true)}
+                            className="mt-2 text-[10.5px] font-bold text-brand hover:underline"
+                          >
+                            Xem hồ sơ khu vực →
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
             )}
           </div>

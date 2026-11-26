@@ -1,5 +1,4 @@
 ﻿import { inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
-import type { WeatherSnapshotItem } from '@shared/types';
 import { apiUrl } from './api';
 import type { PlaceSuggestion } from './geoClient';
 
@@ -28,6 +27,24 @@ export interface DailyPoint {
   summaryEn: string;
 }
 
+export interface RegionalStationWeather {
+  id: string;
+  regionKey: string;
+  regionName: string;
+  wardCode: string;
+  lat: number;
+  lng: number;
+  temperatureC: number | null;
+  humidityPct: number | null;
+  precipitationMm: number | null;
+  windGustsKmh: number | null;
+  weatherCode: number | null;
+  weatherLabel: string;
+  isHazard: boolean;
+  source: string;
+  observedAt: string;
+}
+
 export interface DongNaiWeather {
   source: 'live';
   providerLabel: string;
@@ -38,17 +55,17 @@ export interface DongNaiWeather {
   lng: number;
   temp: number;
   feelsLike: number;
-  humidity: number;
-  windSpeed: number;
-  windGusts: number;
-  pressureHpa: number;
-  rainNow: number;
+  humidity: number | null;
+  windSpeed: number | null;
+  windGusts: number | null;
+  pressureHpa: number | null;
+  rainNow: number | null;
   rainProbNow: number;
   rainProbNext3h: number;
   rainProbMaxToday: number;
   rainNext3hMm: number;
   rainSumTodayMm: number;
-  cloudCover: number;
+  cloudCover: number | null;
   uvIndex: number | null;
   uvMaxToday: number | null;
   isDay: boolean;
@@ -454,7 +471,8 @@ const DONG_NAI_REGIONAL_STATIONS: ReadonlyArray<{
   { regionKey: 'bien-hoa', regionName: 'Biên Hòa / Trấn Biên', lat: 10.9574, lng: 106.8427, fallbackWardCode: 'DN-TB' },
   { regionKey: 'long-thanh', regionName: 'Long Thành', lat: 10.7850, lng: 106.9530, fallbackWardCode: 'DN-LT' },
   { regionKey: 'nhon-trach', regionName: 'Nhơn Trạch', lat: 10.6766, lng: 106.8906, fallbackWardCode: 'DN-NT' },
-  { regionKey: 'trang-bom', regionName: 'Trảng Bom', lat: 10.9542, lng: 107.0053, fallbackWardCode: 'DN-TB2' },
+  { regionKey: 'trang-bom', regionName: 'Trảng Bom', lat: 10.9542, lng: 107.0053, fallbackWardCode: 'DN-TBM' },
+  { regionKey: 'thong-nhat', regionName: 'Thống Nhất', lat: 10.9310, lng: 107.1450, fallbackWardCode: 'DN-TN' },
   { regionKey: 'long-khanh', regionName: 'Long Khánh', lat: 10.9355, lng: 107.2435, fallbackWardCode: 'DN-LK' },
   { regionKey: 'xuan-loc', regionName: 'Xuân Lộc', lat: 10.9317, lng: 107.4036, fallbackWardCode: 'DN-XL' },
   { regionKey: 'dinh-quan', regionName: 'Định Quán', lat: 11.1965, lng: 107.3562, fallbackWardCode: 'DN-DQ' },
@@ -466,12 +484,12 @@ const DONG_NAI_REGIONAL_STATIONS: ReadonlyArray<{
 export async function fetchDongNaiRegionalStations(
   lang: 'vi' | 'en',
   signal?: AbortSignal,
-): Promise<{ items: WeatherSnapshotItem[]; lastSyncAt: string }> {
+): Promise<{ items: RegionalStationWeather[]; lastSyncAt: string }> {
   const lats = DONG_NAI_REGIONAL_STATIONS.map((s) => s.lat.toFixed(4)).join(',');
   const lngs = DONG_NAI_REGIONAL_STATIONS.map((s) => s.lng.toFixed(4)).join(',');
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lngs}` +
-    '&current=temperature_2m,is_day,precipitation,weather_code,wind_speed_10m,wind_gusts_10m' +
+    '&current=temperature_2m,relative_humidity_2m,is_day,precipitation,weather_code,wind_speed_10m,wind_gusts_10m' +
     '&timezone=Asia%2FHo_Chi_Minh';
 
   const res = await fetch(url, { signal, cache: 'no-store' });
@@ -480,16 +498,20 @@ export async function fetchDongNaiRegionalStations(
   const list = Array.isArray(raw) ? raw : [raw];
   const fetchedAt = new Date().toISOString();
 
-  const items: WeatherSnapshotItem[] = DONG_NAI_REGIONAL_STATIONS.map((st, idx) => {
+  const items: RegionalStationWeather[] = DONG_NAI_REGIONAL_STATIONS.map((st, idx) => {
     const entry = list[idx];
     const cur = entry?.current;
     const isDay = (cur?.is_day ?? 1) === 1;
-    const wmoCode = cur?.weather_code ?? 0;
-    const mapped = mapWmoCode(wmoCode, isDay);
-    const rainMm = round1(cur?.precipitation ?? 0);
-    const windGustsKmh = Math.round(cur?.wind_gusts_10m ?? cur?.wind_speed_10m ?? 0);
+    const wmoCode = cur?.weather_code ?? null;
+    const mapped = wmoCode != null ? mapWmoCode(wmoCode, isDay) : null;
+    const rainMm = cur?.precipitation != null ? round1(cur.precipitation) : null;
+    const rawWind = cur?.wind_gusts_10m ?? cur?.wind_speed_10m;
+    const windGustsKmh = rawWind != null ? Math.round(rawWind) : null;
     const resolvedWard = resolveAdminUnit({ lat: st.lat, lng: st.lng }).wardCode ?? st.fallbackWardCode;
-    const isHazard = rainMm >= 10 || wmoCode >= 95 || windGustsKmh >= 50;
+    const isHazard =
+      (rainMm != null && rainMm >= 10) ||
+      (wmoCode != null && wmoCode >= 95) ||
+      (windGustsKmh != null && windGustsKmh >= 50);
 
     return {
       id: `station:${st.regionKey}`,
@@ -498,19 +520,15 @@ export async function fetchDongNaiRegionalStations(
       wardCode: resolvedWard,
       lat: st.lat,
       lng: st.lng,
-      temperatureC: Math.round(cur?.temperature_2m ?? 0),
-      humidityPct: Math.round(cur?.relative_humidity_2m ?? 0),
+      temperatureC: cur?.temperature_2m != null ? Math.round(cur.temperature_2m) : null,
+      humidityPct: cur?.relative_humidity_2m != null ? Math.round(cur.relative_humidity_2m) : null,
       precipitationMm: rainMm,
-      precipitation24hMm: rainMm,
-      precipitationProbabilityPct: 0,
       windGustsKmh,
       weatherCode: wmoCode,
-      weatherLabel: lang === 'vi' ? mapped.vi : mapped.en,
-      riskLevel: rainMm >= 10 ? 'warning' : rainMm >= 2 ? 'advisory' : 'normal',
+      weatherLabel: mapped ? (lang === 'vi' ? mapped.vi : mapped.en) : 'Chưa có dữ liệu',
       isHazard,
-      source: 'Open-Meteo Trực tiếp',
+      source: 'Open-Meteo',
       observedAt: typeof cur?.time === 'string' ? cur.time : fetchedAt,
-      fetchedAt,
     };
   });
 
@@ -614,13 +632,14 @@ async function mapOpenMeteoToDongNaiWeather(
   const isDay = (cur.is_day ?? 1) === 1;
   const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
   const currentTemp = Math.round(cur.temperature_2m ?? h.temperature_2m?.[startIdx] ?? 0);
-  const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
+  const rawRainNow = cur.precipitation ?? cur.rain;
+  const rainNow = rawRainNow != null ? round1(rawRainNow) : null;
 
   const hourly: HourlyPoint[] = h.time!.slice(startIdx, startIdx + 24).map((t, idx) => {
     const i = startIdx + idx;
     const pointIsDay = idx === 0 ? isDay : (h.is_day?.[i] ?? 1) === 1;
     const mapped = idx === 0 ? curMapped : mapWmoCode(h.weather_code?.[i] ?? cur.weather_code ?? 0, pointIsDay);
-    const rainMm = idx === 0 ? Math.max(rainNow, round1(h.precipitation?.[i] ?? 0)) : round1(h.precipitation?.[i] ?? 0);
+    const rainMm = idx === 0 ? Math.max(rainNow ?? 0, round1(h.precipitation?.[i] ?? 0)) : round1(h.precipitation?.[i] ?? 0);
     return {
       timeIso: t,
       hourLabel: idx === 0 ? (lang === 'vi' ? 'Hiện tại' : 'Now') : formatHourLabel(t),
@@ -641,7 +660,7 @@ async function mapOpenMeteoToDongNaiWeather(
   }
   const rawUvMax = d.uv_index_max?.[0];
   const uvMaxToday: number | null = rawUvMax != null ? round1(rawUvMax) : uvNow;
-  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(h.precipitation_probability?.[startIdx], curMapped.kind, rainNow);
+  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(h.precipitation_probability?.[startIdx], curMapped.kind, rainNow ?? 0);
   const rainProbNext3h = Math.max(
     rainProbNow,
     hourly[1]?.rainProb ?? 0,
@@ -663,17 +682,22 @@ async function mapOpenMeteoToDongNaiWeather(
     lng: data.longitude ?? lng,
     temp: currentTemp,
     feelsLike: Math.round(cur.apparent_temperature ?? currentTemp),
-    humidity: Math.round(cur.relative_humidity_2m ?? 0),
-    windSpeed: Math.round(cur.wind_speed_10m ?? 0),
-    windGusts: Math.round(cur.wind_gusts_10m ?? cur.wind_speed_10m ?? 0),
-    pressureHpa: Math.round(cur.surface_pressure ?? 1013),
+    humidity: cur.relative_humidity_2m != null ? Math.round(cur.relative_humidity_2m) : null,
+    windSpeed: cur.wind_speed_10m != null ? Math.round(cur.wind_speed_10m) : null,
+    windGusts:
+      cur.wind_gusts_10m != null
+        ? Math.round(cur.wind_gusts_10m)
+        : cur.wind_speed_10m != null
+          ? Math.round(cur.wind_speed_10m)
+          : null,
+    pressureHpa: cur.surface_pressure != null ? Math.round(cur.surface_pressure) : null,
     rainNow,
     rainProbNow,
     rainProbNext3h,
     rainProbMaxToday,
     rainNext3hMm,
     rainSumTodayMm,
-    cloudCover: Math.round(cur.cloud_cover ?? 0),
+    cloudCover: cur.cloud_cover != null ? Math.round(cur.cloud_cover) : null,
     uvIndex: uvNow,
     uvMaxToday,
     isDay,
