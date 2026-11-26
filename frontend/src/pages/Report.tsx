@@ -180,6 +180,7 @@ export default function ReportPage() {
   const [submitted, setSubmitted] = useState<ClientReport | null>(null);
   const [outcome, setOutcome] = useState<{ code: string; report: ClientReport } | null>(null);
   const [rejectedMessage, setRejectedMessage] = useState<string | null>(null);
+  const [retryNotice, setRetryNotice] = useState<{ outboxId: string; message: string; attempts: number } | null>(null);
   const [failedOutboxId, setFailedOutboxId] = useState<string | null>(null);
   const [editingOutboxId, setEditingOutboxId] = useState<string | null>(null);
   const [editOutboxNotice, setEditOutboxNotice] = useState<string | null>(null);
@@ -768,20 +769,42 @@ export default function ReportPage() {
 
   useEffect(() => {
     if (!submitted) return;
+    let alive = true;
+    void db.outboxQueue.toArray().then((list) => {
+      if (!alive) return;
+      const hit = list.find((o) => o.targetId === submitted.id);
+      if (!hit) return;
+      if (hit.state === 'failed') {
+        setFailedOutboxId(hit.id);
+        setRejectedMessage(hit.lastError || t('outbox.failedToast'));
+        setRetryNotice(null);
+      } else if (hit.attempts > 0 && hit.lastError) {
+        setFailedOutboxId(hit.id);
+        setRetryNotice({ outboxId: hit.id, message: hit.lastError, attempts: hit.attempts });
+      }
+    });
     const onEv = (e: Event): void => {
       const d = (e as CustomEvent<SyncEventDetail>).detail;
       if (d.type === 'report_result' && d.localId === submitted.id) {
         setRejectedMessage(null);
+        setRetryNotice(null);
         setFailedOutboxId(null);
         setOutcome({ code: d.messageCode, report: d.report });
+      } else if (d.type === 'item_retrying' && d.item.targetId === submitted.id) {
+        setFailedOutboxId(d.item.id);
+        setRetryNotice({ outboxId: d.item.id, message: d.message, attempts: d.item.attempts });
       } else if (d.type === 'item_failed' && d.item.targetId === submitted.id) {
+        setRetryNotice(null);
         setFailedOutboxId(d.item.id);
         setRejectedMessage(d.message);
       }
     };
     syncBus.addEventListener('sync', onEv);
-    return () => syncBus.removeEventListener('sync', onEv);
-  }, [submitted]);
+    return () => {
+      alive = false;
+      syncBus.removeEventListener('sync', onEv);
+    };
+  }, [submitted, t]);
 
   const submit = async (): Promise<void> => {
     if (submitting || !photo || !pin || !category) return;
@@ -790,6 +813,7 @@ export default function ReportPage() {
     }
     setSubmitting(true);
     setRejectedMessage(null);
+    setRetryNotice(null);
     setFailedOutboxId(null);
     try {
       const finalWardCode = activeWardCode || nearestWard(pin.lat, pin.lng).wardCode;
@@ -868,6 +892,7 @@ export default function ReportPage() {
     setSubmitted(null);
     setOutcome(null);
     setRejectedMessage(null);
+    setRetryNotice(null);
     setFailedOutboxId(null);
     setEditingOutboxId(null);
     setEditOutboxNotice(null);
@@ -973,6 +998,45 @@ export default function ReportPage() {
           <p className="text-sm text-muted">
             {t('result.localSaved')} <span className="mono">{submitted.code}</span>
           </p>
+        )}
+        {!outcome && retryNotice && (
+          <div className="space-y-2 rounded-xl border border-warn/40 bg-warn-soft/40 p-3 text-left text-sm" role="status">
+            <p className="font-bold text-warn">{t('report.retryingTitle', { n: retryNotice.attempts })}</p>
+            <p className="text-ink">{retryNotice.message}</p>
+            <div className="grid gap-2 pt-1 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingOutboxId(retryNotice.outboxId);
+                  setEditOutboxNotice(retryNotice.message);
+                  setSubmitted(null);
+                  setOutcome(null);
+                  setRetryNotice(null);
+                  setStep(1);
+                }}
+                className="btn btn-primary"
+              >
+                <Pencil className="h-4 w-4" aria-hidden /> {t('report.sendFailedEdit')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void retryFailed(retryNotice.outboxId)}
+                className="btn btn-ghost"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden /> {t('report.sendFailedRetry')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void discardOutboxItem(retryNotice.outboxId);
+                  reset();
+                }}
+                className="btn btn-ghost text-danger"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden /> {t('report.sendFailedRemove')}
+              </button>
+            </div>
+          </div>
         )}
         {!session && !outcome && (
           <Link to="/auth" className="btn btn-primary w-full">

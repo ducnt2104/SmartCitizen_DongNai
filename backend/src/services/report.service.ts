@@ -809,7 +809,25 @@ export class ReportService {
       report.timeline.push({ stage: 'dispatched', at: nowIso, note: `Phát lệnh chi viện sang ${order.toWardCodes.join(', ')} + ${order.units.join(', ')}` });
     }
 
-    await this.repos.reports.insert(report);
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        await this.repos.reports.insert(report);
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const dupCode =
+          (err && typeof err === 'object' && 'code' in err && Number((err as { code?: unknown }).code) === 11000) ||
+          /E11000|duplicate key/i.test(msg);
+        if (!dupCode || attempt === 5) throw err;
+        if (/\bsyncId\b/i.test(msg)) {
+          const existingSync = await this.repos.reports.get(report.id).catch(() => null);
+          if (existingSync) {
+            return { outcome: 'duplicate_submit', messageCode: 'duplicate_submit', report: toClientReport(existingSync) };
+          }
+        }
+        report.code = await this.nextCode(ward.wardCode, attempt + 1);
+      }
+    }
     this.cache?.invalidateReports();
     this.stage2?.schedulePostProcess({
       userId: user.id,
@@ -869,20 +887,35 @@ export class ReportService {
     return { outcome: quarantined ? 'quarantined' : 'created', messageCode, report: toClientReport(report) };
   }
 
-  private async nextCode(wardCode: string): Promise<string> {
+  private async nextCode(wardCode: string, collisionOffset = 0): Promise<string> {
     const prefix = `${wardCode}-2611-`;
+    let max = 0;
     if (this.repos.mode === 'mongodb' && mongoose.connection.readyState === 1) {
       const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const latest = (await ReportModel.findOne({ wardCode, code: new RegExp(`^${escaped}`) })
-        .sort({ code: -1 })
+      // Tìm toàn bộ collection theo tiền tố mã (không lọc theo wardCode vì hồ sơ chuyển tuyến giữ nguyên mã cũ)
+      const docs = (await ReportModel.find({ code: new RegExp(`^${escaped}`) })
         .select('-_id code')
-        .lean()) as { code?: string } | null;
-      const max = latest?.code?.startsWith(prefix) ? parseInt(latest.code.slice(prefix.length), 10) || 0 : 0;
-      return `${prefix}${String(max + 1).padStart(3, '0')}`;
+        .lean()) as Array<{ code?: string }>;
+      for (const doc of docs) {
+        if (doc.code?.startsWith(prefix)) {
+          const n = parseInt(doc.code.slice(prefix.length), 10);
+          if (Number.isFinite(n) && n > max) max = n;
+        }
+      }
+    } else {
+      const all = await this.repos.reports.list({ projection: 'code_only' });
+      for (const r of all) {
+        if (r.code.startsWith(prefix)) {
+          const n = parseInt(r.code.slice(prefix.length), 10);
+          if (Number.isFinite(n) && n > max) max = n;
+        }
+      }
     }
-    const all = await this.repos.reports.list({ wardCodes: [wardCode], projection: 'code_only' });
-    const max = all.reduce((m, r) => (r.code.startsWith(prefix) ? Math.max(m, parseInt(r.code.slice(prefix.length), 10) || 0) : m), 0);
-    return `${prefix}${String(max + 1).padStart(3, '0')}`;
+    if (collisionOffset >= 4) {
+      const rand = Math.random().toString(36).slice(2, 5).toUpperCase();
+      return `${prefix}${String(max + 1 + collisionOffset).padStart(3, '0')}-${rand}`;
+    }
+    return `${prefix}${String(max + 1 + collisionOffset).padStart(3, '0')}`;
   }
 
   async confirm(user: UserRecord, id: string): Promise<ClientReport> {

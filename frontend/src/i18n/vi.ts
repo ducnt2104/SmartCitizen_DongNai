@@ -135,6 +135,7 @@ export const vi = {
   'report.softFlagCitizenNote': 'Đơn vẫn được gửi thành công và sẽ gắn nhãn chờ cán bộ IOC kiểm tra thêm.',
   'report.softReviewPreview': 'Hồ sơ sẽ được tiếp nhận bình thường kèm nhãn phụ để Cán bộ IOC kiểm tra đối chiếu khi xử lý.',
   'report.sendFailedTitle': 'Chưa gửi được đơn lên máy chủ',
+  'report.retryingTitle': 'Đang tự động thử gửi lại (lần {n})',
   'report.sendFailedEdit': 'Sửa lại đơn',
   'report.sendFailedRetry': 'Thử gửi lại',
   'report.sendFailedRemove': 'Xóa khỏi hàng đợi',
