@@ -52,6 +52,7 @@ import { fastFetch } from '../lib/swrCache';
 import { useSession } from '../lib/authStore';
 import { resolvePlaceSuggestion, searchPlacesDongNai, type PlaceSuggestion } from '../lib/geoClient';
 import {
+  fetchDongNaiRegionalStations,
   fetchDongNaiWeather,
   searchOpenMeteoLocations,
   type DongNaiWeather,
@@ -297,6 +298,7 @@ export default function AlertsPage() {
   const [weatherSearchOpen, setWeatherSearchOpen] = useState(false);
   const forecastAbortRef = useRef<AbortController | null>(null);
   const lastFetchedCoordKeyRef = useRef<string | null>(null);
+  const weatherTopRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const q = weatherQuery.trim();
@@ -440,19 +442,7 @@ export default function AlertsPage() {
     let active = true;
     try {
       const [wRes, aRes, bRes, dRes] = await Promise.allSettled([
-        fastFetch<{ items: WeatherSnapshotItem[]; lastSyncAt: string | null }>(
-          '/api/weather',
-          () => api('/api/weather'),
-          {
-            staleMs: 60_000,
-            forceRefresh,
-            onUpdate: (fresh) => {
-              if (!active) return;
-              setWeather(fresh.items);
-              setWeatherSyncAt(fresh.lastSyncAt);
-            },
-          },
-        ),
+        fetchDongNaiRegionalStations(lang).catch(() => api<{ items: WeatherSnapshotItem[]; lastSyncAt: string | null }>('/api/weather')),
         fastFetch<{ items: CivicAlertItem[] }>(
           '/api/alerts?status=active&limit=100',
           () => api('/api/alerts?status=active&limit=100'),
@@ -811,7 +801,7 @@ export default function AlertsPage() {
               : 'Thấp';
 
         return (
-          <div className="space-y-4">
+          <div ref={weatherTopRef} className="space-y-4 scroll-mt-20">
             {/* Thanh chọn vị trí thời tiết chi tiết (Tìm bất kỳ nơi đâu / GPS / 95 Phường-Xã / 5 Vùng) */}
             <div className="card flex flex-col gap-2.5 p-3 sm:p-3.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1175,11 +1165,32 @@ export default function AlertsPage() {
                     {weatherSyncAt ? `Đồng bộ lúc: ${fmtDate(weatherSyncAt, true)}` : ''}
                   </span>
                 </div>
-                <div className="no-scrollbar flex w-full flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain pb-1">
+                <div className="no-scrollbar flex w-full flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pr-4">
                   {weather.map((w) => {
                     const targetWard = WARD_BY_CODE[w.wardCode];
-                    const isSelected = weatherLoc.wardCode === w.wardCode && !weatherLoc.isGps;
-                    const displayTemp = isSelected && forecast ? forecast.temp : w.temperatureC;
+                    const isSelected =
+                      !weatherLoc.isGps &&
+                      Math.abs(weatherLoc.lat - w.lat) < 0.005 &&
+                      Math.abs(weatherLoc.lng - w.lng) < 0.005;
+                    const displayTemp = isSelected && forecast ? Math.round(forecast.temp) : Math.round(w.temperatureC);
+                    const displayCondition =
+                      isSelected && forecast
+                        ? lang === 'vi'
+                          ? forecast.conditionVi
+                          : forecast.conditionEn
+                        : w.weatherLabel;
+                    const selectStation = (scrollToTop: boolean) => {
+                      setWeatherQuery('');
+                      setWeatherLoc({
+                        label: targetWard ? `${w.regionName} (${targetWard.shortName})` : w.regionName,
+                        lat: w.lat,
+                        lng: w.lng,
+                        wardCode: w.wardCode,
+                      });
+                      if (scrollToTop) {
+                        weatherTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                    };
                     return (
                       <div
                         key={w.regionKey}
@@ -1193,22 +1204,14 @@ export default function AlertsPage() {
                       >
                         <button
                           type="button"
-                          onClick={() => {
-                            setWeatherQuery('');
-                            setWeatherLoc({
-                              label: targetWard ? `${w.regionName} (${targetWard.shortName})` : w.regionName,
-                              lat: w.lat,
-                              lng: w.lng,
-                              wardCode: w.wardCode,
-                            });
-                          }}
+                          onClick={() => selectStation(false)}
                           className="w-full text-left"
                         >
                           <div className="flex items-center justify-between gap-1">
                             <span className="truncate text-xs font-bold text-ink">{w.regionName}</span>
-                            <span className="mono text-xs font-extrabold text-brand">{displayTemp.toFixed(1)}°C</span>
+                            <span className="mono text-xs font-extrabold text-brand">{displayTemp}°C</span>
                           </div>
-                          <p className="mt-1 text-[11px] font-semibold text-muted">{w.weatherLabel}</p>
+                          <p className="mt-1 text-[11px] font-semibold text-muted">{displayCondition}</p>
                           <div className="mt-1.5 flex items-center justify-between text-[11px]">
                             <span className={`font-bold ${w.precipitationMm > 15 ? 'text-rose-600' : 'text-ink'}`}>
                               Mưa: {w.precipitationMm}mm/h
@@ -1220,7 +1223,7 @@ export default function AlertsPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setInspectWardCode(w.wardCode)}
+                          onClick={() => selectStation(true)}
                           className="mt-2 text-[10.5px] font-bold text-brand hover:underline"
                         >
                           Xem hồ sơ khu vực →

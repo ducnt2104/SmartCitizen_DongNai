@@ -1,4 +1,5 @@
 ﻿import { inDongNaiBBox, resolveAdminUnit } from '@shared/geo';
+import type { WeatherSnapshotItem } from '@shared/types';
 import { apiUrl } from './api';
 import type { PlaceSuggestion } from './geoClient';
 
@@ -62,7 +63,7 @@ export interface DongNaiWeather {
   daily: DailyPoint[];
 }
 
-function mapWmoCode(code: number, isDay = true): { kind: WeatherKind; vi: string; en: string } {
+export function mapWmoCode(code: number, isDay = true): { kind: WeatherKind; vi: string; en: string } {
   if (code === 0) {
     return {
       kind: 'sun',
@@ -441,6 +442,80 @@ async function fetchOpenMeteoDirect(
     return payload;
   }
   throw new Error('Incomplete Open-Meteo payload');
+}
+
+const DONG_NAI_REGIONAL_STATIONS: ReadonlyArray<{
+  regionKey: string;
+  regionName: string;
+  lat: number;
+  lng: number;
+  fallbackWardCode: string;
+}> = [
+  { regionKey: 'bien-hoa', regionName: 'Biên Hòa / Trấn Biên', lat: 10.9574, lng: 106.8427, fallbackWardCode: 'DN-TB' },
+  { regionKey: 'long-thanh', regionName: 'Long Thành', lat: 10.7850, lng: 106.9530, fallbackWardCode: 'DN-LT' },
+  { regionKey: 'nhon-trach', regionName: 'Nhơn Trạch', lat: 10.6766, lng: 106.8906, fallbackWardCode: 'DN-NT' },
+  { regionKey: 'trang-bom', regionName: 'Trảng Bom', lat: 10.9542, lng: 107.0053, fallbackWardCode: 'DN-TB2' },
+  { regionKey: 'long-khanh', regionName: 'Long Khánh', lat: 10.9355, lng: 107.2435, fallbackWardCode: 'DN-LK' },
+  { regionKey: 'xuan-loc', regionName: 'Xuân Lộc', lat: 10.9317, lng: 107.4036, fallbackWardCode: 'DN-XL' },
+  { regionKey: 'dinh-quan', regionName: 'Định Quán', lat: 11.1965, lng: 107.3562, fallbackWardCode: 'DN-DQ' },
+  { regionKey: 'tan-phu', regionName: 'Tân Phú', lat: 11.2756, lng: 107.4339, fallbackWardCode: 'DN-TP' },
+  { regionKey: 'cam-my', regionName: 'Cẩm Mỹ', lat: 10.8123, lng: 107.2478, fallbackWardCode: 'DN-CM' },
+  { regionKey: 'vinh-cuu', regionName: 'Vĩnh Cửu', lat: 11.1214, lng: 107.0185, fallbackWardCode: 'DN-VC' },
+];
+
+export async function fetchDongNaiRegionalStations(
+  lang: 'vi' | 'en',
+  signal?: AbortSignal,
+): Promise<{ items: WeatherSnapshotItem[]; lastSyncAt: string }> {
+  const lats = DONG_NAI_REGIONAL_STATIONS.map((s) => s.lat.toFixed(4)).join(',');
+  const lngs = DONG_NAI_REGIONAL_STATIONS.map((s) => s.lng.toFixed(4)).join(',');
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lngs}` +
+    '&current=temperature_2m,is_day,precipitation,weather_code,wind_speed_10m,wind_gusts_10m' +
+    '&timezone=Asia%2FHo_Chi_Minh';
+
+  const res = await fetch(url, { signal, cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const raw = (await res.json()) as OpenMeteoPayload | OpenMeteoPayload[];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const fetchedAt = new Date().toISOString();
+
+  const items: WeatherSnapshotItem[] = DONG_NAI_REGIONAL_STATIONS.map((st, idx) => {
+    const entry = list[idx];
+    const cur = entry?.current;
+    const isDay = (cur?.is_day ?? 1) === 1;
+    const wmoCode = cur?.weather_code ?? 0;
+    const mapped = mapWmoCode(wmoCode, isDay);
+    const rainMm = round1(cur?.precipitation ?? 0);
+    const windGustsKmh = Math.round(cur?.wind_gusts_10m ?? cur?.wind_speed_10m ?? 0);
+    const resolvedWard = resolveAdminUnit({ lat: st.lat, lng: st.lng }).wardCode ?? st.fallbackWardCode;
+    const isHazard = rainMm >= 10 || wmoCode >= 95 || windGustsKmh >= 50;
+
+    return {
+      id: `station:${st.regionKey}`,
+      regionKey: st.regionKey,
+      regionName: st.regionName,
+      wardCode: resolvedWard,
+      lat: st.lat,
+      lng: st.lng,
+      temperatureC: Math.round(cur?.temperature_2m ?? 0),
+      humidityPct: Math.round(cur?.relative_humidity_2m ?? 0),
+      precipitationMm: rainMm,
+      precipitation24hMm: rainMm,
+      precipitationProbabilityPct: 0,
+      windGustsKmh,
+      weatherCode: wmoCode,
+      weatherLabel: lang === 'vi' ? mapped.vi : mapped.en,
+      riskLevel: rainMm >= 10 ? 'warning' : rainMm >= 2 ? 'advisory' : 'normal',
+      isHazard,
+      source: 'Open-Meteo Trực tiếp',
+      observedAt: typeof cur?.time === 'string' ? cur.time : fetchedAt,
+      fetchedAt,
+    };
+  });
+
+  const lastSyncAt = items[0]?.observedAt ?? fetchedAt;
+  return { items, lastSyncAt };
 }
 
 export async function fetchDongNaiWeather(
