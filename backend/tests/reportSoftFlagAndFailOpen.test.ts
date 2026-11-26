@@ -344,4 +344,44 @@ describe('Report Soft-Flag Gatekeeper & Gemini 429/5xx Controlled Fail-Open E2E'
     expect(spamJson.error.code).toBe('SPAM_TEXT_REJECTED');
     expect(spamJson.error.message).not.toContain('Cổng kiểm định AI đa tầng');
   });
+
+  it('(e) chuyển tuyến phường/xã (code DN-TB-2611-xxx sang wardCode khác) không làm trùng mã E11000 / HTTP 500 khi dân gửi đơn mới ở phường cũ', async () => {
+    const token = await loginCitizen('0911112205');
+    const pcJpeg = await makeRealisticNoExifStreetJpeg(640, 480);
+
+    // Lấy toàn bộ báo cáo DN-TB hiện có và chuyển toàn bộ sang wardCode khác ('DN-THP') nhưng giữ nguyên mã DN-TB-2611-xxx
+    const tbReports = await services.repos.reports.list({ wardCodes: ['DN-TB'] });
+    expect(tbReports.length).toBeGreaterThan(0);
+    for (const rep of tbReports) {
+      await services.repos.reports.update({ ...rep, wardCode: 'DN-THP' });
+    }
+
+    const fd = new FormData();
+    fd.append('displayImage', new Blob([new Uint8Array(pcJpeg)], { type: 'image/jpeg' }), 'new_tb.jpg');
+    fd.append(
+      'metadata',
+      JSON.stringify({
+        idempotencyKey: `transfer-collision-${Date.now()}`,
+        category: 'rac_thai',
+        title: 'Rác thải tự phát mới tại Phường Trấn Biên',
+        description: 'Kiểm tra cấp mã kế tiếp không đụng với hồ sơ đã chuyển tuyến sang DN-THP.',
+        lat: 10.9464,
+        lng: 106.8229,
+        wardCode: 'DN-TB',
+        dHash: '1122334455667788',
+      }),
+    );
+
+    const res = await fetch(`${base}/api/reports`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { outcome: string; report: { code: string } };
+    expect(created.outcome).toBe('created');
+    // Phải lớn hơn mọi mã DN-TB-2611-xxx đã bị chuyển đi trước đó
+    const usedCodes = new Set(tbReports.map((r) => r.code));
+    expect(usedCodes.has(created.report.code)).toBe(false);
+  });
 });

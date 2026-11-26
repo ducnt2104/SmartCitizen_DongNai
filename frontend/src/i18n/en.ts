@@ -137,6 +137,7 @@ export const en: Record<keyof typeof vi, string> = {
   'report.softFlagCitizenNote': 'Your report will still be accepted smoothly and flagged for quick IOC manual verification.',
   'report.softReviewPreview': 'Your report will be accepted normally with a soft review flag for the IOC officer.',
   'report.sendFailedTitle': 'Could not send report yet',
+  'report.retryingTitle': 'Retrying automatically (attempt {n})',
   'report.sendFailedEdit': 'Edit report',
   'report.sendFailedRetry': 'Retry sending',
   'report.sendFailedRemove': 'Remove from queue',

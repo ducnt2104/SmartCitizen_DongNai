@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { computeSosPriorityScore, legacyRolesFor, normalizeRole, toSeverityLabel } from '../shared/constants';
 import { fromGeoJsonPoint, normalizeCoordinates, toGeoJsonPoint } from '../shared/coordinates';
+import { haversineMeters } from '../shared/geo';
 import type {
   AuditEntry,
   DynamicAiConfig,
@@ -138,7 +139,7 @@ function reportToDoc(r: Report): Doc {
   const safeLat = norm.ok ? norm.lat : r.lat;
   const safeLng = norm.ok ? norm.lng : r.lng;
   const geoPoint = norm.ok ? norm.geoJson : { type: 'Point' as const, coordinates: [safeLng, safeLat] as [number, number] };
-  const priorityScore =
+  const rawPriorityScore =
     r.priorityScore ??
     r.ai?.priorityScore ??
     computeSosPriorityScore({
@@ -153,6 +154,7 @@ function reportToDoc(r: Report): Doc {
       duplicateCount: Math.max(0, (r.clusterCount ?? 1) - 1),
       reporterTrustScore: 100,
     });
+  const priorityScore = Math.max(0, Math.min(100, Math.round(rawPriorityScore)));
   const severityLabel =
     r.severityLabel ?? r.ai?.severityLabel ?? toSeverityLabel(r.severity, r.isEmergency || r.emergencyLevel === 1);
 
@@ -341,22 +343,37 @@ class MongoReportRepo implements ReportRepository {
   }
 
   async findNearby(q: NearbyQuery): Promise<Report[]> {
-    const geoPoint = toGeoJsonPoint(q.lat, q.lng);
-    const filter: Record<string, unknown> = {
-      location: {
-        $nearSphere: {
-          $geometry: geoPoint,
-          $maxDistance: Math.max(1, q.radiusM),
-        },
-      },
-    };
-    if (q.category) filter.category = String(q.category);
-    if (q.sinceIso) filter.createdAt = { $gte: String(q.sinceIso) };
-    let cursor = ReportModel.find(filter);
+    const norm = normalizeCoordinates({ lat: q.lat, lng: q.lng }, { requireVietnam: false });
+    if (!norm.ok) return [];
+    const geoPoint = toGeoJsonPoint(norm.lat, norm.lng);
+    const baseFilter: Record<string, unknown> = {};
+    if (q.category) baseFilter.category = String(q.category);
+    if (q.sinceIso) baseFilter.createdAt = { $gte: String(q.sinceIso) };
     const sel = projectionSelect(q.projection);
-    if (sel) cursor = cursor.select(sel);
-    const docs = (await cursor.limit(q.limit ?? 150).lean()) as Doc[];
-    return docs.map((d) => reportFromDoc(d)!);
+    const limit = q.limit ?? 150;
+    try {
+      const filter: Record<string, unknown> = {
+        ...baseFilter,
+        location: {
+          $nearSphere: {
+            $geometry: geoPoint,
+            $maxDistance: Math.max(1, q.radiusM),
+          },
+        },
+      };
+      let cursor = ReportModel.find(filter);
+      if (sel) cursor = cursor.select(sel);
+      const docs = (await cursor.limit(limit).lean()) as Doc[];
+      return docs.map((d) => reportFromDoc(d)!);
+    } catch {
+      let cursor = ReportModel.find(baseFilter).sort({ createdAt: -1 });
+      if (sel) cursor = cursor.select(sel);
+      const docs = (await cursor.limit(Math.max(limit * 3, 300)).lean()) as Doc[];
+      return docs
+        .map((d) => reportFromDoc(d)!)
+        .filter((r) => haversineMeters(norm.lat, norm.lng, r.lat, r.lng) <= q.radiusM)
+        .slice(0, limit);
+    }
   }
 
   async findSince(sinceIso: string, projection?: ReportProjection): Promise<Report[]> {
@@ -452,18 +469,33 @@ class MongoFingerprintRepo implements FingerprintRepository {
     );
   }
   async findNearbyRecent(lat: number, lng: number, radiusM: number, sinceIso: string): Promise<ImageFingerprintRecord[]> {
-    const docs = (await ImageFingerprintModel.find({
-      createdAt: { $gte: sinceIso },
-      location: { $geoWithin: { $centerSphere: [[lng, lat], radiusM / 6378100] } },
-    })
-      .sort({ createdAt: -1 })
-      .limit(120)
-      .lean()) as Doc[];
-    return docs.map((d) => {
-      const { location, ...rest } = d;
-      void location;
-      return strip<ImageFingerprintRecord>(rest)!;
-    });
+    try {
+      const docs = (await ImageFingerprintModel.find({
+        createdAt: { $gte: sinceIso },
+        location: { $geoWithin: { $centerSphere: [[lng, lat], radiusM / 6378100] } },
+      })
+        .sort({ createdAt: -1 })
+        .limit(120)
+        .lean()) as Doc[];
+      return docs.map((d) => {
+        const { location, ...rest } = d;
+        void location;
+        return strip<ImageFingerprintRecord>(rest)!;
+      });
+    } catch {
+      const docs = (await ImageFingerprintModel.find({ createdAt: { $gte: sinceIso } })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean()) as Doc[];
+      return docs
+        .map((d) => {
+          const { location, ...rest } = d;
+          void location;
+          return strip<ImageFingerprintRecord>(rest)!;
+        })
+        .filter((fp) => haversineMeters(lat, lng, fp.lat, fp.lng) <= radiusM)
+        .slice(0, 120);
+    }
   }
   async listByReport(reportId: string): Promise<ImageFingerprintRecord[]> {
     const docs = (await ImageFingerprintModel.find({ reportId: String(reportId) }).lean()) as Doc[];

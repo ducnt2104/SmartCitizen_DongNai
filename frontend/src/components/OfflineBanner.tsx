@@ -1,6 +1,6 @@
 import { CloudOff, Pencil, RefreshCw, Trash2, WifiOff } from 'lucide-react';
 import { useOnline, useOutbox } from '../db/hooks';
-import { discardOutboxItem, processOutbox, retryFailed } from '../db/sync';
+import { discardOutboxItem, retryFailed, syncNow } from '../db/sync';
 import { useI18n } from '../i18n';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -36,7 +36,7 @@ export function OfflineBanner({ dark = false }: { dark?: boolean }) {
           </button>
         )}
         {online && outbox.length > 0 && (
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold underline" onClick={() => void processOutbox()}>
+          <button type="button" className="inline-flex items-center gap-1 rounded-lg px-2 py-1 font-semibold underline" onClick={() => void syncNow()}>
             <RefreshCw className="h-3.5 w-3.5" aria-hidden /> {t('offline.syncNow')}
           </button>
         )}

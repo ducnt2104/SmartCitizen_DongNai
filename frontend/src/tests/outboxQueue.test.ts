@@ -187,6 +187,40 @@ describe('No-EXIF PC/Zalo Tolerance & Outbox Queue Recovery UX', () => {
 
       await discardOutboxItem(id2);
       expect(outboxStore.has(id2)).toBe(false);
+
+      // Lỗi HTTP 500 liên tiếp: emit item_retrying ở 2 lần đầu, chuyển failed sau lần thứ 3, và syncNow() bỏ qua backoff
+      const id500 = 'outbox-500-item';
+      reportsStore.set('local-500', { id: 'local-500', syncState: 'pending' });
+      outboxStore.set(id500, {
+        id: id500,
+        kind: 'create_report',
+        targetId: 'local-500',
+        payload: { title: 'Lỗi 500 thử gửi lại', category: 'rac_thai' },
+        state: 'pending',
+        attempts: 0,
+        nextAttemptAt: 0,
+        lastError: null,
+        createdAt: Date.now(),
+      });
+      apiMock.mockRejectedValue(new ApiError(500, 'internal_error', 'Hệ thống đang tạm gián đoạn kết nối, vui lòng thử lại sau giây lát.'));
+      for (let i = 0; i < 3; i++) {
+        const cur = outboxStore.get(id500)!;
+        outboxStore.set(id500, { ...cur, nextAttemptAt: 0 });
+        await processOutbox();
+      }
+      const retryingEvs = events.filter((e): e is Extract<SyncEventDetail, { type: 'item_retrying' }> => e.type === 'item_retrying');
+      expect(retryingEvs.length).toBeGreaterThanOrEqual(2);
+      expect(outboxStore.get(id500)?.state).toBe('failed');
+      expect(reportsStore.has('local-500')).toBe(false);
+
+      const { syncNow } = await import('../db/sync');
+      apiMock.mockResolvedValueOnce({
+        outcome: 'created',
+        messageCode: 'created',
+        report: { id: 'srv-500-ok', code: 'DN-TB-2611-902' },
+      });
+      await syncNow();
+      expect(outboxStore.has(id500)).toBe(false);
     } finally {
       syncBus.removeEventListener('sync', onEv);
     }
