@@ -156,6 +156,15 @@ interface OpenMeteoPayload {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
+function normalizeRainProb(rawProb: number | null | undefined, kind: WeatherKind, precipMm: number): number {
+  const base = Math.round(rawProb ?? 0);
+  if (base > 0) return Math.min(100, base);
+  if (kind === 'storm' || kind === 'heavyRain' || precipMm >= 4) return 75;
+  if (kind === 'rain' || precipMm >= 1) return 55;
+  if (precipMm > 0) return 45;
+  return 0;
+}
+
 interface WeatherApiHour {
   time?: string;
   temp_c?: number;
@@ -251,13 +260,14 @@ function mapOpenMeteoDaily(data: OpenMeteoPayload, lang: 'vi' | 'en'): DailyPoin
   if (!d?.time?.length) return [];
   return d.time.slice(0, 7).map((dateIso, idx) => {
     const mapped = mapWmoCode(d.weather_code?.[idx] ?? 0, true);
+    const rainSum = round1(d.precipitation_sum?.[idx] ?? 0);
     return {
       dateIso,
       dayLabel: formatDayLabel(dateIso, idx, lang),
       tempMin: Math.round(d.temperature_2m_min?.[idx] ?? 0),
       tempMax: Math.round(d.temperature_2m_max?.[idx] ?? 0),
-      rainProbMax: Math.round(d.precipitation_probability_max?.[idx] ?? 0),
-      rainSum: round1(d.precipitation_sum?.[idx] ?? 0),
+      rainProbMax: normalizeRainProb(d.precipitation_probability_max?.[idx], mapped.kind, rainSum),
+      rainSum,
       uvMax: Math.round(d.uv_index_max?.[idx] ?? 0),
       kind: mapped.kind,
       summaryVi: mapped.vi,
@@ -291,32 +301,41 @@ function mapWeatherApiToDongNaiWeather(
   }
   if (startIdx < 0) startIdx = 0;
 
+  const currentTemp = Math.round(cur.temp_c ?? 0);
+  const curKind = mapWeatherApiCode(cur.condition?.code ?? 1003);
+  const curIsDay = (cur.is_day ?? 1) === 1;
+  const rainNow = round1(cur.precip_mm ?? 0);
+
   const hourly: HourlyPoint[] = allHours.slice(startIdx, startIdx + 24).map((hr, idx) => {
     const t = hr.time ?? '';
     const hourPart = t.slice(11, 16) || '--:--';
+    const hrKind = idx === 0 ? curKind : mapWeatherApiCode(hr.condition?.code ?? 1003);
+    const hrRainMm = idx === 0 ? Math.max(rainNow, round1(hr.precip_mm ?? 0)) : round1(hr.precip_mm ?? 0);
     return {
       timeIso: t.replace(' ', 'T'),
-      hourLabel: idx === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : hourPart,
-      temp: Math.round(hr.temp_c ?? cur.temp_c ?? 0),
-      rainProb: Math.round(hr.chance_of_rain ?? 0),
-      rainMm: round1(hr.precip_mm ?? 0),
-      isDay: (hr.is_day ?? 1) === 1,
-      kind: mapWeatherApiCode(hr.condition?.code ?? 1003),
+      hourLabel: idx === 0 ? (lang === 'vi' ? 'Hiện tại' : 'Now') : hourPart,
+      temp: idx === 0 ? currentTemp : Math.round(hr.temp_c ?? cur.temp_c ?? 0),
+      rainProb: normalizeRainProb(hr.chance_of_rain, hrKind, hrRainMm),
+      rainMm: hrRainMm,
+      isDay: idx === 0 ? curIsDay : (hr.is_day ?? 1) === 1,
+      kind: hrKind,
     };
   });
 
   let daily: DailyPoint[] = days.slice(0, 7).map((fd, idx) => {
     const dateIso = fd.date ?? '';
     const condText = fd.day?.condition?.text?.trim() || 'Mây thay đổi';
+    const dayKind = mapWeatherApiCode(fd.day?.condition?.code ?? 1003);
+    const dayRainSum = round1(fd.day?.totalprecip_mm ?? 0);
     return {
       dateIso,
       dayLabel: formatDayLabel(dateIso, idx, lang),
       tempMin: Math.round(fd.day?.mintemp_c ?? 0),
       tempMax: Math.round(fd.day?.maxtemp_c ?? 0),
-      rainProbMax: Math.round(fd.day?.daily_chance_of_rain ?? 0),
-      rainSum: round1(fd.day?.totalprecip_mm ?? 0),
+      rainProbMax: normalizeRainProb(fd.day?.daily_chance_of_rain, dayKind, dayRainSum),
+      rainSum: dayRainSum,
       uvMax: Math.round(fd.day?.uv ?? 0),
-      kind: mapWeatherApiCode(fd.day?.condition?.code ?? 1003),
+      kind: dayKind,
       summaryVi: condText,
       summaryEn: condText,
     };
@@ -338,19 +357,17 @@ function mapWeatherApiToDongNaiWeather(
   }
 
   const currentHour = allHours[startIdx];
-  const rainNow = round1(cur.precip_mm ?? 0);
-  const rainProbNow = hourly[0]?.rainProb ?? Math.round(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain ?? 0);
+  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain, curKind, rainNow);
   const rainProbNext3h = Math.max(
     rainProbNow,
     hourly[1]?.rainProb ?? 0,
     hourly[2]?.rainProb ?? 0,
   );
-  const rainProbMaxToday = Math.round(today?.day?.daily_chance_of_rain ?? rainProbNext3h);
+  const rainProbMaxToday = Math.max(rainProbNext3h, Math.round(today?.day?.daily_chance_of_rain ?? 0));
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (allHours[startIdx + offset]?.precip_mm ?? 0), 0),
   );
   const rainSumTodayMm = round1(today?.day?.totalprecip_mm ?? rainNext3hMm);
-  const currentTemp = Math.round(cur.temp_c ?? 0);
   const uvNow = cur.uv != null ? round1(cur.uv) : null;
   const uvMaxToday = today?.day?.uv != null ? round1(today.day.uv) : uvNow;
   const condText = cur.condition?.text?.trim() || 'Mây thay đổi';
@@ -519,16 +536,22 @@ async function mapOpenMeteoToDongNaiWeather(
   }
   if (startIdx < 0) startIdx = 0;
 
+  const isDay = (cur.is_day ?? 1) === 1;
+  const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
+  const currentTemp = Math.round(cur.temperature_2m ?? h.temperature_2m?.[startIdx] ?? 0);
+  const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
+
   const hourly: HourlyPoint[] = h.time!.slice(startIdx, startIdx + 24).map((t, idx) => {
     const i = startIdx + idx;
-    const pointIsDay = (h.is_day?.[i] ?? (idx === 0 ? cur.is_day : 1) ?? 1) === 1;
-    const mapped = mapWmoCode(h.weather_code?.[i] ?? cur.weather_code ?? 0, pointIsDay);
+    const pointIsDay = idx === 0 ? isDay : (h.is_day?.[i] ?? 1) === 1;
+    const mapped = idx === 0 ? curMapped : mapWmoCode(h.weather_code?.[i] ?? cur.weather_code ?? 0, pointIsDay);
+    const rainMm = idx === 0 ? Math.max(rainNow, round1(h.precipitation?.[i] ?? 0)) : round1(h.precipitation?.[i] ?? 0);
     return {
       timeIso: t,
-      hourLabel: idx === 0 ? (lang === 'vi' ? 'Bây giờ' : 'Now') : formatHourLabel(t),
-      temp: Math.round(h.temperature_2m?.[i] ?? cur.temperature_2m ?? 0),
-      rainProb: Math.round(h.precipitation_probability?.[i] ?? 0),
-      rainMm: round1(h.precipitation?.[i] ?? 0),
+      hourLabel: idx === 0 ? (lang === 'vi' ? 'Hiện tại' : 'Now') : formatHourLabel(t),
+      temp: idx === 0 ? currentTemp : Math.round(h.temperature_2m?.[i] ?? currentTemp),
+      rainProb: normalizeRainProb(h.precipitation_probability?.[i], mapped.kind, rainMm),
+      rainMm,
       isDay: pointIsDay,
       kind: mapped.kind,
     };
@@ -536,8 +559,6 @@ async function mapOpenMeteoToDongNaiWeather(
 
   const daily = mapOpenMeteoDaily(data, lang);
 
-  const isDay = (cur.is_day ?? 1) === 1;
-  const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
   const rawUvNow = h.uv_index?.[startIdx];
   let uvNow: number | null = rawUvNow != null ? round1(rawUvNow) : null;
   if (uvNow == null && isDay) {
@@ -545,19 +566,17 @@ async function mapOpenMeteoToDongNaiWeather(
   }
   const rawUvMax = d.uv_index_max?.[0];
   const uvMaxToday: number | null = rawUvMax != null ? round1(rawUvMax) : uvNow;
-  const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
-  const rainProbNow = hourly[0]?.rainProb ?? Math.round(h.precipitation_probability?.[startIdx] ?? 0);
+  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(h.precipitation_probability?.[startIdx], curMapped.kind, rainNow);
   const rainProbNext3h = Math.max(
     rainProbNow,
     hourly[1]?.rainProb ?? 0,
     hourly[2]?.rainProb ?? 0,
   );
-  const rainProbMaxToday = Math.round(d.precipitation_probability_max?.[0] ?? rainProbNext3h);
+  const rainProbMaxToday = Math.max(rainProbNext3h, Math.round(d.precipitation_probability_max?.[0] ?? 0));
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (h.precipitation?.[startIdx + offset] ?? 0), 0),
   );
   const rainSumTodayMm = round1(d.precipitation_sum?.[0] ?? rainNext3hMm);
-  const currentTemp = Math.round(cur.temperature_2m ?? hourly[0]?.temp ?? 0);
 
   return {
     source: 'live',

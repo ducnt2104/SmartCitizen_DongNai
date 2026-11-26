@@ -1101,24 +1101,24 @@ export default function AlertsPage() {
                 {/* Dự báo theo giờ (24h) & Dự báo 7 ngày */}
                 <div className="grid min-w-0 w-full gap-4 lg:grid-cols-12">
                   <section className="card min-w-0 w-full overflow-hidden p-4 lg:col-span-7" aria-label="Dự báo theo giờ">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <h2 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                      <h2 className="flex min-w-0 items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-ink sm:text-sm">
                         <Compass className="h-4 w-4 shrink-0 text-brand" aria-hidden />
                         <span className="truncate">Dự báo theo giờ (24 giờ tới)</span>
                       </h2>
-                      <span className="shrink-0 truncate text-[11px] font-semibold text-muted max-w-[9rem]">{forecastAreaName}</span>
+                      <span className="max-w-full truncate text-[11px] font-semibold text-muted">{forecastAreaName}</span>
                     </div>
                     <div className="no-scrollbar flex w-full flex-nowrap gap-2 overflow-x-auto overscroll-x-contain pb-1">
                       {forecast.hourly.map((pt, idx) => (
                         <div
                           key={pt.timeIso}
-                          className={`flex w-[3.75rem] min-w-[3.75rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2 text-center ${
+                          className={`flex w-[3.85rem] min-w-[3.85rem] shrink-0 flex-col items-center gap-1.5 rounded-2xl border p-2 text-center ${
                             idx === 0 ? 'border-brand/35 bg-brand-soft/75' : 'border-line/70 bg-surface-2/60'
                           }`}
                         >
-                          <span className="mono text-[11px] font-bold text-muted">{pt.hourLabel}</span>
+                          <span className="mono whitespace-nowrap text-[11px] font-bold text-muted">{pt.hourLabel}</span>
                           <WeatherGlyphInk kind={pt.kind} isDay={pt.isDay} className="h-6 w-6" />
-                          <span className="mono text-sm font-extrabold text-ink">{pt.temp.toFixed(1)}°</span>
+                          <span className="mono text-sm font-extrabold text-ink">{Math.round(pt.temp)}°</span>
                           <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
                             <Droplets className="h-3 w-3" aria-hidden />
                             {pt.rainProb}%
