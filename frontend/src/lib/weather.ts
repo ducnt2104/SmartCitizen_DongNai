@@ -8,8 +8,9 @@ export interface HourlyPoint {
   timeIso: string;
   hourLabel: string;
   temp: number;
-  rainProb: number;
+  rainProb: number | null;
   rainMm: number;
+  humidity: number | null;
   isDay: boolean;
   kind: WeatherKind;
 }
@@ -174,8 +175,14 @@ interface OpenMeteoPayload {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
-function normalizeRainProb(rawProb: number | null | undefined, kind: WeatherKind, precipMm: number): number {
-  const base = Math.round(rawProb ?? 0);
+function normalizeRainProb(rawProb: number | null | undefined, kind: WeatherKind, precipMm: number): number | null {
+  if (rawProb == null) {
+    if (kind === 'storm' || kind === 'heavyRain' || precipMm >= 4) return 75;
+    if (kind === 'rain' || precipMm >= 1) return 55;
+    if (precipMm > 0) return 45;
+    return null;
+  }
+  const base = Math.round(rawProb);
   if (base > 0) return Math.min(100, base);
   if (kind === 'storm' || kind === 'heavyRain' || precipMm >= 4) return 75;
   if (kind === 'rain' || precipMm >= 1) return 55;
@@ -188,6 +195,7 @@ interface WeatherApiHour {
   temp_c?: number;
   is_day?: number;
   condition?: { text?: string; code?: number };
+  humidity?: number;
   precip_mm?: number;
   chance_of_rain?: number;
 }
@@ -284,7 +292,7 @@ function mapOpenMeteoDaily(data: OpenMeteoPayload, lang: 'vi' | 'en'): DailyPoin
       dayLabel: formatDayLabel(dateIso, idx, lang),
       tempMin: Math.round(d.temperature_2m_min?.[idx] ?? 0),
       tempMax: Math.round(d.temperature_2m_max?.[idx] ?? 0),
-      rainProbMax: normalizeRainProb(d.precipitation_probability_max?.[idx], mapped.kind, rainSum),
+      rainProbMax: normalizeRainProb(d.precipitation_probability_max?.[idx], mapped.kind, rainSum) ?? 0,
       rainSum,
       uvMax: Math.round(d.uv_index_max?.[idx] ?? 0),
       kind: mapped.kind,
@@ -335,6 +343,12 @@ function mapWeatherApiToDongNaiWeather(
       temp: idx === 0 ? currentTemp : Math.round(hr.temp_c ?? cur.temp_c ?? 0),
       rainProb: normalizeRainProb(hr.chance_of_rain, hrKind, hrRainMm),
       rainMm: hrRainMm,
+      humidity:
+        idx === 0
+          ? (cur.humidity != null ? Math.round(cur.humidity) : hr.humidity != null ? Math.round(hr.humidity) : null)
+          : hr.humidity != null
+            ? Math.round(hr.humidity)
+            : null,
       isDay: idx === 0 ? curIsDay : (hr.is_day ?? 1) === 1,
       kind: hrKind,
     };
@@ -350,7 +364,7 @@ function mapWeatherApiToDongNaiWeather(
       dayLabel: formatDayLabel(dateIso, idx, lang),
       tempMin: Math.round(fd.day?.mintemp_c ?? 0),
       tempMax: Math.round(fd.day?.maxtemp_c ?? 0),
-      rainProbMax: normalizeRainProb(fd.day?.daily_chance_of_rain, dayKind, dayRainSum),
+      rainProbMax: normalizeRainProb(fd.day?.daily_chance_of_rain, dayKind, dayRainSum) ?? 0,
       rainSum: dayRainSum,
       uvMax: Math.round(fd.day?.uv ?? 0),
       kind: dayKind,
@@ -375,7 +389,7 @@ function mapWeatherApiToDongNaiWeather(
   }
 
   const currentHour = allHours[startIdx];
-  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain, curKind, rainNow);
+  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain, curKind, rainNow) ?? 0;
   const rainProbNext3h = Math.max(
     rainProbNow,
     hourly[1]?.rainProb ?? 0,
@@ -615,9 +629,25 @@ async function mapOpenMeteoToDongNaiWeather(
   const h = data.hourly!;
   const d = data.daily!;
 
-  // Khớp đúng chỉ số khung giờ hiện tại (`YYYY-MM-DDTHH:00`) từ `data.current.time`
+  // Khớp đúng chỉ số khung giờ hiện tại (`YYYY-MM-DDTHH:00`) theo giờ Việt Nam GMT+7
+  const vnNowIso = (() => {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date());
+      const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+      return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:00`;
+    } catch {
+      return '';
+    }
+  })();
   const curHourIso =
-    typeof cur.time === 'string' && cur.time.length >= 13 ? `${cur.time.slice(0, 13)}:00` : '';
+    typeof cur.time === 'string' && cur.time.length >= 13 ? `${cur.time.slice(0, 13)}:00` : vnNowIso;
   let startIdx = curHourIso ? h.time!.findIndex((t) => t === curHourIso) : -1;
   if (startIdx < 0 && curHourIso) {
     for (let i = h.time!.length - 1; i >= 0; i--) {
@@ -628,6 +658,16 @@ async function mapOpenMeteoToDongNaiWeather(
     }
   }
   if (startIdx < 0) startIdx = 0;
+
+  console.log('[weather] hourly received:', {
+    currentTime: cur.time,
+    curHourIso,
+    startIdx,
+    timeSlice: h.time?.slice(startIdx, startIdx + 24),
+    tempSlice: h.temperature_2m?.slice(startIdx, startIdx + 24),
+    rainProbSlice: h.precipitation_probability?.slice(startIdx, startIdx + 24),
+    humiditySlice: h.relative_humidity_2m?.slice(startIdx, startIdx + 24),
+  });
 
   const isDay = (cur.is_day ?? 1) === 1;
   const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
@@ -640,12 +680,14 @@ async function mapOpenMeteoToDongNaiWeather(
     const pointIsDay = idx === 0 ? isDay : (h.is_day?.[i] ?? 1) === 1;
     const mapped = idx === 0 ? curMapped : mapWmoCode(h.weather_code?.[i] ?? cur.weather_code ?? 0, pointIsDay);
     const rainMm = idx === 0 ? Math.max(rainNow ?? 0, round1(h.precipitation?.[i] ?? 0)) : round1(h.precipitation?.[i] ?? 0);
+    const rawHum = idx === 0 ? (h.relative_humidity_2m?.[i] ?? cur.relative_humidity_2m) : h.relative_humidity_2m?.[i];
     return {
       timeIso: t,
       hourLabel: idx === 0 ? (lang === 'vi' ? 'Hiện tại' : 'Now') : formatHourLabel(t),
       temp: idx === 0 ? currentTemp : Math.round(h.temperature_2m?.[i] ?? currentTemp),
       rainProb: normalizeRainProb(h.precipitation_probability?.[i], mapped.kind, rainMm),
       rainMm,
+      humidity: rawHum != null ? Math.round(rawHum) : null,
       isDay: pointIsDay,
       kind: mapped.kind,
     };
@@ -660,7 +702,7 @@ async function mapOpenMeteoToDongNaiWeather(
   }
   const rawUvMax = d.uv_index_max?.[0];
   const uvMaxToday: number | null = rawUvMax != null ? round1(rawUvMax) : uvNow;
-  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(h.precipitation_probability?.[startIdx], curMapped.kind, rainNow ?? 0);
+  const rainProbNow = hourly[0]?.rainProb ?? normalizeRainProb(h.precipitation_probability?.[startIdx], curMapped.kind, rainNow ?? 0) ?? 0;
   const rainProbNext3h = Math.max(
     rainProbNow,
     hourly[1]?.rainProb ?? 0,

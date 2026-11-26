@@ -1143,10 +1143,18 @@ export default function AlertsPage() {
                           <span className="mono whitespace-nowrap text-[11px] font-bold text-muted">{pt.hourLabel}</span>
                           <WeatherGlyphInk kind={pt.kind} isDay={pt.isDay} className="h-6 w-6" />
                           <span className="mono text-sm font-extrabold text-ink">{Math.round(pt.temp)}°</span>
-                          <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
-                            <Droplets className="h-3 w-3" aria-hidden />
-                            {pt.rainProb}%
-                          </span>
+                          {pt.rainProb == null ? (
+                            <span className="mono text-[10px] font-semibold text-muted">--</span>
+                          ) : pt.rainProb > 0 ? (
+                            <span className="mono inline-flex items-center gap-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                              <Droplets className="h-3 w-3" aria-hidden />
+                              {pt.rainProb}%
+                            </span>
+                          ) : (
+                            <span className="whitespace-nowrap text-[10px] font-medium text-muted">
+                              {pt.humidity != null ? `Ẩm ${pt.humidity}%` : 'Khô ráo'}
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
