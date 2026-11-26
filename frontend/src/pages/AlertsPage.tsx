@@ -499,7 +499,7 @@ export default function AlertsPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [lang]);
 
   useEffect(() => {
     void loadAll();
@@ -1165,7 +1165,7 @@ export default function AlertsPage() {
                     {weatherSyncAt ? `Đồng bộ lúc: ${fmtDate(weatherSyncAt, true)}` : ''}
                   </span>
                 </div>
-                <div className="no-scrollbar flex w-full flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain pb-1 pr-4">
+                <div className="no-scrollbar -mx-3.5 flex flex-nowrap gap-2.5 overflow-x-auto overscroll-x-contain px-4 pb-1">
                   {weather.map((w) => {
                     const targetWard = WARD_BY_CODE[w.wardCode];
                     const isSelected =
