@@ -486,11 +486,14 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
         photo: croppedSubImage,
       },
     });
-    expect(cropAttempt.status).toBe(422);
-    expect(cropAttempt.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
-    expect(cropAttempt.data.error.details.relatedReportId).toBe(masterReportId);
+    expect(cropAttempt.status).toBe(201);
+    expect(cropAttempt.data.outcome).toBe('created');
+    expect(cropAttempt.data.report.needsManualReview).toBe(true);
+    expect(cropAttempt.data.report.ai.decision).toBe('HUMAN_REVIEW');
+    expect(cropAttempt.data.report.ai.isDuplicateCrop).toBe(true);
+    expect(cropAttempt.data.report.possibleDuplicateOf).toBe(masterReportId);
 
-    // 3C. Kẻ xấu gửi Ảnh Chụp Màn Hình Điện Thoại -> bị Tầng 2 Gatekeeper chặn ngay (HTTP 422)!
+    // 3C. Ảnh chụp màn hình / thiếu EXIF -> Chuyển sang Soft Flag (201 + needsManualReview) để cán bộ kiểm tra
     const screenshotImg = makeMobileScreenshot();
     const screenAttempt = await call<any>('/api/reports', {
       token: citizen2,
@@ -505,13 +508,16 @@ describe('Integration Suite: Fail-Loud MongoDB, Super Admin RBAC 5 Cấp, OTHER 
         photo: screenshotImg,
       },
     });
-    expect(screenAttempt.status).toBe(422);
-    expect(screenAttempt.data.error.code).toBe('SCREENSHOT_DETECTED');
+    expect(screenAttempt.status).toBe(201);
+    expect(screenAttempt.data.outcome).toBe('created');
+    expect(screenAttempt.data.report.needsManualReview).toBe(true);
+    expect(screenAttempt.data.report.ai.decision).toBe('HUMAN_REVIEW');
 
-    // Xác nhận cả 2 báo cáo giả đều KHÔNG lọt lên bản đồ công khai
-    const publicAfterFakes = await call<any[]>('/api/reports?scope=city');
-    expect(publicAfterFakes.status).toBe(200);
-    expect(publicAfterFakes.data.some((r) => r.title.includes('Ảnh cắt từ góc nhỏ') || r.title.includes('Ảnh chụp màn hình'))).toBe(false);
+    // Xác nhận đơn đã tiếp nhận gắn cờ nhẹ để Cán bộ IOC kiểm tra trong Hàng đợi Kiểm duyệt
+    const modQueueAfterFakes = await call<any[]>('/api/admin/moderation-queue?scope=city', { token: saToken });
+    expect(modQueueAfterFakes.status).toBe(200);
+    expect(modQueueAfterFakes.data.some((m) => m.report.id === cropAttempt.data.report.id)).toBe(true);
+    expect(modQueueAfterFakes.data.some((m) => m.report.id === screenAttempt.data.report.id)).toBe(true);
 
     // 3D. Nghiệm thu Trước & Sau Xử Lý:
     // - Nếu gửi ảnh SAU vẫn còn nguyên đống rác (dù tối hơn 80%) -> BỊ TỪ CHỐI!

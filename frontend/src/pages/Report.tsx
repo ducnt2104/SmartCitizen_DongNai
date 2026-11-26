@@ -9,9 +9,11 @@ import {
   MapPin,
   Mic,
   MicOff,
+  Pencil,
   RefreshCw,
   ShieldAlert,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -30,7 +32,7 @@ const PrecisionLocationPicker = lazy(() =>
 import { DONG_NAI_WARDS, WARD_BY_CODE } from '../data/dongNaiWards';
 import { useOnline } from '../db/hooks';
 import { db } from '../db/localDb';
-import { syncBus, type SyncEventDetail } from '../db/sync';
+import { discardOutboxItem, retryFailed, syncBus, type SyncEventDetail } from '../db/sync';
 import { usePreciseLocation } from '../hooks/usePreciseLocation';
 import { useI18n, type I18nKey } from '../i18n';
 import { api, apiMultipart, ApiError, NetworkError } from '../lib/api';
@@ -178,6 +180,9 @@ export default function ReportPage() {
   const [submitted, setSubmitted] = useState<ClientReport | null>(null);
   const [outcome, setOutcome] = useState<{ code: string; report: ClientReport } | null>(null);
   const [rejectedMessage, setRejectedMessage] = useState<string | null>(null);
+  const [failedOutboxId, setFailedOutboxId] = useState<string | null>(null);
+  const [editingOutboxId, setEditingOutboxId] = useState<string | null>(null);
+  const [editOutboxNotice, setEditOutboxNotice] = useState<string | null>(null);
 
   const activeWardCode =
     manualWardCode || geo?.ward?.wardCode || (pin ? nearestWard(pin.lat, pin.lng).wardCode : '');
@@ -661,13 +666,116 @@ export default function ReportPage() {
 
   // ── Bước 3: gửi (Local-First, Outbox) ─────────────────────────────────────────
   useEffect(() => {
+    const editId = params.get('editOutbox');
+    if (!editId) return;
+    let alive = true;
+    void (async () => {
+      const item = await db.outboxQueue.get(editId);
+      if (!alive || !item || (item.kind !== 'create_report' && item.kind !== 'proxy_report')) return;
+      const p = (item.payload ?? {}) as Record<string, unknown>;
+      dirtyFieldsRef.current.clear();
+      if (typeof p.category === 'string') {
+        setCategory(p.category as Category);
+        dirtyFieldsRef.current.add('category');
+      }
+      if (typeof p.aiSuggestedLabel === 'string') {
+        setOtherLabel(p.aiSuggestedLabel);
+        dirtyFieldsRef.current.add('otherLabel');
+      }
+      if (typeof p.title === 'string') {
+        setTitle(p.title);
+        dirtyFieldsRef.current.add('title');
+      }
+      if (typeof p.description === 'string') {
+        setDescription(p.description);
+        dirtyFieldsRef.current.add('description');
+      }
+      if (typeof p.severity === 'number') setSeverity(p.severity as 1 | 2 | 3 | 4 | 5);
+      if (typeof p.isEmergency === 'boolean') setIsEmergency(p.isEmergency);
+      if (typeof p.lat === 'number' && typeof p.lng === 'number') {
+        const instant = resolveInstantWardFromCoords(p.lat, p.lng);
+        setPin({ lat: p.lat, lng: p.lng });
+        if (instant.inBounds) setGeo(instant.geo);
+      }
+      if (typeof p.wardCode === 'string') {
+        setManualWardCode(p.wardCode);
+        dirtyFieldsRef.current.add('wardCode');
+      }
+      if (typeof p.address === 'string') {
+        setAddress(p.address);
+        dirtyFieldsRef.current.add('address');
+      }
+      setLeftScene(Boolean(p.leftScene));
+
+      const displayBlob = p.displayBlob instanceof Blob ? p.displayBlob : null;
+      const aiBlob = p.aiBlob instanceof Blob ? p.aiBlob : displayBlob;
+      const legacyUrl =
+        p.photo && typeof p.photo === 'object' && typeof (p.photo as { dataUrl?: unknown }).dataUrl === 'string'
+          ? String((p.photo as { dataUrl: string }).dataUrl)
+          : null;
+      const previewUrl = displayBlob ? URL.createObjectURL(displayBlob) : legacyUrl;
+      if (previewUrl && displayBlob && aiBlob) {
+        replacePreviewUrl(previewUrl);
+        const edgeStats = (p.edge as EdgeStatsMsg | undefined) ?? {
+          blurScore: 80,
+          brightness: 128,
+          flatRatio: 0.15,
+          aspect: 4 / 3,
+          sharpEdgeDensity: 0.12,
+          likelyScreenshot: false,
+          screenshotConfidence: 0.1,
+        };
+        const exifMeta = (p.exif as ExtractedExifMetadata | undefined) ?? {
+          capturedAt: null,
+          cameraMake: null,
+          cameraModel: null,
+          software: null,
+          gps: null,
+        };
+        setPhoto({
+          previewUrl,
+          aiBlob,
+          aiMimeType: aiBlob.type || 'image/webp',
+          aiSha256: '',
+          displayBlob,
+          dHash: typeof p.dHash === 'string' ? p.dHash : '0000000000000000',
+          pHash: '',
+          subGridHashes: [],
+          colorHistogram: [],
+          bytes: displayBlob.size,
+          aiBytes: aiBlob.size,
+          originalBytes: displayBlob.size,
+          width: 800,
+          height: 600,
+          totalMs: 0,
+          hashMs: 0,
+          stats: edgeStats,
+          exif: exifMeta,
+          exifGps: exifMeta.gps ?? null,
+        });
+      }
+      setEditingOutboxId(editId);
+      setEditOutboxNotice(item.lastError || t('outbox.failedToast'));
+      setSubmitted(null);
+      setOutcome(null);
+      setRejectedMessage(null);
+      setStep(1);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [params, replacePreviewUrl, t]);
+
+  useEffect(() => {
     if (!submitted) return;
     const onEv = (e: Event): void => {
       const d = (e as CustomEvent<SyncEventDetail>).detail;
       if (d.type === 'report_result' && d.localId === submitted.id) {
         setRejectedMessage(null);
+        setFailedOutboxId(null);
         setOutcome({ code: d.messageCode, report: d.report });
       } else if (d.type === 'item_failed' && d.item.targetId === submitted.id) {
+        setFailedOutboxId(d.item.id);
         setRejectedMessage(d.message);
       }
     };
@@ -682,9 +790,11 @@ export default function ReportPage() {
     }
     setSubmitting(true);
     setRejectedMessage(null);
+    setFailedOutboxId(null);
     try {
       const finalWardCode = activeWardCode || nearestWard(pin.lat, pin.lng).wardCode;
       const finalWardName = WARD_BY_CODE[finalWardCode]?.name ?? nearestWard(pin.lat, pin.lng).name;
+      const prevEditId = editingOutboxId;
       const rep = await submitReport(
         {
           category,
@@ -715,6 +825,11 @@ export default function ReportPage() {
         },
         proxy,
       );
+      if (prevEditId) {
+        await discardOutboxItem(prevEditId);
+        setEditingOutboxId(null);
+        setEditOutboxNotice(null);
+      }
       setSubmitted(rep);
       if (!online) toast('info', t('report.savedOffline'), t('report.savedOfflineText'));
     } catch (err) {
@@ -753,6 +868,9 @@ export default function ReportPage() {
     setSubmitted(null);
     setOutcome(null);
     setRejectedMessage(null);
+    setFailedOutboxId(null);
+    setEditingOutboxId(null);
+    setEditOutboxNotice(null);
     setLocalDup(null);
     setHoneypot('');
     formLoadedAtRef.current = Date.now();
@@ -779,14 +897,48 @@ export default function ReportPage() {
   // ── Màn hình kết quả ──────────────────────────────────────────────────────────
   if (submitted) {
     if (rejectedMessage) {
+      const targetOutboxId = failedOutboxId ?? submitted.id;
       return (
-        <div className="card space-y-4 border-2 border-danger/40 bg-danger-soft/40 p-5 text-center" role="alert">
-          <ShieldAlert className="mx-auto h-12 w-12 text-danger" aria-hidden />
-          <h1 className="text-xl font-extrabold text-danger">Báo cáo bị từ chối bởi Cổng Kiểm định AI</h1>
-          <p className="text-sm font-medium text-ink">{rejectedMessage}</p>
-          <button type="button" onClick={reset} className="btn btn-primary w-full">
-            Chụp lại ảnh hiện trường thật
-          </button>
+        <div className="card space-y-4 border border-warn/40 bg-warn-soft/30 p-5 text-center" role="alert">
+          <ShieldAlert className="mx-auto h-12 w-12 text-warn" aria-hidden />
+          <h1 className="text-xl font-extrabold text-ink">{t('report.sendFailedTitle')}</h1>
+          <p className="rounded-xl bg-surface p-3 text-sm font-medium text-ink">{rejectedMessage}</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => {
+                if (failedOutboxId) setEditingOutboxId(failedOutboxId);
+                setEditOutboxNotice(rejectedMessage);
+                setSubmitted(null);
+                setOutcome(null);
+                setRejectedMessage(null);
+                setStep(1);
+              }}
+              className="btn btn-primary"
+            >
+              <Pencil className="h-4 w-4" aria-hidden /> {t('report.sendFailedEdit')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRejectedMessage(null);
+                void retryFailed(targetOutboxId);
+              }}
+              className="btn btn-ghost"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden /> {t('report.sendFailedRetry')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void discardOutboxItem(targetOutboxId);
+                reset();
+              }}
+              className="btn btn-ghost text-danger"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden /> {t('report.sendFailedRemove')}
+            </button>
+          </div>
         </div>
       );
     }
@@ -841,7 +993,14 @@ export default function ReportPage() {
 
   const step1Ok = !!photo && !!category && title.trim().length >= 3 && !processing;
   const step2Ok = !!pin && !!geo?.inBounds && !!activeWardCode;
-  const authLow = Boolean(vision && (vision.authenticityScore < 45 || vision.decision === 'AUTO_REJECT'));
+  const authLow = Boolean(
+    vision &&
+      (vision.authenticityScore < 60 ||
+        vision.decision === 'HUMAN_REVIEW' ||
+        vision.needsManualReview ||
+        vision.degraded ||
+        (vision.forensicFlags?.length ?? 0) > 0),
+  );
 
   return (
     <div className="space-y-4">
@@ -871,6 +1030,12 @@ export default function ReportPage() {
           <h2 id="s1" className="sr-only">
             {t('report.step1')}
           </h2>
+          {editOutboxNotice && (
+            <p role="status" className="flex gap-2 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              {t('report.editOutboxBanner', { reason: editOutboxNotice })}
+            </p>
+          )}
           {!photo && !processing && <PhotoExamples />}
           <CameraCapture onFile={(f) => void onFile(f)} disabled={processing} autoStart={autoCapture && !photo} />
 
@@ -949,7 +1114,7 @@ export default function ReportPage() {
                 </p>
               )}
 
-              {photo.stats.blurScore < 25 && (
+              {photo.stats.blurScore < 12 && (
                 <p role="alert" className="flex gap-2 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                   {t('report.blurWarn')}
@@ -957,10 +1122,11 @@ export default function ReportPage() {
               )}
 
               {photo.stats.likelyScreenshot && (
-                <p role="alert" className="flex gap-2 rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">
-                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  Phát hiện dấu hiệu ảnh chụp màn hình hoặc thiếu thông số camera gốc (xác suất{' '}
-                  {Math.round((photo.stats.screenshotConfidence ?? 0.7) * 100)}%). Vui lòng chụp trực tiếp hiện trường.
+                <p role="status" className="flex gap-2 rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  {t('report.screenshotSoftWarn', {
+                    pct: Math.round((photo.stats.screenshotConfidence ?? 0.7) * 100),
+                  })}
                 </p>
               )}
 
@@ -990,11 +1156,26 @@ export default function ReportPage() {
               )}
 
               {vision && (
-                <div className={`space-y-1 rounded-xl p-3 text-sm ${authLow ? 'bg-danger-soft text-danger' : 'bg-ok-soft text-ok'}`}>
+                <div
+                  className={`space-y-1 rounded-xl p-3 text-sm ${
+                    vision.abuseRisk === 'HIGH'
+                      ? 'bg-danger-soft text-danger'
+                      : authLow
+                        ? 'bg-warn-soft text-warn'
+                        : 'bg-ok-soft text-ok'
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="flex items-center gap-2 font-bold">
-                      {authLow ? <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden /> : <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />}
-                      {authLow ? t('report.authLow') : t('report.authOk')} · <span className="mono">{vision.authenticityScore}/100</span>
+                      {vision.abuseRisk === 'HIGH' ? (
+                        <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />
+                      ) : authLow ? (
+                        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
+                      )}
+                      {authLow ? t('report.authLow') : t('report.authOk')} ·{' '}
+                      <span className="mono">{vision.authenticityScore}/100</span>
                     </p>
                     {aiElapsedMs !== null && (
                       <span className="mono text-[11px] font-semibold opacity-90">
@@ -1004,9 +1185,11 @@ export default function ReportPage() {
                       </span>
                     )}
                   </div>
-                  {vision.citizenFeedback && vision.decision === 'AUTO_REJECT' && (
+                  {vision.abuseRisk === 'HIGH' && vision.citizenFeedback ? (
                     <p className="text-xs font-medium">{vision.citizenFeedback}</p>
-                  )}
+                  ) : authLow ? (
+                    <p className="text-xs font-medium">{t('report.softFlagCitizenNote')}</p>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -1361,7 +1544,9 @@ export default function ReportPage() {
                 {t('report.emergencyPreview', { name: geo.arterial.name })}
               </p>
             )}
-            {authLow && <p className="rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">{t('report.quarantinePreview')}</p>}
+            {(authLow || photo.stats.likelyScreenshot) && (
+              <p className="rounded-xl bg-warn-soft p-3 text-sm font-semibold text-warn">{t('report.softReviewPreview')}</p>
+            )}
           </div>
           <p className="rounded-xl bg-surface-2 p-3 text-sm">
             {session ? t('report.sendAs', { name: session.user.name }) : online ? t('report.needOtp') : t('report.offlineNoAuth')}

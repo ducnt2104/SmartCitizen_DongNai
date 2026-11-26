@@ -98,8 +98,8 @@ function SyncToasts() {
           t(`result.${d.messageCode}` as I18nKey),
           d.report.code,
         );
-      } else if (d.type === 'item_failed') {
-        toast('error', t('outbox.failedToast'), d.message);
+      } else if (d.type === 'item_failed' && d.notify !== false) {
+        toast('error', d.message || t('outbox.failedToast'), d.message ? t('outbox.failedToast') : undefined);
       }
     };
     syncBus.addEventListener('sync', on);

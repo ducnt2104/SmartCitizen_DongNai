@@ -281,9 +281,9 @@ export class Stage0PreFilterService {
       forensicSignals.push(`exif_editing_or_ai_software:${ctx.exif.software.slice(0, 40)}`);
     }
     if (ctx.edge) {
-      if (ctx.edge.flatRatio > 0.62) forensicSignals.push('high_flat_ui_ratio');
-      if (ctx.edge.blurScore < 20) forensicSignals.push('severe_blur');
-      if (ctx.edge.brightness < 18 || ctx.edge.brightness > 245) forensicSignals.push('extreme_exposure');
+      if (ctx.edge.flatRatio > 0.8) forensicSignals.push('high_flat_ui_ratio');
+      if (ctx.edge.blurScore < 10) forensicSignals.push('severe_blur');
+      if (ctx.edge.brightness < 10 || ctx.edge.brightness > 250) forensicSignals.push('extreme_exposure');
     }
     if (injectionDetected) {
       forensicSignals.push('prompt_injection_attempted');

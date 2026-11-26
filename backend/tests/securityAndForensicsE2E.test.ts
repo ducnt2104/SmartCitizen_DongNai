@@ -468,7 +468,7 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
       bruteStatus = bad.status;
     }
     expect(bruteStatus).toBe(429);
-  });
+  }, 15_000);
 
   it('2. Đổi Mật khẩu / Email / SĐT yêu cầu xác thực lại, tăng tokenVersion, thu hồi phiên khác và giữ phiên hiện tại hoạt động liền mạch', async () => {
     const email = 'sec.change.flow@dongnai.vn';
@@ -575,7 +575,7 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
     expect(adminLogin.status).toBe(200);
     const adminToken = adminLogin.data.token as string;
 
-    // 3A-1: Ảnh AI / C2PA (`Software: Midjourney v6.1`) -> HTTP 422 AI_IMAGE_DETECTED
+    // 3A-1: Ảnh có chữ ký AI (`Software: Midjourney v6.1`) -> Soft Flag 201 + needsManualReview (không chặn cứng dân)
     const aiFake = await makeStreetScene({ defect: 'full', exifSoftware: 'Midjourney v6.1' });
     const aiResp = await call<any>('/api/reports', {
       token: cToken,
@@ -590,10 +590,13 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
         photo: { dataUrl: aiFake.dataUrl, dHash: aiFake.dHash },
       },
     });
-    expect(aiResp.status).toBe(422);
-    expect(aiResp.data.error.code).toBe('AI_IMAGE_DETECTED');
+    expect(aiResp.status).toBe(201);
+    expect(aiResp.data.outcome).toBe('created');
+    expect(aiResp.data.report.needsManualReview).toBe(true);
+    expect(aiResp.data.report.ai.decision).toBe('HUMAN_REVIEW');
+    expect(aiResp.data.report.aiFlag).toBe('suspected_ai_or_edited');
 
-    // 3A-2: Ảnh Chụp Màn Hình -> HTTP 422 SCREENSHOT_DETECTED
+    // 3A-2: Ảnh Chụp Màn Hình -> Soft Flag 201 + needsManualReview (không chặn cứng dân)
     const screenFake = await makeMobileScreenshot();
     const screenResp = await call<any>('/api/reports', {
       token: cToken,
@@ -608,10 +611,12 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
         photo: { dataUrl: screenFake.dataUrl, dHash: screenFake.dHash },
       },
     });
-    expect(screenResp.status).toBe(422);
-    expect(screenResp.data.error.code).toBe('SCREENSHOT_DETECTED');
+    expect(screenResp.status).toBe(201);
+    expect(screenResp.data.outcome).toBe('created');
+    expect(screenResp.data.report.needsManualReview).toBe(true);
+    expect(screenResp.data.report.ai.decision).toBe('HUMAN_REVIEW');
 
-    // 3A-3: Ảnh ghép giả ELA (`makeElaTamperedJpeg`) -> HTTP 422 EDITED_IMAGE_DETECTED
+    // 3A-3: Ảnh nghi ghép ELA (`makeElaTamperedJpeg`) -> Soft Flag 201 + needsManualReview
     const elaFake = await makeElaTamperedJpeg();
     const elaResp = await call<any>('/api/reports', {
       token: cToken,
@@ -626,13 +631,31 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
         photo: { dataUrl: elaFake.dataUrl, dHash: elaFake.dHash },
       },
     });
-    expect(elaResp.status).toBe(422);
-    expect(elaResp.data.error.code).toBe('EDITED_IMAGE_DETECTED');
+    expect(elaResp.status).toBe(201);
+    expect(elaResp.data.outcome).toBe('created');
+    expect(elaResp.data.report.needsManualReview).toBe(true);
 
-    // Kiểm tra User Violations & Audit Log đã tự động ghi nhận cả 3 lần chặn Gatekeeper
+    // Chỉ chặn cứng 422 khi nội dung thực sự spam/quấy rối/liên kết quảng cáo
+    const spamTextResp = await call<any>('/api/reports', {
+      token: cToken,
+      body: {
+        idempotencyKey: `e2e-spam-${Date.now()}`,
+        category: 'rac_thai',
+        title: 'Khuyến mãi casino nạp thẻ https://spam-link.example/win',
+        description: 'Truy cập https://spam-link.example để nhận thưởng ngay hôm nay',
+        lat: 10.9495,
+        lng: 106.8255,
+        wardCode: 'DN-TB',
+        photo: { dataUrl: aiFake.dataUrl, dHash: '9999999999999999' },
+      },
+    });
+    expect(spamTextResp.status).toBe(422);
+    expect(spamTextResp.data.error.code).toBe('SPAM_TEXT_REJECTED');
+
+    // Kiểm tra User Violations & Audit Log ghi nhận vụ spam text
     const vio = await call<any>(`/api/admin/users/${citizenId}/violations`, { token: adminToken });
     expect(vio.status).toBe(200);
-    expect(vio.data.user.violationCount).toBeGreaterThanOrEqual(3);
+    expect(vio.data.user.violationCount).toBeGreaterThanOrEqual(1);
     expect(vio.data.violations.some((v: any) => v.action === 'report.rejected_gatekeeper')).toBe(true);
 
     // Tạo 1 công dân uy tín sạch (`honestCitizen`) gửi ảnh hiện trường thật hợp lệ
@@ -688,8 +711,9 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
         photo: { dataUrl: flopped.dataUrl, dHash: flopped.dHash },
       },
     });
-    expect(flopRes.status).toBe(422);
-    expect(flopRes.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
+    expect(flopRes.status).toBe(201);
+    expect(flopRes.data.report.needsManualReview).toBe(true);
+    expect(flopRes.data.report.ai.decision).toBe('HUMAN_REVIEW');
 
     const cropped = await transformBufferWithHash(realBefore.buffer, 'crop');
     const cropRes = await call<any>('/api/reports', {
@@ -705,13 +729,15 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
         photo: { dataUrl: cropped.dataUrl, dHash: cropped.dHash },
       },
     });
-    expect(cropRes.status).toBe(422);
-    expect(cropRes.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
+    expect(cropRes.status).toBe(201);
+    expect(cropRes.data.report.needsManualReview).toBe(true);
+    expect(cropRes.data.report.ai.decision).toBe('HUMAN_REVIEW');
 
-    // Bảo đảm ảnh giả / trùng KHÔNG lọt ra bản đồ công khai
-    const pubList = await call<any[]>('/api/reports?scope=city');
-    expect(pubList.data.some((r) => r.id === masterId)).toBe(true);
-    expect(pubList.data.some((r) => String(r.title).includes('Ảnh ') || String(r.title).includes('giả mạo'))).toBe(false);
+    // Bảo đảm ảnh nghi vấn đều có trong Moderation Queue để cán bộ đối chiếu thủ công
+    const modPre = await call<any[]>('/api/admin/moderation-queue?scope=city', { token: adminToken });
+    expect(modPre.status).toBe(200);
+    expect(modPre.data.some((m) => m.report.id === aiResp.data.report.id)).toBe(true);
+    expect(modPre.data.some((m) => m.report.id === screenResp.data.report.id)).toBe(true);
     void honestId;
 
     // 3B: Duyệt ảnh Sau Khi Hoàn Thành (4 bước Before/After nghiêm ngặt)
@@ -781,17 +807,17 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
     expect(resStaleExif.data.accepted).toBe(false);
     expect(resStaleExif.data.report.resolution.rejectedReasonCode).toBe('EXIF_BEFORE_REPORT');
 
-    // 6) Đưa 1 báo cáo nghi vấn (EXIF cũ >90 ngày & lệch GPS >500m & user bị giám sát -> quarantined) vào Hàng đợi Kiểm duyệt (Moderation Queue) -> Admin APPROVE
+    // 6) Đưa 1 báo cáo nghi vấn (EXIF cũ >90 ngày & lệch GPS >500m) vào Hàng đợi Kiểm duyệt (Moderation Queue) -> Admin APPROVE
     const cleanReviewScene = await makeStreetScene({ defect: 'full', water: true, bright: 0.78 });
     const flagCitizenRes = await call<any>('/api/reports', {
       token: cToken,
       body: {
         idempotencyKey: `e2e-borderline-${Date.now()}`,
-        category: 'rac_thai',
-        title: 'Điểm tập kết rác tồn đọng khu phố 4 Trấn Biên',
-        description: 'Bãi rác lâu ngày chưa được thu gom sạch tại ngã tư đường.',
-        lat: 10.951,
-        lng: 106.826,
+        category: 'den_duong',
+        title: 'Đèn đường nhấp nháy hư hỏng tuyến hẻm 4 Trấn Biên',
+        description: 'Trụ đèn chiếu sáng tắt mở liên tục vào ban đêm gây mất an toàn.',
+        lat: 10.9412,
+        lng: 106.8412,
         wardCode: 'DN-TB',
         photo: {
           dataUrl: cleanReviewScene.dataUrl,
@@ -806,6 +832,8 @@ describe('E2E Full-Stack: Strict Single-Session, Re-auth, RBAC & Multi-Layer AI 
       },
     });
     expect(flagCitizenRes.status).toBe(201);
+    expect(flagCitizenRes.data.outcome).toBe('created');
+    expect(flagCitizenRes.data.report.ai.moderationDecision).toBe('HUMAN_REVIEW');
     const modQueue = await call<any[]>('/api/admin/moderation-queue?scope=city', { token: adminToken });
     expect(modQueue.status).toBe(200);
     expect(modQueue.data.some((m) => m.report.id === flagCitizenRes.data.report.id)).toBe(true);

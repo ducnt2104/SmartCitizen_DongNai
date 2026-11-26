@@ -3,10 +3,26 @@ import { DEPARTMENTS, normalizeCategoryInput, normalizeRoleInput } from '../shar
 import { isValidHash } from '../shared/dhash';
 import type { Category } from '../shared/types';
 
+export const exifMetadataSchema = z.object({
+  capturedAt: z.string().max(64).nullable().optional(),
+  cameraMake: z.string().max(80).nullable().optional(),
+  cameraModel: z.string().max(80).nullable().optional(),
+  software: z.string().max(160).nullable().optional(),
+  gps: z
+    .object({
+      lat: z.number().finite(),
+      lng: z.number().finite(),
+      inBounds: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
 const hash = z.string().refine(isValidHash, 'dHash phải là 16 ký tự hex');
 const photo = z.object({
   dataUrl: z.string().max(1_900_000).optional(),
   dHash: hash.optional(),
+  exif: exifMetadataSchema.nullish().transform((v) => v ?? undefined),
 });
 const identifier = z.string().min(5).max(120);
 const category = z
@@ -30,21 +46,6 @@ export const edgeStatsSchema = z.object({
   sharpEdgeDensity: z.number().min(0).max(1).optional(),
   likelyScreenshot: z.boolean().optional(),
   screenshotConfidence: z.number().min(0).max(1).optional(),
-});
-
-export const exifMetadataSchema = z.object({
-  capturedAt: z.string().max(64).nullable().optional(),
-  cameraMake: z.string().max(80).nullable().optional(),
-  cameraModel: z.string().max(80).nullable().optional(),
-  software: z.string().max(160).nullable().optional(),
-  gps: z
-    .object({
-      lat: z.number().finite(),
-      lng: z.number().finite(),
-      inBounds: z.boolean().optional(),
-    })
-    .nullable()
-    .optional(),
 });
 
 export const schemas = {
@@ -190,8 +191,8 @@ export const schemas = {
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
     wardCode: wardCode.optional(),
-    edge: edgeStatsSchema.optional(),
-    exif: exifMetadataSchema.optional(),
+    edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+    exif: exifMetadataSchema.nullable().optional(),
   }),
   verifyResolution: z.object({
     reportId: z.string().min(3).max(64),
@@ -199,8 +200,8 @@ export const schemas = {
     dHash: hash.optional(),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
-    edge: edgeStatsSchema.optional(),
-    exif: exifMetadataSchema.optional(),
+    edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+    exif: exifMetadataSchema.nullable().optional(),
   }),
   tacticalBriefing: z.object({
     reportId: z.string().min(3).max(64).optional(),
@@ -241,8 +242,8 @@ export const schemas = {
     leftScene: z.boolean().default(false),
     isProxyReport: z.boolean().default(false),
     seniorSubmitted: z.boolean().default(false),
-    edge: edgeStatsSchema.optional(),
-    exif: exifMetadataSchema.optional(),
+    edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+    exif: exifMetadataSchema.nullable().optional(),
   }),
   attachPhoto: z.object({ photo: photo.optional(), dHash: hash.optional() }),
   rate: z.object({ stars: z.number().int().min(1).max(5), comment: z.string().max(400).default('') }),
@@ -261,8 +262,8 @@ export const schemas = {
     override: z.boolean().default(false),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
-    edge: edgeStatsSchema.optional(),
-    exif: exifMetadataSchema.optional(),
+    edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+    exif: exifMetadataSchema.nullable().optional(),
   }),
   markSpam: z.object({ reason: z.string().max(300).default('') }),
 
@@ -317,8 +318,8 @@ export const schemas = {
       lng: z.number().finite().optional(),
       afterPhoto: photo.optional(),
       override: z.boolean().default(false),
-      edge: edgeStatsSchema.optional(),
-      exif: exifMetadataSchema.optional(),
+      edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+      exif: exifMetadataSchema.nullable().optional(),
     })
     .refine((d) => Boolean(d.status || d.step), 'Cần truyền trạng thái nhiệm vụ (EN_ROUTE, ARRIVED, IN_PROGRESS, RESOLVED).'),
   rescueRelease: z.object({
@@ -337,8 +338,8 @@ export const schemas = {
     dHash: hash.optional(),
     note: z.string().max(400).default(''),
     override: z.boolean().default(false),
-    edge: edgeStatsSchema.optional(),
-    exif: exifMetadataSchema.optional(),
+    edge: edgeStatsSchema.nullish().transform((v) => v ?? undefined),
+    exif: exifMetadataSchema.nullable().optional(),
     lat: z.number().finite().optional(),
     lng: z.number().finite().optional(),
   }),

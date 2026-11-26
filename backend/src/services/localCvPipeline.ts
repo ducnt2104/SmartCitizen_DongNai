@@ -383,40 +383,40 @@ export async function runSharpAuthenticityCheck(
 
   const onnxPred = predictWithLocalOnnxModel(features16);
 
-  let score = hasCameraExif ? 92 : 85;
+  let score = hasCameraExif ? 92 : 88;
   const flags: string[] = [];
 
   if (screenshotSoftware) {
-    score -= 50;
+    score -= 35;
     flags.push('exif_screenshot_software');
   }
-  if (flatRatio > 0.62) {
-    score -= 36;
+  if (flatRatio > 0.78) {
+    score -= 28;
     flags.push('high_flat_ui_surface');
-  } else if (flatRatio > 0.48 && matchesPhoneScreenRatio && topBandVar < 35) {
-    score -= 32;
+  } else if (flatRatio > 0.62 && matchesPhoneScreenRatio && topBandVar < 22) {
+    score -= 22;
     flags.push('mobile_screenshot_layout');
   }
-  if (sharpEdgeRatio > 0.45 && !hasCameraExif) {
-    score -= 26;
+  if (sharpEdgeRatio > 0.6 && !hasCameraExif) {
+    score -= 18;
     flags.push('sharp_ui_edges');
   }
-  if (moireRatio > 0.14 || onnxPred.isScreenPhotoProb >= 0.72) {
-    score -= 28;
+  if (moireRatio > 0.35 || onnxPred.isScreenPhotoProb >= 0.9) {
+    score -= 20;
     flags.push('screen_moire_pattern');
   }
-  const hasScreenshotVisualEvidence = flatRatio >= 0.45 || sharpEdgeRatio >= 0.35 || matchesPhoneScreenRatio;
-  if (onnxPred.onnxModelLoaded && onnxPred.isScreenshotProb >= 0.72 && !hasCameraExif && hasScreenshotVisualEvidence) {
-    score -= 30;
+  const hasScreenshotVisualEvidence = flatRatio >= 0.72 || sharpEdgeRatio >= 0.58;
+  if (onnxPred.onnxModelLoaded && onnxPred.isScreenshotProb >= 0.88 && !hasCameraExif && hasScreenshotVisualEvidence) {
+    score -= 22;
     flags.push('onnx_screenshot_detected');
   }
-  if (blurVar < 22) {
-    score -= 24;
+  if (blurVar < 12) {
+    score -= 18;
     flags.push('severe_blur');
   }
 
-  const finalScore = Math.max(5, Math.min(99, Math.round(score)));
-  const isAuthentic = finalScore >= screenshotThreshold;
+  const finalScore = Math.max(25, Math.min(99, Math.round(score)));
+  const isAuthentic = finalScore >= Math.min(screenshotThreshold, 55);
   const latencyMs = Math.round((performance.now() - t0) * 10) / 10;
 
   return {

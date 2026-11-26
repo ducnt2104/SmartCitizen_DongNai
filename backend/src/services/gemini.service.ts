@@ -14,6 +14,7 @@ import {
   type Category,
   type CivicAlertItem,
   type ForensicSignals,
+  type ModerationDecision,
   type OfficialBulletinItem,
   type TacticalBriefing,
   type VisionResult,
@@ -57,6 +58,31 @@ interface GeminiRestGenerateParams {
   model?: string;
   contents: unknown;
   config?: Record<string, unknown>;
+}
+
+function derivePrimaryAiFlag(
+  flags: string[],
+  isDegradedCloud: boolean,
+  softSuspected: boolean,
+): string | null {
+  if (flags.some((f) => /exif_screenshot_software/i.test(f))) {
+    return 'suspected_screenshot';
+  }
+  if (isDegradedCloud && flags.includes('ai_cloud_fallback_manual_review')) {
+    return 'ai_fallback_manual_review';
+  }
+  if (flags.some((f) => /(screenshot|moire|high_flat_ui)/i.test(f))) {
+    return 'suspected_screenshot';
+  }
+  if (flags.some((f) => /(c2pa|ai_signature|ai_smooth|ela_tamper|editing_software)/i.test(f))) {
+    return 'suspected_ai_or_edited';
+  }
+  if (flags.some((f) => /duplicate/i.test(f))) return 'suspected_duplicate_crop';
+  if (flags.some((f) => /blurry|severe_blur|bad_exposure|extreme_exposure/i.test(f))) {
+    return 'low_image_clarity';
+  }
+  if (softSuspected || flags.length > 0) return 'manual_review_recommended';
+  return null;
 }
 
 export interface EdgeStats {
@@ -1089,18 +1115,19 @@ export class GeminiService {
           declaredLat: input.lat,
           declaredLng: input.lng,
           allowTinyTestStub: input.allowTinyTestStub,
+          mode: 'citizen_intake',
         }),
       ]);
 
       const cvLooksClean =
         !forensicAudit.hardRejectCode &&
-        forensicAudit.isAuthentic &&
-        forensicAudit.authenticityScore >= 65 &&
+        forensicAudit.forensics.flags.length === 0 &&
+        forensicAudit.authenticityScore >= 70 &&
         (localCvAuth === null
-          ? !input.edge?.likelyScreenshot && (input.edge?.flatRatio ?? 0) <= 0.62
-          : localCvAuth.is_authentic && localCvAuth.authenticity_score >= 65);
+          ? !input.edge?.likelyScreenshot && (input.edge?.flatRatio ?? 0) <= 0.72
+          : localCvAuth.is_authentic && localCvAuth.authenticity_score >= 70 && localCvAuth.flags.length === 0);
 
-      // Chặn tức thời tại Local Gatekeeper nếu phát hiện ảnh AI/C2PA/ELA/FFT/Screenshot/Moiré/Mờ nặng
+      // Chặn tức thời tại Local Gatekeeper chỉ khi có hardRejectCode (ở citizen_intake luôn dùng soft flag)
       if (forensicAudit.hardRejectCode) {
         const mergedFlags = Array.from(
           new Set([
@@ -1237,37 +1264,67 @@ export class GeminiService {
       }
 
       if (rustAuth || forensicAudit) {
+        const isDegradedCloud = baseResult.mode !== 'gemini' || Boolean(baseResult.degraded) || Boolean(baseResult.errorCode);
         const mergedFlags = Array.from(
-          new Set([...(rustAuth?.flags ?? []), ...forensicAudit.forensics.flags, ...baseResult.fraudFlags]),
+          new Set([
+            ...(rustAuth?.flags ?? []),
+            ...forensicAudit.forensics.flags,
+            ...baseResult.fraudFlags,
+            ...(isDegradedCloud && (baseResult.degraded || baseResult.errorCode)
+              ? ['ai_cloud_fallback_manual_review']
+              : []),
+          ]),
         );
         const cvBounded = rustAuth ? Math.round(rustAuth.authenticity_score) : forensicAudit.authenticityScore;
         const localBounded = Math.min(cvBounded, forensicAudit.authenticityScore);
-        const mergedAuth =
+        const rawMergedAuth =
           baseResult.mode === 'gemini' ? Math.min(baseResult.authenticityScore, localBounded) : localBounded;
-        const isFake =
+        // Fail-open có kiểm soát khi Gemini API lỗi / 429 / chậm: không đánh rớt oan đơn của dân
+        const mergedAuth = isDegradedCloud ? Math.max(60, rawMergedAuth) : rawMergedAuth;
+        const softSuspected =
           Boolean(baseResult.isScreenCaptureOrFake) ||
-          (rustAuth ? !rustAuth.is_authentic : false) ||
-          !forensicAudit.isAuthentic;
+          (rustAuth ? !rustAuth.is_authentic || rustAuth.flags.length > 0 : false) ||
+          forensicAudit.forensics.flags.length > 0;
+        const abuseRisk = isDegradedCloud ? 'NONE' : (baseResult.abuseRisk ?? 'NONE');
         const mod = computeModerationDecision({
           authenticityScore: mergedAuth,
           relevanceScore: baseResult.relevanceScore ?? 82,
-          isScreenCaptureOrFake: isFake,
-          abuseRisk: baseResult.abuseRisk ?? 'NONE',
+          isScreenCaptureOrFake: Boolean(baseResult.isScreenCaptureOrFake),
+          abuseRisk,
           forensicFlags: mergedFlags,
           trustSupervised,
         });
+        const finalDecision: ModerationDecision =
+          isDegradedCloud && (baseResult.degraded || baseResult.errorCode || softSuspected)
+            ? 'HUMAN_REVIEW'
+            : mod.decision;
+        const needsManualReview =
+          finalDecision === 'HUMAN_REVIEW' ||
+          softSuspected ||
+          mergedFlags.length > 0 ||
+          Boolean(baseResult.degraded) ||
+          Boolean(baseResult.errorCode);
+        const aiFlag = derivePrimaryAiFlag(mergedFlags, isDegradedCloud, softSuspected);
+        const reviewNote =
+          isDegradedCloud && (baseResult.degraded || baseResult.errorCode)
+            ? `Gemini AI tạm quá tải/gián đoạn (${baseResult.errorCode ?? 'TIMEOUT'}) — hệ thống fail-open có kiểm soát để Cán bộ IOC kiểm tra thủ công.`
+            : mod.officerReviewNotes;
 
         baseResult = {
           ...baseResult,
           authenticityScore: mergedAuth,
-          isAuthentic: !isFake && mergedAuth >= 50,
-          isScreenCaptureOrFake: isFake,
+          isAuthentic: abuseRisk !== 'HIGH',
+          isScreenCaptureOrFake: Boolean(baseResult.isScreenCaptureOrFake) || forensicAudit.forensics.flags.includes('screenshot_detected'),
           fraudFlags: mergedFlags,
           forensicFlags: mergedFlags,
           forensics: forensicAudit.forensics,
-          decision: mod.decision,
-          citizenFeedback: mod.citizenFeedback,
-          officerReviewNotes: mod.officerReviewNotes,
+          abuseRisk,
+          decision: finalDecision,
+          aiFlag,
+          needsManualReview,
+          softFlags: mergedFlags,
+          citizenFeedback: finalDecision === 'AUTO_REJECT' ? mod.citizenFeedback : null,
+          officerReviewNotes: reviewNote,
           mode: baseResult.mode === 'gemini' ? 'gemini' : rustAuth?.engine === 'rust' ? 'local_rust' : 'local_ai',
         };
       }
@@ -1297,8 +1354,16 @@ export class GeminiService {
       console.error('[ai] analyzeImage gặp lỗi ngoài dự kiến, kích hoạt Deterministic Fallback:', unexpectedErr);
       const safe = this.fallbackVision({ ...input, hintText: stage0.cleanHintText });
       safe.degraded = true;
+      safe.isAuthentic = true;
+      safe.authenticityScore = Math.max(60, safe.authenticityScore);
+      safe.decision = 'HUMAN_REVIEW';
+      safe.aiFlag = 'ai_fallback_manual_review';
+      safe.needsManualReview = true;
+      safe.softFlags = Array.from(new Set([...safe.fraudFlags, 'ai_cloud_fallback_manual_review']));
+      safe.fraudFlags = safe.softFlags;
       safe.errorCode = 'AI_UNEXPECTED_ERROR';
-      safe.errorMessage = `Phân tích AI gặp lỗi kỹ thuật (${errMsg.slice(0, 120)}). Đã dùng gợi ý dự phòng.`;
+      safe.errorMessage = `Phân tích AI gặp lỗi kỹ thuật (${errMsg.slice(0, 120)}). Hệ thống cho qua có kiểm soát để Cán bộ IOC kiểm tra thủ công.`;
+      safe.officerReviewNotes = safe.errorMessage;
       safe.latencyMs = Math.round((performance.now() - t0) * 10) / 10;
       if (effectiveSha256) safe.imageSha256 = effectiveSha256;
       return safe;
@@ -1314,17 +1379,17 @@ export class GeminiService {
     let auth = 84;
     const e = input.edge;
     if (e) {
-      if (e.blurScore < 25) {
+      if (e.blurScore < 12) {
         flags.push('blurry');
-        auth -= 30;
+        auth -= 20;
       }
-      if (e.flatRatio > 0.62) {
+      if (e.flatRatio > 0.78) {
         flags.push('possible_screen_recapture');
-        auth -= 42;
+        auth -= 25;
       }
-      if (e.brightness < 18 || e.brightness > 245) {
+      if (e.brightness < 10 || e.brightness > 250) {
         flags.push('bad_exposure');
-        auth -= 12;
+        auth -= 10;
       }
     }
     const emergency = EMERGENCY_WORDS.test(text);
@@ -1416,6 +1481,7 @@ export class GeminiService {
           declaredLng: input.beforeLng,
           minCapturedAtIso: input.reportCreatedAt,
           allowTinyTestStub: input.allowTinyTestStub,
+          mode: 'resolution_proof',
         }),
         beforeBuf && afterBuf && !input.allowTinyTestStub
           ? computeRawFullSsim(beforeBuf, afterBuf).catch(() => null)

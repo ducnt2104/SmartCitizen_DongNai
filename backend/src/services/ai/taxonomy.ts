@@ -135,31 +135,35 @@ export interface ModerationOutcome {
 export function computeModerationDecision(input: ModerationInputs): ModerationOutcome {
   const minAutoScore = input.autoApproveMinScore ?? env.autoApproveMinScore;
 
-  if (
-    input.isScreenCaptureOrFake === true ||
-    input.abuseRisk === 'HIGH' ||
-    input.authenticityScore < 50 ||
-    input.relevanceScore < 40
-  ) {
-    const reasons: string[] = [];
-    if (input.isScreenCaptureOrFake) {
-      reasons.push('ảnh có dấu hiệu chụp lại màn hình thiết bị hoặc cắt ghép từ nguồn khác');
-    }
-    if (input.abuseRisk === 'HIGH') {
-      reasons.push('nội dung chứa yếu tố quấy rối, quảng cáo hoặc không phù hợp tiêu chuẩn cộng đồng');
-    }
-    if (input.authenticityScore < 50 && !input.isScreenCaptureOrFake) {
-      reasons.push('chất lượng hoặc độ chân thực của ảnh hiện trường chưa đạt yêu cầu');
-    }
-    if (input.relevanceScore < 40) {
-      reasons.push('hình ảnh không thể hiện rõ sự cố hạ tầng hoặc môi trường công cộng');
-    }
-
-    const detail = reasons.length > 0 ? reasons.join('; ') : 'ảnh không đạt tiêu chuẩn xác thực hiện trường';
+  // Chỉ chặn cứng AUTO_REJECT khi nội dung thực sự vi phạm / quấy rối / spam nặng (abuseRisk === 'HIGH')
+  if (input.abuseRisk === 'HIGH') {
     return {
       decision: 'AUTO_REJECT',
-      citizenFeedback: `Ảnh chưa đạt yêu cầu xác thực (${detail}). Vui lòng đứng trực tiếp tại hiện trường, mở camera chụp rõ cảnh sự cố và gửi lại.`,
-      officerReviewNotes: `AUTO_REJECT tự động: auth=${input.authenticityScore}, rel=${input.relevanceScore}, abuse=${input.abuseRisk}, flags=[${input.forensicFlags.join(', ')}]`,
+      citizenFeedback:
+        'Nội dung phản ánh có dấu hiệu vi phạm tiêu chuẩn cộng đồng, chứa liên kết quảng cáo hoặc ngôn từ không phù hợp.',
+      officerReviewNotes: `AUTO_REJECT tự động: abuse=${input.abuseRisk}, flags=[${input.forensicFlags.join(', ')}]`,
+    };
+  }
+
+  // Các nghi ngờ hình ảnh/CV (nghi screenshot, độ nét thấp, không EXIF...) chuyển sang Soft Flag HUMAN_REVIEW để IOC duyệt
+  if (input.isScreenCaptureOrFake === true || input.authenticityScore < 50 || input.relevanceScore < 40) {
+    const reasons: string[] = [];
+    if (input.isScreenCaptureOrFake) {
+      reasons.push('ảnh có dấu hiệu chụp màn hình / chỉnh sửa hoặc thiếu thông số gốc');
+    }
+    if (input.authenticityScore < 50 && !input.isScreenCaptureOrFake) {
+      reasons.push('độ nét hoặc điểm xác thực ảnh ở mức thấp');
+    }
+    if (input.relevanceScore < 40) {
+      reasons.push('mức độ liên quan sự cố hạ tầng chưa rõ ràng');
+    }
+    if (input.forensicFlags.length > 0) {
+      reasons.push(`cờ kiểm định: ${input.forensicFlags.join(', ')}`);
+    }
+    return {
+      decision: 'HUMAN_REVIEW',
+      citizenFeedback: null,
+      officerReviewNotes: `Cảnh báo nhẹ IOC (cho phép tiếp nhận, cần kiểm tra thủ công): ${reasons.join('; ') || 'hồ sơ cần đối chiếu thực tế'}.`,
     };
   }
 

@@ -213,13 +213,16 @@ describe('AI Triage & chống spam', () => {
     expect(first.data.outcome).toBe('created');
     const motherId = first.data.report.id;
 
-    // C gửi lại ảnh gần như y hệt (distance 2) → Tầng 2 Gatekeeper chặn ngay (HTTP 422), không cho lọt lên bản đồ
+    // C gửi lại ảnh gần như y hệt (distance 2) → Chuyển sang Soft Flag (201 + needsManualReview) để không chặn nhầm dân
     const dup = await call<any>('/api/reports', {
       token: c,
       body: report({ lat: 10.94, lng: 106.81, photo: { dataUrl: TINY_JPEG, dHash: 'aaaaaaaaaaaaaaa3' } }),
     });
-    expect(dup.status).toBe(422);
-    expect(dup.data.error.code).toBe('DUPLICATE_IMAGE_DETECTED');
+    expect(dup.status).toBe(201);
+    expect(dup.data.outcome).toBe('created');
+    expect(dup.data.report.needsManualReview).toBe(true);
+    expect(dup.data.report.ai.decision).toBe('HUMAN_REVIEW');
+    expect(dup.data.report.aiFlag).toBe('suspected_duplicate_crop');
 
     // B khác SĐT, cách ~30m, ảnh khác hẳn (distance 64) → gộp
     const merged = await call<any>('/api/reports', {
@@ -244,7 +247,7 @@ describe('AI Triage & chống spam', () => {
     expect(r1.status).toBe(201);
     expect(r2.data.outcome).toBe('duplicate_submit');
 
-    // C mới có 1 đơn được lưu (dup bị Gatekeeper chặn 422 từ đầu) -> 19 đơn tiếp theo OK (tổng 20/giờ), đơn thứ 21 bị 429
+    // C đã có 2 đơn được lưu (dup + r1) -> 18 đơn tiếp theo OK (tổng 20/giờ), đơn thứ 21 bị 429
     const extraHashes = [
       '0000000000000000',
       '1111111111111111',
@@ -264,7 +267,6 @@ describe('AI Triage & chống spam', () => {
       'f0f0f0f0f0f0f0f0',
       '6969696969696969',
       'c3c3c3c3c3c3c3c3',
-      '5a5a5a5a5a5a5a5a',
     ];
     for (let i = 0; i < extraHashes.length; i++) {
       const ok = await call<any>('/api/reports', {

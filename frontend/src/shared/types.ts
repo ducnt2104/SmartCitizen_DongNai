@@ -236,6 +236,9 @@ export interface AiAnalysis {
   keyEvidenceTags?: string[];
   officerReviewNotes?: string | null;
   citizenFeedback?: string | null;
+  aiFlag?: string | null;
+  needsManualReview?: boolean;
+  softFlags?: string[];
   latencyMs?: number;
   mode: AiMode;
 }
@@ -339,6 +342,8 @@ export interface Report {
   assignedVolunteerId: string | null;
   verification: FieldVerification | null;
   ai: AiAnalysis;
+  aiFlag?: string | null;
+  needsManualReview?: boolean;
   gpsMismatchWarning: boolean;
   gpsDistanceKm: number | null;
   quarantine: { reason: QuarantineReason; detail: string; at: string; relatedReportId: string | null } | null;
@@ -557,6 +562,9 @@ export interface VisionResult {
   decision?: ModerationDecision;
   citizenFeedback?: string | null;
   officerReviewNotes?: string | null;
+  aiFlag?: string | null;
+  needsManualReview?: boolean;
+  softFlags?: string[];
   stageTimingsMs?: { stage0?: number; stage1?: number; total: number };
 }
 

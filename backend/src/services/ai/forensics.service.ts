@@ -42,6 +42,8 @@ export interface ForensicCheckInput {
   declaredLng?: number;
   minCapturedAtIso?: string;
   allowTinyTestStub?: boolean;
+  /** 'citizen_intake' gắn cờ mềm cho IOC duyệt; 'resolution_proof' kiểm định nghiêm ngặt Trước/Sau. */
+  mode?: 'citizen_intake' | 'resolution_proof';
 }
 
 export interface ForensicAuditOutput {
@@ -524,9 +526,12 @@ export async function runImageForensics(input: ForensicCheckInput): Promise<Fore
       const maxEla = sortedEla[sortedEla.length - 1];
       const spikeRatio = (maxEla - p90Ela) / Math.max(0.45, meanEla);
 
-      // Vùng bị AI xóa/inpainting hoặc ghép tạo chênh lệch nén cục bộ lớn bất thường
-      elaScore = Math.min(1, Math.max(0, (spikeRatio - 1.5) / 2.6 + (maxEla > 11 && meanEla > 0.6 ? 0.15 : 0)));
-      if (spikeRatio > 3.1 && maxEla >= 9.5) {
+      // Vùng bị AI xóa/inpainting hoặc ghép tạo chênh lệch nén cục bộ lớn bất thường (nới ngưỡng để tránh bắt nhầm ảnh nén Zalo/Facebook)
+      const strictProof = input.mode === 'resolution_proof';
+      const elaSpikeThresh = strictProof ? 3.1 : 4.2;
+      const elaMaxThresh = strictProof ? 9.5 : 14;
+      elaScore = Math.min(1, Math.max(0, (spikeRatio - 1.7) / 2.8 + (maxEla > 13 && meanEla > 0.7 ? 0.12 : 0)));
+      if (spikeRatio > elaSpikeThresh && maxEla >= elaMaxThresh) {
         flags.push('ela_tamper_suspected');
         aiProbability = Math.max(aiProbability, 0.72);
       }
@@ -588,7 +593,12 @@ export async function runImageForensics(input: ForensicCheckInput): Promise<Fore
         return Math.max(0, Math.min(1, maxCorr));
       };
       moireScore = Math.max(calcPeriodicPeak(rowHp), calcPeriodicPeak(colHp));
-      if (moireScore > 0.72 && flatFrac > 0.45 && uiEdgeFrac > 0.08) {
+      const strictMode = input.mode === 'resolution_proof';
+      if (
+        moireScore > (strictMode ? 0.72 : 0.85) &&
+        flatFrac > (strictMode ? 0.45 : 0.6) &&
+        uiEdgeFrac > (strictMode ? 0.08 : 0.12)
+      ) {
         flags.push('moire_screen_recapture');
         screenshotProbability = Math.max(screenshotProbability, 0.8);
       }
@@ -596,30 +606,37 @@ export async function runImageForensics(input: ForensicCheckInput): Promise<Fore
       fftSmoothnessScore = Math.round(Math.min(1, smoothFrac * 1.15) * 1000) / 1000;
       noiseResidualScore = Math.round(Math.min(1, meanNoise / 24) * 1000) / 1000;
 
-      // Ảnh AI Diffusion quá mịn bất thường trên toàn midtone (không phải ảnh screenshot UI)
-      if (smoothFrac > 0.78 && meanNoise < 1.85 && uiEdgeFrac < 0.05) {
+      // Ảnh AI Diffusion quá mịn bất thường trên toàn midtone (nới ngưỡng cho ảnh nén/thiết bị tầm trung)
+      if (
+        smoothFrac > (strictMode ? 0.78 : 0.88) &&
+        meanNoise < (strictMode ? 1.85 : 1.2) &&
+        uiEdgeFrac < 0.05
+      ) {
         flags.push('ai_smooth_noise_anomaly');
         aiProbability = Math.max(aiProbability, 0.68);
       }
 
-      // Phát hiện ảnh chụp màn hình: nền phẳng lớn + nét UI dọc/ngang + thiếu EXIF camera khi kích thước đúng tỷ lệ màn hình
+      // Phát hiện ảnh chụp màn hình: nới ngưỡng để tránh bắt nhầm ảnh tải về / không EXIF
       const aspect = input.edge?.aspect ?? (width && height ? width / height : 1);
       const isScreenRatio =
-        (aspect >= 0.43 && aspect <= 0.58) || // điện thoại dọc 9:16..9:21
+        (aspect >= 0.43 && aspect <= 0.56) || // điện thoại dọc 9:16..9:21
         (aspect >= 1.72 && aspect <= 2.15);   // desktop / ngang 16:9..20:9
       const serverFlat = Math.max(flatFrac, input.edge?.flatRatio ?? 0);
 
       if (
-        (serverFlat > 0.62 && uiEdgeFrac > 0.04) ||
-        (serverFlat > 0.55 && isScreenRatio && !exifSummary.hasCameraExif && uiEdgeFrac > 0.03) ||
-        (input.edge?.likelyScreenshot && (input.edge.screenshotConfidence ?? 0.75) >= 0.7)
+        (serverFlat > (strictMode ? 0.62 : 0.78) && uiEdgeFrac > (strictMode ? 0.04 : 0.08)) ||
+        (serverFlat > (strictMode ? 0.55 : 0.7) &&
+          isScreenRatio &&
+          !exifSummary.hasCameraExif &&
+          uiEdgeFrac > (strictMode ? 0.03 : 0.06)) ||
+        (input.edge?.likelyScreenshot && (input.edge.screenshotConfidence ?? 0.75) >= (strictMode ? 0.7 : 0.78))
       ) {
         flags.push('screenshot_detected');
         screenshotProbability = Math.max(screenshotProbability, 0.88);
       }
 
       const avgBlur = input.edge?.blurScore ?? 100;
-      if (avgBlur < 14 && serverFlat > 0.82) {
+      if (avgBlur < (strictMode ? 14 : 9) && serverFlat > (strictMode ? 0.82 : 0.88)) {
         flags.push('blurry_unreadable');
       }
     } catch {
@@ -695,33 +712,36 @@ export async function runImageForensics(input: ForensicCheckInput): Promise<Fore
 
   let hardRejectCode: string | null = null;
   let hardRejectMessage: string | null = null;
+  const enforceStrictReject = input.mode === 'resolution_proof';
 
-  if (capturedBeforeReport) {
-    hardRejectCode = 'EXIF_BEFORE_REPORT';
-    hardRejectMessage = 'Thời gian chụp trên EXIF ảnh hoàn thành diễn ra TRƯỚC thời điểm gửi báo cáo ban đầu.';
-  } else if (exifSummary.c2paDetected || (exifSummary.aiSignatureMatched && aiProbability >= 0.8)) {
-    hardRejectCode = 'AI_IMAGE_DETECTED';
-    hardRejectMessage = `Phát hiện chữ ký ảnh AI / công cụ tạo ảnh trong metadata (${exifSummary.aiSignatureMatched ?? 'C2PA'}). Vui lòng chụp ảnh hiện trường thật.`;
-  } else if (exifSummary.aiSignatureMatched) {
-    hardRejectCode = 'EDITED_IMAGE_DETECTED';
-    hardRejectMessage = `Phát hiện dấu vết phần mềm chỉnh sửa / ảnh mạng (${exifSummary.aiSignatureMatched}).`;
-  } else if (dedupFlags.includes('ela_tamper_suspected')) {
-    hardRejectCode = 'ELA_TAMPER_DETECTED';
-    hardRejectMessage = 'Phân tích mức sai số nén (ELA) phát hiện vùng ảnh bị chỉnh sửa hoặc xóa vật thể nhân tạo.';
-  } else if (dedupFlags.includes('screenshot_detected') || dedupFlags.includes('moire_screen_recapture')) {
-    hardRejectCode = 'SCREENSHOT_DETECTED';
-    hardRejectMessage = 'Phát hiện ảnh chụp màn hình hoặc chụp lại từ thiết bị khác (vân Moiré / giao diện UI). Vui lòng chụp trực tiếp bằng camera.';
-  } else if (dedupFlags.includes('ai_smooth_noise_anomaly')) {
-    hardRejectCode = 'AI_IMAGE_DETECTED';
-    hardRejectMessage = 'Phân tích phổ tần số & nhiễu cảm biến (FFT) phát hiện cấu trúc bề mặt mịn nhân tạo đặc trưng của ảnh AI.';
-  } else if (dedupFlags.includes('blurry_unreadable')) {
-    hardRejectCode = 'BLURRY_IMAGE';
-    hardRejectMessage = 'Ảnh quá mờ hoặc thiếu chi tiết để nhận diện hiện trường. Vui lòng chụp lại rõ nét bằng camera.';
+  if (enforceStrictReject) {
+    if (capturedBeforeReport) {
+      hardRejectCode = 'EXIF_BEFORE_REPORT';
+      hardRejectMessage = 'Thời gian chụp trên EXIF ảnh hoàn thành diễn ra TRƯỚC thời điểm gửi báo cáo ban đầu.';
+    } else if (exifSummary.c2paDetected || (exifSummary.aiSignatureMatched && aiProbability >= 0.8)) {
+      hardRejectCode = 'AI_IMAGE_DETECTED';
+      hardRejectMessage = `Phát hiện chữ ký ảnh AI / công cụ tạo ảnh trong metadata (${exifSummary.aiSignatureMatched ?? 'C2PA'}). Vui lòng chụp ảnh hiện trường thật.`;
+    } else if (exifSummary.aiSignatureMatched) {
+      hardRejectCode = 'EDITED_IMAGE_DETECTED';
+      hardRejectMessage = `Phát hiện dấu vết phần mềm chỉnh sửa / ảnh mạng (${exifSummary.aiSignatureMatched}).`;
+    } else if (dedupFlags.includes('ela_tamper_suspected')) {
+      hardRejectCode = 'ELA_TAMPER_DETECTED';
+      hardRejectMessage = 'Phân tích mức sai số nén (ELA) phát hiện vùng ảnh bị chỉnh sửa hoặc xóa vật thể nhân tạo.';
+    } else if (dedupFlags.includes('screenshot_detected') || dedupFlags.includes('moire_screen_recapture')) {
+      hardRejectCode = 'SCREENSHOT_DETECTED';
+      hardRejectMessage = 'Phát hiện ảnh chụp màn hình hoặc chụp lại từ thiết bị khác (vân Moiré / giao diện UI). Vui lòng chụp trực tiếp bằng camera.';
+    } else if (dedupFlags.includes('ai_smooth_noise_anomaly')) {
+      hardRejectCode = 'AI_IMAGE_DETECTED';
+      hardRejectMessage = 'Phân tích phổ tần số & nhiễu cảm biến (FFT) phát hiện cấu trúc bề mặt mịn nhân tạo đặc trưng của ảnh AI.';
+    } else if (dedupFlags.includes('blurry_unreadable')) {
+      hardRejectCode = 'BLURRY_IMAGE';
+      hardRejectMessage = 'Ảnh quá mờ hoặc thiếu chi tiết để nhận diện hiện trường. Vui lòng chụp lại rõ nét bằng camera.';
+    }
   }
 
   return {
     authenticityScore: score,
-    isAuthentic: !hardRejectCode && score >= 50,
+    isAuthentic: enforceStrictReject ? !hardRejectCode && score >= 50 : true,
     hardRejectCode,
     hardRejectMessage,
     capturedBeforeReport,

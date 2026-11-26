@@ -259,10 +259,19 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
           <div className="rounded border border-ioc-line p-2"><dt className="text-ioc-dim">{t('ioc.authenticity')}</dt><dd className={`mono font-semibold ${r.ai.authenticityScore < 45 ? 'text-ioc-red' : 'text-ioc-green'}`}>{r.ai.authenticityScore}/100</dd></div>
         </dl>
 
-        {(r.quarantine || r.gpsMismatchWarning) && (
+        {(r.quarantine || r.gpsMismatchWarning || r.needsManualReview || r.aiFlag || r.ai.moderationDecision === 'HUMAN_REVIEW') && (
           <div className="rounded border border-ioc-amber/50 bg-ioc-amber/10 p-2 text-xs text-ioc-amber">
-            <p className="flex items-center gap-1.5 font-bold"><ShieldAlert className="h-3.5 w-3.5" aria-hidden />{r.quarantine ? t(`quarantine.${r.quarantine.reason}` as 'quarantine.manual') : t('badge.gpsWarn')}</p>
+            <p className="flex items-center gap-1.5 font-bold">
+              <ShieldAlert className="h-3.5 w-3.5" aria-hidden />
+              {r.quarantine
+                ? t(`quarantine.${r.quarantine.reason}` as 'quarantine.manual')
+                : r.gpsMismatchWarning
+                  ? t('badge.gpsWarn')
+                  : t('ioc.softFlagTitle')}
+            </p>
             {r.quarantine && <p className="mt-1 break-words">{r.quarantine.detail}</p>}
+            {!r.quarantine && r.ai.officerReviewNotes && <p className="mt-1 break-words text-ioc-text/90">{r.ai.officerReviewNotes}</p>}
+            {r.aiFlag && <p className="mono mt-1 break-words">Flag: {r.aiFlag}</p>}
             {r.ai.fraudFlags.length > 0 && <p className="mono mt-1 break-words">{r.ai.fraudFlags.join(' · ')}</p>}
             {r.gpsDistanceKm !== null && <p className="mono mt-1">GPS Δ {r.gpsDistanceKm} km</p>}
           </div>

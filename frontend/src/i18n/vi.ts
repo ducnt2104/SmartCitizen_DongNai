@@ -130,7 +130,15 @@ export const vi = {
   'report.addressHintField': 'Địa chỉ / Điểm mốc hiện trường',
   'report.addressHintPlaceholder': 'Số nhà, tên đường, con hẻm hoặc mốc gần nhất…',
   'report.authOk': 'Ảnh hiện trường hợp lệ',
-  'report.authLow': 'Hình ảnh chưa rõ nét hoặc có dấu hiệu chụp lại từ màn hình',
+  'report.authLow': 'Ảnh sẽ được gắn nhãn để cán bộ kiểm tra bổ sung',
+  'report.screenshotSoftWarn': 'Ảnh có đặc điểm giống ảnh chụp màn hình hoặc thiếu thông số gốc (mức tin cậy {pct}%). Bạn vẫn có thể gửi đơn bình thường — hồ sơ sẽ được gắn nhãn phụ để cán bộ đối chiếu.',
+  'report.softFlagCitizenNote': 'Đơn vẫn được gửi thành công và sẽ gắn nhãn chờ cán bộ IOC kiểm tra thêm.',
+  'report.softReviewPreview': 'Hồ sơ sẽ được tiếp nhận bình thường kèm nhãn phụ để Cán bộ IOC kiểm tra đối chiếu khi xử lý.',
+  'report.sendFailedTitle': 'Chưa gửi được đơn lên máy chủ',
+  'report.sendFailedEdit': 'Sửa lại đơn',
+  'report.sendFailedRetry': 'Thử gửi lại',
+  'report.sendFailedRemove': 'Xóa khỏi hàng đợi',
+  'report.editOutboxBanner': 'Đang chỉnh sửa đơn chưa gửi từ Hàng đợi: {reason}',
   'report.category': 'Loại sự cố',
   'report.titleField': 'Tiêu đề',
   'report.descField': 'Mô tả',
@@ -390,6 +398,8 @@ export const vi = {
   'outbox.failed': 'Lỗi',
   'outbox.attempts': '{n} lần thử',
   'outbox.failedToast': 'Không gửi được một đơn trong Hàng đợi',
+  'outbox.edit': 'Sửa lại',
+  'outbox.remove': 'Xóa khỏi hàng đợi',
 
   // ── Đăng nhập & Hồ sơ ──
   'auth.portals': 'Chọn cổng đăng nhập',
@@ -611,6 +621,8 @@ export const vi = {
   'ioc.staffStatusRevoked': 'Đã thu hồi',
   'ioc.staffRevokeBtn': 'Thu hồi',
   'ioc.staffRestoreBtn': 'Khôi phục',
+  'ioc.softFlagTitle': 'Cảnh báo nhẹ AI (chờ kiểm tra thủ công)',
+  'ioc.softFlagBadge': 'Cần kiểm tra ảnh',
 
   // ── 404 ──
   'notFound.title': 'Không tìm thấy trang',
