@@ -48,6 +48,8 @@ interface OtpSendResponse {
   expiresInSec: number;
   provider: string;
   clientSideFirebase?: boolean;
+  firebaseClientConfig?: FirebaseClientEnv | null;
+  directSmsAvailable?: boolean;
 }
 
 interface OtpStatusResponse {
@@ -57,6 +59,8 @@ interface OtpStatusResponse {
   activeSmsProvider: string | null;
   configuredProviderMode: string;
   smsProviderMode?: string;
+  directSmsConfigured?: boolean;
+  directSmsProvider?: string | null;
   smsPhoneAuthReady?: boolean;
   firebaseClientReady?: boolean;
   firebaseClientConfig?: FirebaseClientEnv | null;
@@ -107,6 +111,7 @@ export function CitizenAuthForm({
   const [activeProvider, setActiveProvider] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [suggestEmailFallback, setSuggestEmailFallback] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [otpStatus, setOtpStatus] = useState<OtpStatusResponse | null>(null);
   const [honeypot, setHoneypot] = useState('');
@@ -138,10 +143,27 @@ export function CitizenAuthForm({
   }, [cooldown]);
 
   const fail = (e: unknown): void => {
-    if (e instanceof NetworkError) setErr(t('auth.offlineErr'));
-    else if (e instanceof ApiError) setErr(e.message);
-    else if (e instanceof Error && e.message) setErr(e.message);
-    else setErr(t('state.genericError'));
+    const emailFallbackHint = Boolean(
+      (e as { suggestEmailFallback?: boolean } | null)?.suggestEmailFallback,
+    );
+    setSuggestEmailFallback(emailFallbackHint);
+    if (e instanceof NetworkError) {
+      setErr(t('auth.offlineErr'));
+    } else if (e instanceof ApiError) {
+      if (e.status === 429 && e.retryAfter) {
+        if (e.code === 'otp_cooldown') {
+          setCooldown((prev) => Math.max(prev, e.retryAfter ?? 0));
+        }
+        const hasSeconds = /\d+\s*(giây|phút|s\b)/i.test(e.message);
+        setErr(hasSeconds ? e.message : `${e.message} (Thử lại sau ${e.retryAfter} giây)`);
+      } else {
+        setErr(e.message);
+      }
+    } else if (e instanceof Error && e.message) {
+      setErr(e.message);
+    } else {
+      setErr(t('state.genericError'));
+    }
   };
 
   const resetFormState = (nextMode: AuthMode): void => {
@@ -150,6 +172,7 @@ export function CitizenAuthForm({
     setCode('');
     firebaseConfirmationRef.current = null;
     setErr(null);
+    setSuggestEmailFallback(false);
   };
 
   const switchChannelTab = (nextTab: OtpChannelTab): void => {
@@ -158,21 +181,18 @@ export function CitizenAuthForm({
     setCode('');
     firebaseConfirmationRef.current = null;
     setErr(null);
+    setSuggestEmailFallback(false);
   };
 
   const phoneCheck = validateVnPhoneLive(phoneInput);
   const emailValid = isEmailValid(emailInput);
   const canSendOtp = channelTab === 'phone' ? phoneCheck.isValid : emailValid;
 
-  const shouldUseFirebaseClientFlow =
-    channelTab === 'phone' &&
-    mode === 'otp' &&
-    isFirebasePhoneClientConfigured() &&
-    (otpStatus?.activeSmsProvider === 'firebase' || otpStatus?.smsProviderMode === 'firebase');
-
   const sendOtp = async (purpose: 'login' | 'reset_password'): Promise<void> => {
+    if (busy) return;
     setBusy(true);
     setErr(null);
+    setSuggestEmailFallback(false);
     firebaseConfirmationRef.current = null;
 
     try {
@@ -182,29 +202,6 @@ export function CitizenAuthForm({
           return;
         }
 
-        // Kênh 1: Firebase Phone Auth gửi mã SMS từ Google (khi đăng nhập bằng SĐT)
-        if (shouldUseFirebaseClientFlow && purpose === 'login') {
-          const serverAck = await api<OtpSendResponse>('/api/auth/otp/send', {
-            body: {
-              channel: 'phone',
-              phone: phoneCheck.e164,
-              purpose,
-              formLoadedAt: formLoadedAtRef.current,
-              ...(honeypot ? { website: honeypot } : {}),
-            },
-          });
-          const { sendFirebasePhoneSms } = await loadFirebasePhoneAuth();
-          const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
-          firebaseConfirmationRef.current = confirmation;
-          setActiveProvider('firebase');
-          setTargetMasked(serverAck.targetMasked || phoneCheck.formattedDisplay || phoneCheck.e164);
-          setCooldown(serverAck.resendInSec || 60);
-          setStage('code');
-          toast('info', `Đã gửi mã SMS OTP tới ${phoneCheck.formattedDisplay ?? phoneCheck.e164}`);
-          return;
-        }
-
-        // Kênh 2 & 3: SpeedSMS / eSMS / Twilio / Vonage hoặc Webhook SMS Gateway (TextBee)
         const r = await api<OtpSendResponse>('/api/auth/otp/send', {
           body: {
             channel: 'phone',
@@ -215,15 +212,53 @@ export function CitizenAuthForm({
           },
         });
 
-        if (r.clientSideFirebase && purpose === 'login') {
-          if (!isFirebasePhoneClientConfigured()) {
-            throw new Error(
-              'Dịch vụ xác thực SMS qua Firebase chưa hoàn tất cấu hình trình duyệt. Vui lòng chuyển sang nhận mã qua Email hoặc thử lại sau.',
-            );
+        if (r.clientSideFirebase) {
+          if (r.firebaseClientConfig) {
+            setRuntimeFirebaseClientConfig(r.firebaseClientConfig);
           }
-          const { sendFirebasePhoneSms } = await loadFirebasePhoneAuth();
-          const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
-          firebaseConfirmationRef.current = confirmation;
+          if (!isFirebasePhoneClientConfigured()) {
+            const refreshed = await api<OtpStatusResponse>('/api/auth/otp/status').catch(() => null);
+            if (refreshed) {
+              setRuntimeFirebaseClientConfig(refreshed.firebaseClientConfig);
+              setOtpStatus(refreshed);
+            }
+          }
+          try {
+            const { sendFirebasePhoneSms } = await loadFirebasePhoneAuth();
+            const confirmation = await sendFirebasePhoneSms(phoneCheck.e164, recaptchaContainerId);
+            firebaseConfirmationRef.current = confirmation;
+            setActiveProvider('firebase');
+            const masked = r.targetMasked || phoneCheck.formattedDisplay || phoneCheck.e164;
+            setTargetMasked(masked);
+            setCooldown(r.resendInSec || 60);
+            setStage('code');
+            toast('info', `Đã gửi mã SMS OTP tới ${masked}`);
+            return;
+          } catch (fbErr) {
+            const canDirectFallback = Boolean(
+              (fbErr as { canFallbackToDirectSms?: boolean } | null)?.canFallbackToDirectSms,
+            );
+            if (canDirectFallback && (r.directSmsAvailable ?? otpStatus?.directSmsConfigured)) {
+              const directRes = await api<OtpSendResponse>('/api/auth/otp/send', {
+                body: {
+                  channel: 'phone',
+                  phone: phoneCheck.e164,
+                  purpose,
+                  preferDirectSms: true,
+                  formLoadedAt: formLoadedAtRef.current,
+                  ...(honeypot ? { website: honeypot } : {}),
+                },
+              });
+              firebaseConfirmationRef.current = null;
+              setActiveProvider(directRes.provider);
+              setTargetMasked(directRes.targetMasked);
+              setCooldown(directRes.resendInSec || 60);
+              setStage('code');
+              toast('info', t('auth.otpSentToast', { target: directRes.targetMasked }));
+              return;
+            }
+            throw fbErr;
+          }
         }
 
         setActiveProvider(r.provider);
@@ -316,6 +351,7 @@ export function CitizenAuthForm({
   };
 
   const loginWithPassword = async (): Promise<void> => {
+    if (busy) return;
     setBusy(true);
     setErr(null);
     try {
@@ -332,15 +368,26 @@ export function CitizenAuthForm({
   };
 
   const submitPasswordReset = async (): Promise<void> => {
+    if (busy) return;
     setBusy(true);
     setErr(null);
+    setSuggestEmailFallback(false);
     try {
       const resetTarget =
         channelTab === 'phone'
           ? (phoneCheck.e164 ?? phoneInput.trim())
           : emailInput.trim().toLowerCase();
+      let payload: Record<string, unknown> = { identifier: resetTarget, code, newPassword: password };
+      if (channelTab === 'phone' && firebaseConfirmationRef.current) {
+        const { confirmFirebaseOtpAndGetIdToken } = await loadFirebasePhoneAuth();
+        const firebaseIdToken = await confirmFirebaseOtpAndGetIdToken(
+          firebaseConfirmationRef.current,
+          code,
+        );
+        payload = { identifier: resetTarget, firebaseIdToken, newPassword: password };
+      }
       const s = await api<AuthSession>('/api/auth/password/reset', {
-        body: { identifier: resetTarget, code, newPassword: password },
+        body: payload,
       });
       authStore.set(s);
       toast('success', t('auth.resetSuccess'));
@@ -682,6 +729,7 @@ export function CitizenAuthForm({
               onClick={() => {
                 setStage('input');
                 setCode('');
+                firebaseConfirmationRef.current = null;
                 setErr(null);
               }}
             >
@@ -803,9 +851,31 @@ export function CitizenAuthForm({
       )}
 
       {err && (
-        <p role="alert" className="rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">
-          {err}
-        </p>
+        <div role="alert" className="space-y-2.5 rounded-xl bg-danger-soft p-3 text-sm font-semibold text-danger">
+          <p>{err}</p>
+          {suggestEmailFallback && (otpStatus?.emailConfigured ?? true) && (
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              <button
+                type="button"
+                className="btn btn-primary !min-h-9 !px-3 !py-1.5 !text-xs"
+                onClick={() => switchChannelTab('email')}
+              >
+                <Mail className="h-3.5 w-3.5" aria-hidden />
+                Chuyển sang nhận OTP qua Email
+              </button>
+              {mode === 'otp' && (
+                <button
+                  type="button"
+                  className="btn btn-ghost !min-h-9 !px-3 !py-1.5 !text-xs"
+                  onClick={() => resetFormState('password')}
+                >
+                  <Lock className="h-3.5 w-3.5" aria-hidden />
+                  Đăng nhập mật khẩu
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

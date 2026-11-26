@@ -5,15 +5,39 @@ import { requiresPowSolution, solvePowHeader } from './securityChallenge';
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? '';
 
+export function extractRetryAfterSec(data: unknown, res?: { headers?: { get(name: string): string | null } }): number | undefined {
+  const errObj = (data as { error?: Record<string, unknown> } | null)?.error;
+  const details =
+    errObj?.details && typeof errObj.details === 'object'
+      ? (errObj.details as Record<string, unknown>)
+      : null;
+  const fromJson = errObj?.retryAfter ?? details?.retryAfter ?? details?.retryAfterSec;
+  if (typeof fromJson === 'number' && Number.isFinite(fromJson) && fromJson > 0) {
+    return Math.ceil(fromJson);
+  }
+  const headerVal = res?.headers?.get('Retry-After');
+  if (headerVal) {
+    const sec = Number(headerVal);
+    if (Number.isFinite(sec) && sec > 0) return Math.ceil(sec);
+  }
+  return undefined;
+}
+
 export class ApiError extends Error {
+  public readonly retryAfter?: number;
+
   constructor(
     public readonly status: number,
     public readonly code: string,
     message: string,
     public readonly details?: unknown,
+    retryAfter?: number,
   ) {
     super(message);
     this.name = 'ApiError';
+    if (retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0) {
+      this.retryAfter = Math.ceil(retryAfter);
+    }
   }
 }
 
@@ -34,6 +58,8 @@ export interface ApiOptions {
   timeoutMs?: number;
   /** Nội bộ: tránh đệ quy khi gọi /api/auth/refresh */
   _retried?: boolean;
+  /** Nội bộ: tự động xin lại thử thách PoW 1 lần nếu hết hạn/lỗi tạm thời */
+  _powRetried?: boolean;
 }
 
 export interface SessionTerminatedDetail {
@@ -134,6 +160,7 @@ export interface MultipartOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   _retried?: boolean;
+  _powRetried?: boolean;
 }
 
 async function parseJsonResponse<T>(
@@ -141,6 +168,8 @@ async function parseJsonResponse<T>(
   res: Response,
   alreadyRetried: boolean | undefined,
   retry: () => Promise<T>,
+  alreadyPowRetried?: boolean,
+  retryWithFreshPow?: () => Promise<T>,
 ): Promise<T> {
   let preParsedData: unknown = null;
   let hasPreParsed = false;
@@ -177,6 +206,10 @@ async function parseJsonResponse<T>(
       })();
   if (!res.ok) {
     const e = (data as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
+    const errCode = e?.code ?? 'error';
+    if (res.status === 403 && errCode.startsWith('pow_') && !alreadyPowRetried && retryWithFreshPow) {
+      return retryWithFreshPow();
+    }
     if (res.status === 401) {
       const code = e?.code ?? 'unauthorized';
       if (code === 'SESSION_REPLACED' || code === 'SESSION_REVOKED' || code === 'SESSION_COMPROMISED') {
@@ -185,7 +218,8 @@ async function parseJsonResponse<T>(
         authStore.clear();
       }
     }
-    throw new ApiError(res.status, e?.code ?? 'error', e?.message ?? `Lỗi ${res.status}`, e?.details);
+    const retryAfter = res.status === 429 ? extractRetryAfterSec(data, res) : undefined;
+    throw new ApiError(res.status, errCode, e?.message ?? `Lỗi ${res.status}`, e?.details, retryAfter);
   }
   return data as T;
 }
@@ -218,7 +252,20 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     window.clearTimeout(timeout);
   }
 
-  return parseJsonResponse<T>(path, res, opts._retried, () => api<T>(path, { ...opts, _retried: true }));
+  return parseJsonResponse<T>(
+    path,
+    res,
+    opts._retried,
+    () => api<T>(path, { ...opts, _retried: true }),
+    opts._powRetried,
+    requiresPowSolution(path, method)
+      ? () => {
+          const nextHeaders = { ...(opts.headers ?? {}) };
+          delete nextHeaders['X-PoW-Solution'];
+          return api<T>(path, { ...opts, headers: nextHeaders, _powRetried: true });
+        }
+      : undefined,
+  );
 }
 
 export async function apiMultipart<T>(path: string, opts: MultipartOptions): Promise<T> {
@@ -245,7 +292,16 @@ export async function apiMultipart<T>(path: string, opts: MultipartOptions): Pro
     window.clearTimeout(timeout);
   }
 
-  return parseJsonResponse<T>(path, res, opts._retried, () => apiMultipart<T>(path, { ...opts, _retried: true }));
+  return parseJsonResponse<T>(
+    path,
+    res,
+    opts._retried,
+    () => apiMultipart<T>(path, { ...opts, _retried: true }),
+    opts._powRetried,
+    requiresPowSolution(path, method)
+      ? () => apiMultipart<T>(path, { ...opts, _powRetried: true })
+      : undefined,
+  );
 }
 
 export async function downloadFile(path: string, filename: string): Promise<void> {

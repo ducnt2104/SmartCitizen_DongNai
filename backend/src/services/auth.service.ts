@@ -21,7 +21,12 @@ import {
   verifyPassword,
 } from '../utils/crypto';
 import type { AuditService } from './audit.service';
-import { parseVnPhone, type ParsedVnPhone, type PhoneOtpService } from './otp';
+import {
+  parseVnPhone,
+  type FirebasePhoneVerifier,
+  type ParsedVnPhone,
+  type PhoneOtpService,
+} from './otp';
 import type { OtpChannel, OtpDeliveryService, OtpPurpose } from './otpDelivery.service';
 import { notifySessionTerminated } from './sessionEvents';
 import { toProfile, type TrustService } from './trust.service';
@@ -29,7 +34,7 @@ import { toProfile, type TrustService } from './trust.service';
 export const OTP_TTL_MS = 5 * 60 * 1000;
 export const OTP_RESEND_MS = 60 * 1000;
 export const OTP_MAX_FAILS = 5;
-export const OTP_LOCK_MS = 15 * 60 * 1000;
+export const OTP_LOCK_MS = 3 * 60 * 1000;
 export const ACCESS_TOKEN_EXPIRES_IN = '15m';
 export const REAUTH_TOKEN_EXPIRES_IN = '5m';
 
@@ -121,6 +126,7 @@ export class AuthService {
     private readonly trust: TrustService,
     private readonly audit: AuditService,
     private readonly phoneOtp?: PhoneOtpService,
+    private readonly firebaseVerifier?: FirebasePhoneVerifier,
   ) {}
 
   private hashOtp(identifier: string, code: string): string {
@@ -146,8 +152,9 @@ export class AuthService {
       if (b && b.lockedUntil > now) {
         const waitSec = Math.max(1, Math.ceil((b.lockedUntil - now) / 1000));
         throw tooMany(
-          `${label} tạm khóa do nhập sai nhiều lần (exponential backoff). Thử lại sau ${waitSec} giây.`,
+          `${label} tạm khóa do nhập sai nhiều lần. Thử lại sau ${waitSec} giây.`,
           'login_locked',
+          { retryAfter: waitSec, retryAfterSec: waitSec },
         );
       }
     }
@@ -161,8 +168,8 @@ export class AuthService {
       const count = (cur?.count ?? 0) + 1;
       let lockedUntil = 0;
       if (count >= OTP_MAX_FAILS) {
-        // Exponential backoff: 30s -> 60s -> 120s -> 240s -> tối đa 15 phút
-        const backoffMs = Math.min(OTP_LOCK_MS, 30_000 * 2 ** (count - OTP_MAX_FAILS));
+        // Exponential backoff nhẹ: 15s -> 30s -> 60s -> 120s -> tối đa 3 phút
+        const backoffMs = Math.min(OTP_LOCK_MS, 15_000 * 2 ** (count - OTP_MAX_FAILS));
         lockedUntil = now + backoffMs;
       }
       this.bruteForceCache.set(k, { count, lockedUntil });
@@ -361,15 +368,19 @@ export class AuthService {
     const now = Date.now();
     const existing = await this.otps.get(parsed.value);
     if (existing && existing.lockedUntil > now) {
+      const waitSec = Math.max(1, Math.ceil((existing.lockedUntil - now) / 1000));
       throw tooMany(
-        `Tài khoản đang bị tạm khóa do nhập sai nhiều lần. Thử lại sau ${Math.ceil((existing.lockedUntil - now) / 60000)} phút.`,
+        `Tài khoản đang tạm khóa do nhập sai nhiều lần. Thử lại sau ${waitSec} giây.`,
         'otp_locked',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
       );
     }
     if (existing && existing.resendAt > now) {
+      const waitSec = Math.max(1, Math.ceil((existing.resendAt - now) / 1000));
       throw tooMany(
-        `Vui lòng chờ ${Math.ceil((existing.resendAt - now) / 1000)} giây trước khi yêu cầu gửi lại mã.`,
+        `Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã.`,
         'otp_cooldown',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
       );
     }
 
@@ -415,7 +426,12 @@ export class AuthService {
       throw badRequest('Mã OTP này đã được sử dụng. Hãy yêu cầu gửi mã mới.', 'otp_consumed');
     }
     if (rec.lockedUntil > now) {
-      throw tooMany(`Đã nhập sai quá ${OTP_MAX_FAILS} lần. Thử lại sau ${Math.ceil((rec.lockedUntil - now) / 60000)} phút.`, 'otp_locked');
+      const waitSec = Math.max(1, Math.ceil((rec.lockedUntil - now) / 1000));
+      throw tooMany(
+        `Đã nhập sai quá ${OTP_MAX_FAILS} lần. Thử lại sau ${Math.ceil(waitSec / 60)} phút.`,
+        'otp_locked',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
+      );
     }
     if (rec.expiresAt < now) {
       await this.otps.delete(parsed.value);
@@ -429,7 +445,12 @@ export class AuthService {
         rec.lockedUntil = now + OTP_LOCK_MS;
         rec.failedAttempts = 0;
         await this.otps.save(rec);
-        throw tooMany(`Nhập sai ${OTP_MAX_FAILS} lần — khóa tạm thời ${OTP_LOCK_MS / 60000} phút.`, 'otp_locked');
+        const lockSec = Math.max(1, Math.ceil(OTP_LOCK_MS / 1000));
+        throw tooMany(
+          `Nhập sai ${OTP_MAX_FAILS} lần — khóa tạm thời ${OTP_LOCK_MS / 60000} phút.`,
+          'otp_locked',
+          { retryAfter: lockSec, retryAfterSec: lockSec },
+        );
       }
       await this.otps.save(rec);
       throw badRequest(`Mã OTP chưa đúng. Còn ${OTP_MAX_FAILS - rec.failedAttempts} lần thử.`, 'otp_invalid');
@@ -524,16 +545,50 @@ export class AuthService {
     return this.issueSession(user, meta);
   }
 
-  /** Đặt lại mật khẩu cho công dân sau khi xác thực OTP thật (hỗ trợ cả Email OTP & Phone SMS OTP). */
+  /** Đặt lại mật khẩu cho công dân sau khi xác thực OTP thật (hỗ trợ cả Email OTP, Phone SMS OTP & Firebase Phone Auth). */
   async resetPassword(
     identifierRaw: string,
-    code: string,
+    code: string | undefined,
     newPassword: string,
     metaInput?: RequestMeta | string,
+    opts?: { firebaseIdToken?: string },
   ): Promise<IssuedAuth> {
     this.assertPasswordIfProvided(newPassword);
     const meta = normalizeMeta(metaInput);
     const parsedPhone = parseVnPhone(identifierRaw);
+
+    if (opts?.firebaseIdToken) {
+      if (!parsedPhone) {
+        throw badRequest('Xác thực Firebase chỉ hỗ trợ số điện thoại Việt Nam (+84).', 'invalid_phone');
+      }
+      if (!this.firebaseVerifier) {
+        throw new HttpError(503, 'Dịch vụ xác thực Firebase chưa sẵn sàng trên máy chủ.', 'firebase_not_configured');
+      }
+      const verified = await this.firebaseVerifier.verifyPhoneIdToken(opts.firebaseIdToken);
+      if (verified.phone.e164 !== parsedPhone.e164) {
+        throw forbidden('Số điện thoại xác thực Firebase không khớp với tài khoản cần đặt lại mật khẩu.', 'phone_mismatch');
+      }
+      const user =
+        (await this.users.getByPhone(parsedPhone.local)) ??
+        (await this.users.getByPhone(parsedPhone.e164));
+      if (!user) throw badRequest('Tài khoản chưa được đăng ký trên hệ thống.', 'account_not_found');
+      user.passwordHash = hashPassword(newPassword);
+      await this.users.save(user);
+      await this.audit.log(
+        { id: user.id, name: user.name, role: user.role, ip: meta.ip },
+        'auth.password_reset',
+        user.id,
+        null,
+        { channel: 'sms', provider: 'firebase' },
+        meta.ip,
+      );
+      return this.issueSession(user, meta, { reasonForPrior: 'PASSWORD_CHANGED' });
+    }
+
+    if (!code) {
+      throw badRequest('Vui lòng nhập mã OTP gồm 6 chữ số.', 'invalid_otp_format');
+    }
+
     if (parsedPhone && this.phoneOtp) {
       const challenge = await this.phoneOtp.peekChallenge(parsedPhone.e164);
       if (challenge) {
@@ -582,7 +637,7 @@ export class AuthService {
     const parsed = parseIdentifier(identifierRaw);
     if (!parsed) throw badRequest('Email hoặc số điện thoại không hợp lệ.', 'invalid_identifier');
 
-    const failKeys = [`pw:${parsed.value}`, meta.ip ? `ip_pw:${meta.ip}` : ''];
+    const failKeys = [`pw:${parsed.value}`, meta.ip ? `ip_pw:${meta.ip}|${meta.deviceFingerprint}` : ''];
     this.assertNotRateLocked(failKeys, 'Đăng nhập');
 
     const parsedPhone = parseVnPhone(identifierRaw);
@@ -665,7 +720,7 @@ export class AuthService {
   ): Promise<IssuedAuth> {
     const meta = normalizeMeta(metaInput);
     const trimmed = staffIdentifier.trim();
-    const failKeys = [`staff:${trimmed.toLowerCase()}`, meta.ip ? `ip_staff:${meta.ip}` : ''];
+    const failKeys = [`staff:${trimmed.toLowerCase()}`, meta.ip ? `ip_staff:${meta.ip}|${meta.deviceFingerprint}` : ''];
     this.assertNotRateLocked(failKeys, 'Tài khoản');
 
     const normalizedPhone = normalizePhone(trimmed);
@@ -713,7 +768,7 @@ export class AuthService {
   async rescueLogin(identifierRaw: string, password: string, metaInput?: RequestMeta | string): Promise<IssuedAuth> {
     const meta = normalizeMeta(metaInput);
     const trimmed = identifierRaw.trim();
-    const failKeys = [`rescue:${trimmed.toLowerCase()}`, meta.ip ? `ip_rescue:${meta.ip}` : ''];
+    const failKeys = [`rescue:${trimmed.toLowerCase()}`, meta.ip ? `ip_rescue:${meta.ip}|${meta.deviceFingerprint}` : ''];
     this.assertNotRateLocked(failKeys, 'Tài khoản Đội Cứu Hộ');
 
     const normalizedPhone = normalizePhone(trimmed);
@@ -920,7 +975,15 @@ export class AuthService {
       throw badRequest('Số điện thoại này đã thuộc về tài khoản khác.', 'duplicate_phone');
     }
 
-    if (input.otpCode) {
+    if (input.firebaseIdToken) {
+      if (!this.firebaseVerifier) {
+        throw new HttpError(503, 'Dịch vụ xác thực Firebase chưa sẵn sàng trên máy chủ.', 'firebase_not_configured');
+      }
+      const verified = await this.firebaseVerifier.verifyPhoneIdToken(input.firebaseIdToken);
+      if (verified.phone.e164 !== parsedPhone.e164) {
+        throw forbidden('Số điện thoại xác thực Firebase không khớp với số điện thoại mới.', 'phone_mismatch');
+      }
+    } else if (input.otpCode) {
       const ch = this.phoneOtp ? await this.phoneOtp.peekChallenge(parsedPhone.e164) : null;
       if (ch && this.phoneOtp) {
         await this.phoneOtp.verifyPhoneOtp(parsedPhone.e164, input.otpCode);

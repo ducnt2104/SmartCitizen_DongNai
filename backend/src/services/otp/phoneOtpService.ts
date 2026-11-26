@@ -14,6 +14,7 @@ import {
   MultiSmsOtpDispatcher,
   type ConcreteSmsProviderName,
   type FetchLike,
+  type RuntimeFirebaseClientConfig,
 } from './smsProviders';
 
 export const PHONE_OTP_TTL_MS = 5 * 60 * 1000;
@@ -39,6 +40,8 @@ export interface SendPhoneOtpResponse {
   expiresInSec: number;
   provider: ConcreteSmsProviderName | string;
   clientSideFirebase?: boolean;
+  firebaseClientConfig?: RuntimeFirebaseClientConfig | null;
+  directSmsAvailable?: boolean;
 }
 
 /** Sinh mã OTP 6 chữ số ngẫu nhiên mật mã học (`100000`–`999999`). */
@@ -227,21 +230,28 @@ export class PhoneOtpService {
       purpose?: 'login' | 'reset_password' | 'verify_phone';
       now?: number;
       envSource?: NodeJS.ProcessEnv;
+      preferDirectSms?: boolean;
     },
   ): Promise<SendPhoneOtpResponse> {
     const parsed = requireVnPhone(rawPhone);
     const now = opts?.now ?? Date.now();
     const purpose = opts?.purpose ?? 'login';
     const envSource = opts?.envSource ?? process.env;
+    const preferDirectSms = Boolean(opts?.preferDirectSms);
 
     // 1. Kiểm tra Cooldown 60s & Giới hạn 3 lần / 10 phút / SĐT
-    this.rateLimiter.assertCanSend(parsed.e164, now);
+    this.rateLimiter.assertCanSend(parsed.e164, now, {
+      allowFirebaseFallbackBypass: preferDirectSms,
+    });
 
     // Kiểm tra thêm resendAt lưu trong DB (phòng trường hợp vừa restart server)
     const existing = await this.loadLatestChallenge(parsed.e164);
     if (existing && existing.resendAt > now) {
       const waitSec = Math.max(1, Math.ceil((existing.resendAt - now) / 1000));
-      throw tooMany(`Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`, 'otp_cooldown');
+      throw tooMany(`Vui lòng chờ ${waitSec} giây trước khi yêu cầu gửi lại mã OTP.`, 'otp_cooldown', {
+        retryAfter: waitSec,
+        retryAfterSec: waitSec,
+      });
     }
 
     // 2. Sinh mã 6 số CSPRNG + salt ngẫu nhiên 128-bit & băm SHA-256
@@ -259,6 +269,7 @@ export class PhoneOtpService {
         purpose,
       },
       envSource,
+      { preferDirectSms },
     );
 
     // 4. Lưu challenge & ghi nhận rate limit sau khi cổng SMS xác nhận
@@ -276,7 +287,11 @@ export class PhoneOtpService {
         invalidatedAt: null,
       });
     }
-    this.rateLimiter.recordSent(parsed.e164, now);
+    this.rateLimiter.recordSent(parsed.e164, now, {
+      isFirebasePrecheck: Boolean(sendResult.clientSideFirebase),
+    });
+
+    const statusSnapshot = sendResult.clientSideFirebase ? this.smsDispatcher.getStatus(envSource) : null;
 
     return {
       channel: 'phone',
@@ -285,7 +300,13 @@ export class PhoneOtpService {
       resendInSec: OTP_COOLDOWN_MS / 1000,
       expiresInSec: PHONE_OTP_TTL_MS / 1000,
       provider: sendResult.provider,
-      ...(sendResult.clientSideFirebase ? { clientSideFirebase: true } : {}),
+      ...(sendResult.clientSideFirebase
+        ? {
+            clientSideFirebase: true,
+            firebaseClientConfig: statusSnapshot?.firebaseClientConfig ?? null,
+            directSmsAvailable: Boolean(statusSnapshot?.directSmsConfigured),
+          }
+        : {}),
     };
   }
 
@@ -315,6 +336,7 @@ export class PhoneOtpService {
       throw tooMany(
         `Mã OTP đã bị khóa do nhập sai quá ${OTP_MAX_VERIFY_ATTEMPTS} lần. Vui lòng yêu cầu gửi mã mới.`,
         'otp_locked',
+        { retryAfter: 10, retryAfterSec: 10 },
       );
     }
     if (rec.expiresAt < now) {
@@ -334,6 +356,7 @@ export class PhoneOtpService {
         throw tooMany(
           `Nhập sai ${OTP_MAX_VERIFY_ATTEMPTS} lần — mã OTP này đã bị khóa để bảo vệ tài khoản. Vui lòng yêu cầu mã mới.`,
           'otp_locked',
+          { retryAfter: 10, retryAfterSec: 10 },
         );
       }
       await this.updateChallengeState(rec);

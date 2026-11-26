@@ -4,8 +4,8 @@ import { env } from '../config/env';
 import { extractClientMeta } from './auth';
 
 const HOUR = 3600 * 1000;
-const TEN_MIN = 10 * 60 * 1000;
-const FIFTEEN_MIN = 15 * 60 * 1000;
+const FIVE_MIN = 5 * 60 * 1000;
+const THREE_MIN = 3 * 60 * 1000;
 const ONE_MIN = 60 * 1000;
 
 export function isStrictSecurityActive(req: Request): boolean {
@@ -85,7 +85,7 @@ export class SlidingWindowLimiter {
       if (opts.exponentialBackoff) {
         const curPen = this.penalties.get(bucketKey);
         const strikes = (curPen?.strikes ?? 0) + 1;
-        const backoffMs = Math.min(FIFTEEN_MIN, 30_000 * 2 ** Math.min(strikes - 1, 5));
+        const backoffMs = Math.min(THREE_MIN, 15_000 * 2 ** Math.min(strikes - 1, 3));
         retryAfterMs = Math.max(retryAfterMs, backoffMs);
         this.penalties.set(bucketKey, { strikes, lockedUntil: now + backoffMs });
       }
@@ -119,6 +119,19 @@ export class SlidingWindowLimiter {
 
 export const sharedSlidingLimiter = new SlidingWindowLimiter();
 
+function sendRateLimitResponse(res: Response, code: string, message: string, retryAfterSec: number): void {
+  const safeRetry = Math.max(1, Math.ceil(retryAfterSec));
+  res.setHeader('Retry-After', String(safeRetry));
+  res.status(429).json({
+    error: {
+      code,
+      message,
+      retryAfter: safeRetry,
+      details: { retryAfter: safeRetry, retryAfterSec: safeRetry },
+    },
+  });
+}
+
 function slidingMiddleware(rule: SlidingWindowRule): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
     if (rule.strictOnly && !isStrictSecurityActive(req)) {
@@ -137,69 +150,53 @@ function slidingMiddleware(rule: SlidingWindowRule): RequestHandler {
     res.setHeader('X-RateLimit-Remaining', String(verdict.remaining));
 
     if (!verdict.allowed) {
-      res.setHeader('Retry-After', String(verdict.retryAfterSec));
-      res.status(429).json({
-        error: {
-          code: rule.code,
-          message: rule.message,
-          details: { retryAfterSec: verdict.retryAfterSec },
-        },
-      });
+      sendRateLimitResponse(res, rule.code, rule.message, verdict.retryAfterSec);
       return;
     }
     next();
   };
 }
 
-function dualReportActionMiddleware(): RequestHandler {
+interface DualActionConfig {
+  prefix: string;
+  windowMs: number;
+  userMax: number;
+  ipMax: number;
+  testMax: number;
+  userMessage: string;
+  ipMessage: string;
+}
+
+function dualActionMiddleware(cfg: DualActionConfig): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!isStrictSecurityActive(req)) {
-      // Giữ giới hạn burst nhẹ trong suite test mặc định khi không bật X-Security-Strict
-      const k = `test_burst:${req.user?.id ?? req.ip ?? 'anon'}`;
-      const v = sharedSlidingLimiter.checkAndConsume(k, { windowMs: HOUR, max: 40 });
+      const k = `test_burst:${cfg.prefix}:${req.user?.id ?? req.ip ?? 'anon'}`;
+      const v = sharedSlidingLimiter.checkAndConsume(k, { windowMs: HOUR, max: cfg.testMax });
       if (!v.allowed) {
-        res.status(429).json({ error: { code: 'report_rate_limited', message: 'Thao tác quá dày, vui lòng thử lại sau.' } });
+        sendRateLimitResponse(res, `${cfg.prefix}_rate_limited`, 'Thao tác quá dày, vui lòng chờ vài giây rồi thử lại.', v.retryAfterSec);
         return;
       }
       next();
       return;
     }
 
-    // Production & Strict Security Mode:
-    // 1) Tối đa 5 req / 10 phút / tài khoản (userId)
     if (req.user?.id) {
-      const userRes = sharedSlidingLimiter.checkAndConsume(`act_u:${req.user.id}`, {
-        windowMs: TEN_MIN,
-        max: 5,
+      const userRes = sharedSlidingLimiter.checkAndConsume(`act_u:${cfg.prefix}:${req.user.id}`, {
+        windowMs: cfg.windowMs,
+        max: cfg.userMax,
       });
       if (!userRes.allowed) {
-        res.setHeader('Retry-After', String(userRes.retryAfterSec));
-        res.status(429).json({
-          error: {
-            code: 'report_user_rate_limited',
-            message: 'Tài khoản đã gửi quá 5 phản ánh/xác nhận trong 10 phút. Vui lòng chờ giây lát.',
-            details: { retryAfterSec: userRes.retryAfterSec },
-          },
-        });
+        sendRateLimitResponse(res, `${cfg.prefix}_user_rate_limited`, cfg.userMessage, userRes.retryAfterSec);
         return;
       }
     }
 
-    // 2) Tối đa 10 req / 10 phút / IP + deviceHash
-    const ipRes = sharedSlidingLimiter.checkAndConsume(`act_ip:${ipDeviceKey(req)}`, {
-      windowMs: TEN_MIN,
-      max: 10,
-      exponentialBackoff: true,
+    const ipRes = sharedSlidingLimiter.checkAndConsume(`act_ip:${cfg.prefix}:${ipDeviceKey(req)}`, {
+      windowMs: cfg.windowMs,
+      max: cfg.ipMax,
     });
     if (!ipRes.allowed) {
-      res.setHeader('Retry-After', String(ipRes.retryAfterSec));
-      res.status(429).json({
-        error: {
-          code: 'report_ip_rate_limited',
-          message: 'Thiết bị/IP đã gửi quá 10 thao tác trong 10 phút. Vui lòng thử lại sau.',
-          details: { retryAfterSec: ipRes.retryAfterSec },
-        },
-      });
+      sendRateLimitResponse(res, `${cfg.prefix}_ip_rate_limited`, cfg.ipMessage, ipRes.retryAfterSec);
       return;
     }
 
@@ -207,34 +204,41 @@ function dualReportActionMiddleware(): RequestHandler {
   };
 }
 
-/** Lớp 3: Sliding-Window Rate Limiting đa tầng theo cặp (IP + deviceHash + userId). */
+/** Lớp 3: Sliding-Window Rate Limiting đa tầng thân thiện người dùng (ưu tiên tách theo IP + deviceHash + userId, tránh khóa oan CGNAT). */
 export const limits = {
   global: slidingMiddleware({
-    windowMs: 15 * ONE_MIN,
-    max: 600,
+    windowMs: FIVE_MIN,
+    max: 2000,
     key: hybridClientKey,
     code: 'rate_limited',
-    message: 'Quá nhiều yêu cầu, vui lòng thử lại sau ít phút.',
+    message: 'Hệ thống đang nhận quá nhiều yêu cầu cùng lúc, vui lòng chờ vài giây rồi thử lại.',
   }),
-  /** API đọc dữ liệu công khai: tối đa 120 req/phút theo (IP + deviceHash + userId) */
+  /** Endpoint cấp PoW challenge: tách riêng hạn mức cao để không bao giờ gây Double-Penalty */
+  challenge: slidingMiddleware({
+    windowMs: ONE_MIN,
+    max: 300,
+    key: ipDeviceKey,
+    code: 'challenge_rate_limited',
+    message: 'Yêu cầu làm mới xác thực bảo mật quá nhanh, vui lòng chờ vài giây rồi thử lại.',
+  }),
+  /** API đọc dữ liệu công khai: tối đa 300 req/phút theo (IP + deviceHash + userId) */
   publicRead: slidingMiddleware({
     windowMs: ONE_MIN,
-    max: 120,
+    max: 300,
     key: hybridClientKey,
     code: 'public_read_rate_limited',
-    message: 'Tốc độ đọc dữ liệu vượt quá 120 yêu cầu/phút. Vui lòng chậm lại.',
+    message: 'Tốc độ đọc dữ liệu hơi nhanh. Vui lòng chờ vài giây rồi thử lại.',
     strictOnly: true,
   }),
-  /** API Auth / OTP: tối đa 5 req / 15 phút + Exponential Backoff */
+  /** API Auth / OTP: nới lỏng 30 req / 5 phút theo (IP + deviceHash), không khóa chéo CGNAT */
   otp: slidingMiddleware({
-    windowMs: FIFTEEN_MIN,
-    max: 5,
-    key: (r) => extractClientMeta(r).ip || 'ip',
+    windowMs: FIVE_MIN,
+    max: 30,
+    key: ipDeviceKey,
     code: 'otp_rate_limited',
-    message: 'IP của bạn đã yêu cầu OTP quá 5 lần trong 15 phút. Vui lòng thử lại sau.',
-    exponentialBackoff: true,
+    message: 'Thiết bị của bạn đã gửi quá 30 yêu cầu OTP trong 5 phút. Vui lòng thử lại sau ít phút.',
   }),
-  /** Tối đa 10 lần gọi AI Vision / giờ / thiết bị */
+  /** Tối đa AI Vision / giờ / thiết bị */
   vision: slidingMiddleware({
     windowMs: HOUR,
     max: env.aiVisionPerHour,
@@ -243,20 +247,37 @@ export const limits = {
     message: `Mỗi thiết bị chỉ được phân tích ảnh bằng AI tối đa ${env.aiVisionPerHour} lần mỗi giờ.`,
   }),
   chat: slidingMiddleware({
-    windowMs: TEN_MIN,
-    max: 40,
+    windowMs: FIVE_MIN,
+    max: 80,
     key: ipDeviceKey,
     code: 'chat_rate_limited',
-    message: 'Bạn nhắn quá nhanh, vui lòng chờ một chút.',
+    message: 'Bạn nhắn quá nhanh, vui lòng chờ một chút rồi gửi tiếp.',
   }),
-  /** API gửi phản ánh / tạo hoặc xác nhận cảnh báo: 5 req/10 phút/tài khoản, 10 req/10 phút/IP+device */
-  reportBurst: dualReportActionMiddleware(),
-  confirm: dualReportActionMiddleware(),
+  /** API gửi phản ánh / tạo cảnh báo: 30 req/5 phút/tài khoản, 60 req/5 phút/thiết bị */
+  reportBurst: dualActionMiddleware({
+    prefix: 'report',
+    windowMs: FIVE_MIN,
+    userMax: 30,
+    ipMax: 60,
+    testMax: 120,
+    userMessage: 'Tài khoản đã gửi quá 30 phản ánh trong 5 phút. Vui lòng chờ giây lát rồi thử lại.',
+    ipMessage: 'Thiết bị đã gửi quá 60 phản ánh trong 5 phút. Vui lòng chờ giây lát rồi thử lại.',
+  }),
+  /** API xác nhận phản ánh / cảnh báo: 60 req/5 phút/tài khoản, 120 req/5 phút/thiết bị */
+  confirm: dualActionMiddleware({
+    prefix: 'confirm',
+    windowMs: FIVE_MIN,
+    userMax: 60,
+    ipMax: 120,
+    testMax: 240,
+    userMessage: 'Bạn đã xác nhận quá 60 lần trong 5 phút. Vui lòng chờ giây lát rồi thử lại.',
+    ipMessage: 'Thiết bị đã gửi quá 120 lượt xác nhận trong 5 phút. Vui lòng chờ giây lát rồi thử lại.',
+  }),
   login: slidingMiddleware({
-    windowMs: FIFTEEN_MIN,
-    max: 30,
+    windowMs: FIVE_MIN,
+    max: 80,
     key: ipDeviceKey,
     code: 'login_rate_limited',
-    message: 'Quá nhiều lần đăng nhập từ thiết bị/IP này, vui lòng thử lại sau.',
+    message: 'Bạn thao tác đăng nhập hơi nhanh từ thiết bị này, vui lòng chờ giây lát rồi thử lại.',
   }),
 };

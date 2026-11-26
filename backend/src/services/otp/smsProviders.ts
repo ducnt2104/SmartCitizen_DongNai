@@ -542,7 +542,27 @@ export class MultiSmsOtpDispatcher {
     return 'auto';
   }
 
-  resolveActiveProvider(envSource: NodeJS.ProcessEnv = process.env): SmsOtpProvider | null {
+  resolveDirectServerProvider(envSource: NodeJS.ProcessEnv = process.env): SmsOtpProvider | null {
+    const directServerProviders: ConcreteSmsProviderName[] = [
+      'speedsms',
+      'esms',
+      'twilio',
+      'vonage',
+      // Webhook SMS Gateway (TextBee / SMS_GATEWAY_URL)
+      'android_gateway',
+    ];
+    for (const name of directServerProviders) {
+      if (this.providers[name].isConfigured(envSource)) {
+        return this.providers[name];
+      }
+    }
+    return null;
+  }
+
+  resolveActiveProvider(
+    envSource: NodeJS.ProcessEnv = process.env,
+    opts?: { preferDirectSms?: boolean },
+  ): SmsOtpProvider | null {
     if (this.overrideProvider) return this.overrideProvider;
 
     const mode = this.getConfiguredMode(envSource);
@@ -551,25 +571,21 @@ export class MultiSmsOtpDispatcher {
       return explicit.isConfigured(envSource) ? explicit : null;
     }
 
+    if (opts?.preferDirectSms) {
+      const direct = this.resolveDirectServerProvider(envSource);
+      if (direct) return direct;
+    }
+
     // 1. Firebase Phone Auth (nếu cấu hình đủ client API key + Project ID)
     const fb = this.providers.firebase as FirebaseSmsOtpProvider;
     if (fb.isAutoFlowReady(envSource)) {
       return fb;
     }
 
-    // 2. SpeedSMS / eSMS (VN) -> Twilio / Vonage
-    const directServerProviders: ConcreteSmsProviderName[] = [
-      'speedsms',
-      'esms',
-      'twilio',
-      'vonage',
-      // 3. Webhook SMS Gateway (TextBee / SMS_GATEWAY_URL)
-      'android_gateway',
-    ];
-    for (const name of directServerProviders) {
-      if (this.providers[name].isConfigured(envSource)) {
-        return this.providers[name];
-      }
+    // 2. SpeedSMS / eSMS (VN) -> Twilio / Vonage -> Webhook SMS Gateway (TextBee / SMS_GATEWAY_URL)
+    const direct = this.resolveDirectServerProvider(envSource);
+    if (direct) {
+      return direct;
     }
 
     // Nếu chỉ có FIREBASE_PROJECT_ID mà chưa có SMS trực tiếp nào khác
@@ -584,28 +600,40 @@ export class MultiSmsOtpDispatcher {
     smsProviderMode: SmsProviderMode;
     activeSmsProvider: ConcreteSmsProviderName | null;
     realSmsConfigured: boolean;
+    directSmsConfigured: boolean;
+    directSmsProvider: ConcreteSmsProviderName | null;
     firebaseClientReady: boolean;
     firebaseClientConfig: RuntimeFirebaseClientConfig | null;
   } {
     const mode = this.getConfiguredMode(envSource);
     const active = this.resolveActiveProvider(envSource);
+    const direct =
+      mode === 'auto' || (mode !== 'firebase' && active?.name !== 'firebase')
+        ? this.resolveDirectServerProvider(envSource)
+        : null;
     const fbProvider = this.providers.firebase as FirebaseSmsOtpProvider;
     const realSmsConfigured = active !== null && active.isConfigured(envSource);
     return {
       smsProviderMode: mode,
       activeSmsProvider: active?.name ?? null,
       realSmsConfigured,
+      directSmsConfigured: direct !== null,
+      directSmsProvider: direct?.name ?? null,
       firebaseClientReady: fbProvider.isConfigured(envSource),
       firebaseClientConfig: fbProvider.getClientConfig(envSource),
     };
   }
 
-  async sendOtp(input: SmsOtpSendInput, envSource: NodeJS.ProcessEnv = process.env): Promise<SmsOtpSendResult> {
+  async sendOtp(
+    input: SmsOtpSendInput,
+    envSource: NodeJS.ProcessEnv = process.env,
+    opts?: { preferDirectSms?: boolean },
+  ): Promise<SmsOtpSendResult> {
     if (this.overrideProvider) {
       return this.overrideProvider.send(input, envSource);
     }
 
-    const active = this.resolveActiveProvider(envSource);
+    const active = this.resolveActiveProvider(envSource, opts);
     if (!active) {
       throw new HttpError(503, NOT_CONFIGURED_MESSAGE, 'SMS_PROVIDER_NOT_CONFIGURED');
     }

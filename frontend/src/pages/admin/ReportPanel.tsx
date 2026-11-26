@@ -65,6 +65,7 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
   }, [after]);
 
   const run = async (key: string, fn: () => Promise<ClientReport | null>, okMsg: string): Promise<void> => {
+    if (busy !== null) return;
     setBusy(key);
     try {
       const upd = await fn();
@@ -348,12 +349,12 @@ export function ReportPanel({ report: r, canAct, onChanged, onClose }: Props) {
               </button>
             </div>
 
-            <fieldset className="space-y-2 rounded border border-ioc-line p-2" disabled={busy === 'resolve'}>
+            <fieldset className="space-y-2 rounded border border-ioc-line p-2" disabled={busy !== null}>
               <legend className="px-1 text-[11px] font-bold uppercase tracking-wider text-ioc-dim">{t('ioc.acceptance')}</legend>
               {after ? <img src={after.previewUrl} alt={t('detail.after')} width={480} height={270} loading="lazy" decoding="async" className="aspect-video w-full rounded border border-ioc-line object-cover" /> : <p className="text-xs text-ioc-dim">{t('ioc.acceptanceHint')}</p>}
               <div className="grid grid-cols-2 gap-2">
                 <button type="button" className="ioc-btn" onClick={() => fileRef.current?.click()}>{busy === 'photo' ? <Spinner /> : <Upload className="h-4 w-4" aria-hidden />}{t('ioc.uploadAfter')}</button>
-                <button type="button" className="ioc-btn ioc-btn-green" disabled={!after} onClick={() => void resolve()}>{busy === 'resolve' ? <Spinner /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}{t('ioc.verifyClose')}</button>
+                <button type="button" className="ioc-btn ioc-btn-green" disabled={!after || busy !== null} onClick={() => void resolve()}>{busy === 'resolve' ? <Spinner /> : <CheckCircle2 className="h-4 w-4" aria-hidden />}{t('ioc.verifyClose')}</button>
               </div>
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => void pickAfter(e.target.files?.[0])} />
               {aiMsg && !aiMsg.ok && (

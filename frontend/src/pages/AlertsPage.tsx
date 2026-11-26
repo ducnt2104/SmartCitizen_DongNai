@@ -57,6 +57,7 @@ import {
   type DongNaiWeather,
   type WeatherKind,
 } from '../lib/weather';
+import { useAuthGate } from '../state/authGate';
 import { useSettings } from '../state/settings';
 import { useToast } from '../state/toast';
 import type { CameraCommand } from '../components/map/GoogleMapEngine';
@@ -167,8 +168,10 @@ const ARTERIAL_FOCUS_COORDS: Record<string, { lat: number; lng: number; zoom: nu
 export default function AlertsPage() {
   const { fmtDate, lang } = useI18n();
   const { settings } = useSettings();
+  const { requireAuth } = useAuthGate();
   const session = useSession();
   const toast = useToast();
+  const [confirmingAlertId, setConfirmingAlertId] = useState<string | null>(null);
 
   const selectedWard = settings.scope.startsWith('ward:')
     ? WARD_BY_CODE[settings.scope.replace('ward:', '')]
@@ -561,10 +564,10 @@ export default function AlertsPage() {
   };
 
   const handleConfirmAlert = async (al: CivicAlertItem): Promise<void> => {
-    if (!session) {
-      toast('info', 'Vui lòng đăng nhập để xác nhận cảnh báo cộng đồng.');
-      return;
-    }
+    if (confirmingAlertId !== null) return;
+    if (session && al.confirmedByUserIds?.includes(session.user.id)) return;
+    if (!(await requireAuth())) return;
+    setConfirmingAlertId(al.id);
     try {
       const updated = await api<CivicAlertItem>(`/api/alerts/${encodeURIComponent(al.id)}/confirm`, {
         method: 'POST',
@@ -574,6 +577,8 @@ export default function AlertsPage() {
       toast('success', 'Đã ghi nhận xác nhận (+1)');
     } catch (err) {
       toast('error', 'Không thể xác nhận', err instanceof Error ? err.message : undefined);
+    } finally {
+      setConfirmingAlertId(null);
     }
   };
 
@@ -667,6 +672,8 @@ export default function AlertsPage() {
 
   const handleSubmitCommunityAlert = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
+    if (savingComm) return;
+    if (!(await requireAuth())) return;
     const w = WARD_BY_CODE[commWardCode];
     setSavingComm(true);
     try {
@@ -1557,14 +1564,21 @@ export default function AlertsPage() {
 
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleConfirmAlert(al)}
-                          className="btn btn-soft !min-h-8 !px-2.5 !text-xs"
-                        >
-                          <ThumbsUp className="h-3.5 w-3.5" aria-hidden />
-                          Xác nhận ({al.confirmCount})
-                        </button>
+                        {(() => {
+                          const alreadyConfirmed = Boolean(session && al.confirmedByUserIds?.includes(session.user.id));
+                          const isConfirming = confirmingAlertId === al.id;
+                          return (
+                            <button
+                              type="button"
+                              disabled={isConfirming || alreadyConfirmed}
+                              onClick={() => void handleConfirmAlert(al)}
+                              className={`btn !min-h-8 !px-2.5 !text-xs ${alreadyConfirmed ? 'btn-ghost text-ok' : 'btn-soft'}`}
+                            >
+                              {isConfirming ? <Spinner className="h-3.5 w-3.5" /> : <ThumbsUp className="h-3.5 w-3.5" aria-hidden />}
+                              {alreadyConfirmed ? `Đã xác nhận (${al.confirmCount})` : `Xác nhận (${al.confirmCount})`}
+                            </button>
+                          );
+                        })()}
                         {al.sourceUrl && (
                           <a
                             href={al.sourceUrl}
@@ -1727,7 +1741,7 @@ export default function AlertsPage() {
               className="field !min-h-10 text-sm"
             />
             <button type="submit" disabled={savingComm} className="btn btn-primary w-full">
-              {savingComm ? <Spinner /> : 'Gửi cảnh báo (đã xác thực PoW)'}
+              {savingComm ? <Spinner /> : 'Gửi cảnh báo'}
             </button>
           </form>
         </div>

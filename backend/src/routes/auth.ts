@@ -20,6 +20,7 @@ export const phoneAuthSchemas = {
       target: z.string().min(3).max(120).optional(),
       identifier: z.string().min(3).max(120).optional(),
       purpose: z.enum(['login', 'reset_password', 'verify_phone', 'change_email', 'change_phone']).default('login'),
+      preferDirectSms: z.boolean().optional(),
     })
     .refine(
       (d) => Boolean(d.phone || d.email || d.target || d.identifier),
@@ -101,6 +102,8 @@ export function buildAuthRouter(s: Services): Router {
           ? sms.activeSmsProvider
           : (legacy.activeSmsProvider ?? sms.activeSmsProvider),
         smsProviderMode: sms.smsProviderMode,
+        directSmsConfigured: sms.directSmsConfigured,
+        directSmsProvider: sms.directSmsProvider,
         smsPhoneAuthReady:
           smsConfigured || sms.firebaseClientReady || Boolean(sms.firebaseClientConfig),
         firebaseClientReady: sms.firebaseClientReady,
@@ -112,10 +115,10 @@ export function buildAuthRouter(s: Services): Router {
 
   router.post(
     '/otp/send',
-    limits.otp,
     sec.requirePow,
     sec.botTrapCheck,
     validateBody(phoneAuthSchemas.otpSend),
+    limits.otp,
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpSend>;
       const { isEmail, rawTarget } = detectIsEmailChannel(b);
@@ -133,18 +136,26 @@ export function buildAuthRouter(s: Services): Router {
         return;
       }
 
-      const phonePurpose = b.purpose === 'reset_password' || b.purpose === 'verify_phone' ? b.purpose : 'login';
-      const out = await s.phoneOtp.sendPhoneOtp(rawTarget, { purpose: phonePurpose });
+      const phonePurpose =
+        b.purpose === 'reset_password'
+          ? 'reset_password'
+          : b.purpose === 'verify_phone' || b.purpose === 'change_phone'
+            ? 'verify_phone'
+            : 'login';
+      const out = await s.phoneOtp.sendPhoneOtp(rawTarget, {
+        purpose: phonePurpose,
+        preferDirectSms: b.preferDirectSms,
+      });
       res.json(out);
     }),
   );
 
   router.post(
     '/otp/verify',
-    limits.login,
     sec.requirePow,
     sec.botTrapCheck,
     validateBody(phoneAuthSchemas.otpVerify),
+    limits.login,
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.otpVerify>;
       const { isEmail, rawTarget } = detectIsEmailChannel(b);
@@ -194,8 +205,9 @@ export function buildAuthRouter(s: Services): Router {
 
   router.post(
     '/otp/verify-firebase',
-    limits.login,
+    sec.botTrapCheck,
     validateBody(phoneAuthSchemas.verifyFirebase),
+    limits.login,
     h(async (req: Request, res: Response) => {
       const b = req.body as z.infer<typeof phoneAuthSchemas.verifyFirebase>;
       const idToken = (b.firebaseIdToken ?? b.idToken ?? '').trim();

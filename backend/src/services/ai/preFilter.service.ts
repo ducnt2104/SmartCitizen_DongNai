@@ -221,6 +221,7 @@ export class Stage0PreFilterService {
       throw tooMany(
         `Hệ thống tạm giới hạn thao tác do phát hiện nhiều ảnh/nội dung chưa hợp lệ liên tiếp. Vui lòng thử lại sau ${waitSec} giây.`,
         'progressive_cooldown',
+        { retryAfter: waitSec, retryAfterSec: waitSec },
       );
     }
 
@@ -229,11 +230,12 @@ export class Stage0PreFilterService {
     bucket.rejections = bucket.rejections.filter((ts) => now - ts < 15 * 60 * 1000);
 
     // Người dùng bị giám sát (trustScore < 25) bị siết giới hạn chặt hơn
-    const maxPerHour = trustScore < 25 ? Math.max(3, Math.floor(env.aiVisionPerHour / 2)) : env.aiVisionPerHour * 2;
+    const maxPerHour = trustScore < 25 ? Math.max(5, Math.floor(env.aiVisionPerHour / 2)) : env.aiVisionPerHour * 3;
     if (bucket.timestamps.length >= maxPerHour) {
       throw tooMany(
         `Bạn đã vượt quá giới hạn phân tích (${maxPerHour} lượt/giờ). Vui lòng thử lại sau.`,
         'stage0_rate_limited',
+        { retryAfter: 60, retryAfterSec: 60 },
       );
     }
     bucket.timestamps.push(now);
@@ -246,7 +248,7 @@ export class Stage0PreFilterService {
     bucket.rejections = bucket.rejections.filter((ts) => now - ts < 15 * 60 * 1000);
     bucket.rejections.push(now);
     if (bucket.rejections.length >= 2) {
-      const steps = [60_000, 180_000, 600_000];
+      const steps = [15_000, 30_000, 60_000];
       const idx = Math.min(steps.length - 1, bucket.rejections.length - 2);
       bucket.cooldownUntil = now + steps[idx];
     }

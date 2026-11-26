@@ -388,6 +388,38 @@ describe('3. Mock Unit Test các SMS Provider (android_gateway, esms, speedsms, 
     ).toBe('android_gateway');
     expect(() => dispatcher.resolveActiveProvider({})).not.toThrow();
     expect(dispatcher.resolveActiveProvider({})).toBeNull();
+
+    // Khi có đồng thời Firebase + cổng SMS trực tiếp (TextBee/SpeedSMS), status phải báo directSmsConfigured=true
+    // và preferDirectSms=true bỏ qua Firebase mà không vướng cooldown ngay sau Firebase precheck
+    const dualEnv: NodeJS.ProcessEnv = {
+      FIREBASE_PROJECT_ID: 'smartcitizen-d87fd',
+      FIREBASE_API_KEY: 'AIzaTestKey123',
+      TEXTBEE_DEVICE_ID: 'dev_01',
+      TEXTBEE_API_KEY: 'tb_key_01',
+    };
+    const dualStatus = dispatcher.getStatus(dualEnv);
+    expect(dualStatus.activeSmsProvider).toBe('firebase');
+    expect(dualStatus.directSmsConfigured).toBe(true);
+    expect(dualStatus.directSmsProvider).toBe('android_gateway');
+
+    const svcDual = new PhoneOtpService({
+      rateLimiter: new OtpSendRateLimiter(),
+      smsDispatcher: new MultiSmsOtpDispatcher(mockFetch),
+    });
+    const t0 = 1_700_500_000_000;
+    const precheck = await svcDual.sendPhoneOtp('0342266204', { now: t0, envSource: dualEnv });
+    expect(precheck.provider).toBe('firebase');
+    expect(precheck.clientSideFirebase).toBe(true);
+    expect(precheck.directSmsAvailable).toBe(true);
+
+    // Fallback ngay sau đó (t0 + 200ms) bằng preferDirectSms không bị 429 otp_cooldown
+    const fallback = await svcDual.sendPhoneOtp('0342266204', {
+      now: t0 + 200,
+      envSource: dualEnv,
+      preferDirectSms: true,
+    });
+    expect(fallback.provider).toBe('android_gateway');
+    expect(fallback.clientSideFirebase).toBeUndefined();
   });
 });
 
@@ -512,6 +544,23 @@ describe('4. Tích hợp E2E API (/api/auth/otp/send, /verify, /verify-firebase)
 
     const savedFbUser = await services.repos.users.getByPhone('0933444555');
     expect(savedFbUser).not.toBeNull();
+
+    // Đặt lại mật khẩu qua firebaseIdToken (không cần SMS server gateway riêng)
+    const resetRes = await postJson('/api/auth/password/reset', {
+      identifier: '0933444555',
+      firebaseIdToken: 'valid_firebase_id_token_dongnai_0933444555',
+      newPassword: 'FirebaseReset@2026!',
+    });
+    expect(resetRes.status).toBe(200);
+    expect(resetRes.data.token).toBeTruthy();
+
+    // Đổi mật khẩu với SĐT khác không khớp firebaseIdToken phải bị từ chối 403
+    const mismatchReset = await postJson('/api/auth/password/reset', {
+      identifier: '0977888999',
+      firebaseIdToken: 'valid_firebase_id_token_dongnai_0933444555',
+      newPassword: 'FirebaseReset@2026!',
+    });
+    expect(mismatchReset.status).toBe(403);
   });
 
   it('giữ nguyên 100% tương thích ngược cho luồng đăng nhập OTP Email qua cả /otp/request và /otp/send', async () => {
