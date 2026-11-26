@@ -123,18 +123,15 @@ export function alertsController(s: Services) {
       const omParams =
         `latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
         '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m' +
-        '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
+        '&hourly=temperature_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
         '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max' +
         '&timezone=Asia%2FHo_Chi_Minh&forecast_days=7';
-      const ecmwfUrl = `https://api.open-meteo.com/v1/forecast?${omParams}&models=ecmwf_ifs025`;
-      const fallbackOmUrl = `https://api.open-meteo.com/v1/forecast?${omParams}`;
+      const openMeteoUrl = `https://api.open-meteo.com/v1/forecast?${omParams}`;
 
       const fetchOpenMeteoBest = async () => {
-        const resEcmwf = await safeFetchOfficial(ecmwfUrl, { timeoutMs: 8000 });
-        if (resEcmwf.ok) return resEcmwf.json();
-        const resFallback = await safeFetchOfficial(fallbackOmUrl, { timeoutMs: 8000 });
-        if (!resFallback.ok) throw badRequest(`Open-Meteo trả về HTTP ${resFallback.status}`);
-        return resFallback.json();
+        const resOm = await safeFetchOfficial(openMeteoUrl, { timeoutMs: 8000 });
+        if (!resOm.ok) throw badRequest(`Open-Meteo trả về HTTP ${resOm.status}`);
+        return resOm.json();
       };
 
       if (weatherApiKey) {

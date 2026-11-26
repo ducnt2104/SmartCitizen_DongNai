@@ -8,6 +8,7 @@ import net from 'node:net';
 export const ALLOWED_OFFICIAL_DOMAINS: readonly string[] = [
   'api.weatherapi.com',
   'api.open-meteo.com',
+  'air-quality-api.open-meteo.com',
   'baodongnai.com.vn',
   'www.baodongnai.com.vn',
   'dongnai.gov.vn',

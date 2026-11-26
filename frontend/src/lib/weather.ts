@@ -43,12 +43,13 @@ export interface DongNaiWeather {
   pressureHpa: number;
   rainNow: number;
   rainProbNow: number;
+  rainProbNext3h: number;
   rainProbMaxToday: number;
   rainNext3hMm: number;
   rainSumTodayMm: number;
   cloudCover: number;
-  uvIndex: number;
-  uvMaxToday: number;
+  uvIndex: number | null;
+  uvMaxToday: number | null;
   isDay: boolean;
   kind: WeatherKind;
   conditionVi: string;
@@ -339,14 +340,19 @@ function mapWeatherApiToDongNaiWeather(
   const currentHour = allHours[startIdx];
   const rainNow = round1(cur.precip_mm ?? 0);
   const rainProbNow = hourly[0]?.rainProb ?? Math.round(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain ?? 0);
-  const rainProbMaxToday = Math.round(today?.day?.daily_chance_of_rain ?? rainProbNow);
+  const rainProbNext3h = Math.max(
+    rainProbNow,
+    hourly[1]?.rainProb ?? 0,
+    hourly[2]?.rainProb ?? 0,
+  );
+  const rainProbMaxToday = Math.round(today?.day?.daily_chance_of_rain ?? rainProbNext3h);
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (allHours[startIdx + offset]?.precip_mm ?? 0), 0),
   );
   const rainSumTodayMm = round1(today?.day?.totalprecip_mm ?? rainNext3hMm);
   const currentTemp = Math.round(cur.temp_c ?? 0);
-  const uvNow = round1(cur.uv ?? 0);
-  const uvMaxToday = round1(today?.day?.uv ?? uvNow);
+  const uvNow = cur.uv != null ? round1(cur.uv) : null;
+  const uvMaxToday = today?.day?.uv != null ? round1(today.day.uv) : uvNow;
   const condText = cur.condition?.text?.trim() || 'Mây thay đổi';
 
   return {
@@ -365,6 +371,7 @@ function mapWeatherApiToDongNaiWeather(
     pressureHpa: Math.round(cur.pressure_mb ?? 1013),
     rainNow,
     rainProbNow,
+    rainProbNext3h,
     rainProbMaxToday,
     rainNext3hMm,
     rainSumTodayMm,
@@ -384,6 +391,20 @@ function mapWeatherApiToDongNaiWeather(
   };
 }
 
+async function fetchAirQualityUv(lat: number, lng: number, signal?: AbortSignal): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}&current=uv_index`,
+      { signal, cache: 'no-store' },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { current?: { uv_index?: number | null } };
+    return data?.current?.uv_index != null ? round1(data.current.uv_index) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchOpenMeteoDirect(
   lat: number,
   lng: number,
@@ -392,23 +413,15 @@ async function fetchOpenMeteoDirect(
   const baseParams =
     `latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
     '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m' +
-    '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
+    '&hourly=temperature_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max' +
     '&timezone=Asia%2FHo_Chi_Minh&forecast_days=7';
 
-  const ecmwfUrl = `https://api.open-meteo.com/v1/forecast?${baseParams}&models=ecmwf_ifs025`;
-  const res = await fetch(ecmwfUrl, { signal, cache: 'no-store' });
-  if (res.ok) {
-    const payload = (await res.json()) as OpenMeteoPayload;
-    if (payload?.current && payload?.hourly?.time?.length && payload?.daily?.time?.length) {
-      return payload;
-    }
-  }
-  const fallbackRes = await fetch(`https://api.open-meteo.com/v1/forecast?${baseParams}`, { signal, cache: 'no-store' });
-  if (!fallbackRes.ok) throw new Error(`HTTP ${fallbackRes.status}`);
-  const fallbackPayload = (await fallbackRes.json()) as OpenMeteoPayload;
-  if (fallbackPayload?.current && fallbackPayload?.hourly?.time?.length && fallbackPayload?.daily?.time?.length) {
-    return fallbackPayload;
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${baseParams}`, { signal, cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const payload = (await res.json()) as OpenMeteoPayload;
+  if (payload?.current && payload?.hourly?.time?.length && payload?.daily?.time?.length) {
+    return payload;
   }
   throw new Error('Incomplete Open-Meteo payload');
 }
@@ -443,7 +456,7 @@ export async function fetchDongNaiWeather(
           return mapWeatherApiToDongNaiWeather(envPayload.weatherApi, envPayload.openMeteo, lat, lng, lang);
         }
         if (envPayload?.current && envPayload?.hourly?.time?.length && envPayload?.daily?.time?.length) {
-          return mapOpenMeteoToDongNaiWeather(envPayload, lat, lng, lang);
+          return await mapOpenMeteoToDongNaiWeather(envPayload, lat, lng, lang, ctrl.signal);
         }
       }
     } catch (err) {
@@ -472,21 +485,22 @@ export async function fetchDongNaiWeather(
       }
     }
 
-    // 3. Fallback chuẩn xác sang Open-Meteo ECMWF
+    // 3. Fallback chuẩn xác sang Open-Meteo Best Match
     const omDirect = await fetchOpenMeteoDirect(lat, lng, ctrl.signal);
-    return mapOpenMeteoToDongNaiWeather(omDirect, lat, lng, lang);
+    return await mapOpenMeteoToDongNaiWeather(omDirect, lat, lng, lang, ctrl.signal);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onParentAbort);
   }
 }
 
-function mapOpenMeteoToDongNaiWeather(
+async function mapOpenMeteoToDongNaiWeather(
   data: OpenMeteoPayload,
   lat: number,
   lng: number,
   lang: 'vi' | 'en',
-): DongNaiWeather {
+  signal?: AbortSignal,
+): Promise<DongNaiWeather> {
   const cur = data.current!;
   const h = data.hourly!;
   const d = data.daily!;
@@ -524,11 +538,21 @@ function mapOpenMeteoToDongNaiWeather(
 
   const isDay = (cur.is_day ?? 1) === 1;
   const curMapped = mapWmoCode(cur.weather_code ?? 0, isDay);
-  const uvNow = round1(h.uv_index?.[startIdx] ?? 0);
-  const uvMaxToday = round1(d.uv_index_max?.[0] ?? uvNow);
+  const rawUvNow = h.uv_index?.[startIdx];
+  let uvNow: number | null = rawUvNow != null ? round1(rawUvNow) : null;
+  if (uvNow == null && isDay) {
+    uvNow = await fetchAirQualityUv(lat, lng, signal);
+  }
+  const rawUvMax = d.uv_index_max?.[0];
+  const uvMaxToday: number | null = rawUvMax != null ? round1(rawUvMax) : uvNow;
   const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
   const rainProbNow = hourly[0]?.rainProb ?? Math.round(h.precipitation_probability?.[startIdx] ?? 0);
-  const rainProbMaxToday = Math.round(d.precipitation_probability_max?.[0] ?? rainProbNow);
+  const rainProbNext3h = Math.max(
+    rainProbNow,
+    hourly[1]?.rainProb ?? 0,
+    hourly[2]?.rainProb ?? 0,
+  );
+  const rainProbMaxToday = Math.round(d.precipitation_probability_max?.[0] ?? rainProbNext3h);
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (h.precipitation?.[startIdx + offset] ?? 0), 0),
   );
@@ -537,7 +561,7 @@ function mapOpenMeteoToDongNaiWeather(
 
   return {
     source: 'live',
-    providerLabel: 'ECMWF · Open-Meteo',
+    providerLabel: 'Open-Meteo Trực tiếp',
     fetchedAt: new Date().toISOString(),
     observedAt: typeof cur.time === 'string' ? cur.time : new Date().toISOString(),
     timezone: data.timezone ?? 'Asia/Ho_Chi_Minh',
@@ -551,6 +575,7 @@ function mapOpenMeteoToDongNaiWeather(
     pressureHpa: Math.round(cur.surface_pressure ?? 1013),
     rainNow,
     rainProbNow,
+    rainProbNext3h,
     rainProbMaxToday,
     rainNext3hMm,
     rainSumTodayMm,

@@ -137,6 +137,7 @@ export function createApp(
             'https://router.project-osrm.org',
             'https://api.weatherapi.com',
             'https://api.open-meteo.com',
+            'https://air-quality-api.open-meteo.com',
             'https://geocoding-api.open-meteo.com',
           ],
           'worker-src': ["'self'", 'blob:'],

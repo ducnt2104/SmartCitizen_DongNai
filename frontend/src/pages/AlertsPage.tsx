@@ -786,22 +786,22 @@ export default function AlertsPage() {
         const weekMin = Math.min(...allTemps);
         const weekMax = Math.max(...allTemps);
         const tempSpan = Math.max(1, weekMax - weekMin);
-        const uvLabel = !forecast
-          ? ''
-          : forecast.uvIndex >= 11
-            ? 'Cực nguy hiểm'
-            : forecast.uvIndex >= 8
-              ? 'Rất cao'
-              : forecast.uvIndex >= 6
-                ? 'Cao'
-                : forecast.uvIndex >= 3
-                  ? 'Trung bình'
-                  : 'Thấp';
-        const uvDisplay = !forecast
-          ? '--'
-          : forecast.uvIndex > 0 && forecast.uvIndex < 1
-            ? forecast.uvIndex.toFixed(1)
-            : String(Math.round(forecast.uvIndex * 10) / 10);
+        const uvLabel =
+          !forecast || forecast.uvIndex == null
+            ? ''
+            : forecast.uvIndex >= 11
+              ? 'Cực nguy hiểm'
+              : forecast.uvIndex >= 8
+                ? 'Rất cao'
+                : forecast.uvIndex >= 6
+                  ? 'Cao'
+                  : forecast.uvIndex >= 3
+                    ? 'Trung bình'
+                    : 'Thấp';
+        const uvDisplay =
+          !forecast || forecast.uvIndex == null
+            ? '--'
+            : (Math.round(forecast.uvIndex * 10) / 10).toFixed(1).replace(/\.0$/, '');
         const floodRisk = !forecast
           ? 'Đang kiểm tra'
           : forecast.rainNext3hMm > 20 || forecast.rainNow > 10
@@ -964,7 +964,7 @@ export default function AlertsPage() {
               <>
                 <section
                   aria-label="Dự báo thời tiết hiện tại theo vị trí"
-                  className="relative overflow-hidden rounded-[1.75rem] p-5 pb-6 text-white shadow-lift transition-colors duration-700 sm:p-6 sm:pb-7"
+                  className="relative overflow-hidden rounded-[1.75rem] p-5 pb-7 text-white shadow-lift transition-colors duration-700 sm:p-6 sm:pb-8"
                   style={{ background: getWeatherCardGradient(forecast.kind, forecast.isDay) }}
                 >
                   <DynamicWeatherBackdrop kind={forecast.kind} isDay={forecast.isDay} />
@@ -1025,24 +1025,40 @@ export default function AlertsPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:w-[27rem]">
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Droplets className="h-3.5 w-3.5 text-sky-200" aria-hidden /> Độ ẩm
                         </p>
                         <p className="mono mt-1 text-lg font-extrabold text-white">{forecast.humidity}%</p>
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Umbrella className="h-3.5 w-3.5 text-cyan-200" aria-hidden /> Xác suất mưa
                         </p>
-                        <p className="mono mt-1 text-lg font-extrabold text-white">
-                          {forecast.rainProbNow}% <span className="text-xs font-semibold text-white/85">({forecast.rainNow}mm)</span>
-                        </p>
-                        {forecast.rainProbNow === 0 && forecast.rainProbMaxToday > 0 && (
-                          <p className="mt-0.5 text-[11px] font-medium text-white/80">Cả ngày: {forecast.rainProbMaxToday}%</p>
+                        {forecast.rainProbNow === 0 && (forecast.rainProbNext3h > 0 || forecast.rainProbMaxToday > 0) ? (
+                          <>
+                            <p className="mono mt-1 text-lg font-extrabold text-white">
+                              {Math.max(forecast.rainProbMaxToday, forecast.rainProbNext3h)}%{' '}
+                              <span className="text-xs font-semibold text-white/85">({forecast.rainSumTodayMm}mm)</span>
+                            </p>
+                            <p className="mt-0.5 text-[11px] font-medium text-white/80">
+                              Hiện tại: 0% · 3h tới: {forecast.rainProbNext3h}%
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="mono mt-1 text-lg font-extrabold text-white">
+                              {forecast.rainProbNow}% <span className="text-xs font-semibold text-white/85">({forecast.rainNow}mm)</span>
+                            </p>
+                            {forecast.rainProbMaxToday > forecast.rainProbNow && (
+                              <p className="mt-0.5 text-[11px] font-medium text-white/80">
+                                Cả ngày: {forecast.rainProbMaxToday}% ({forecast.rainSumTodayMm}mm)
+                              </p>
+                            )}
+                          </>
                         )}
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Wind className="h-3.5 w-3.5 text-teal-200" aria-hidden /> Gió & Giật
                         </p>
@@ -1050,16 +1066,18 @@ export default function AlertsPage() {
                           {forecast.windSpeed} <span className="text-xs font-semibold text-white/85">/ {forecast.windGusts} km/h</span>
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Sun className="h-3.5 w-3.5 text-amber-200" aria-hidden /> Chỉ số UV
                         </p>
                         <p className="mono mt-1 text-lg font-extrabold text-white">
                           {uvDisplay} <span className="text-xs font-semibold text-white/90">{uvLabel}</span>
                         </p>
-                        <p className="mt-0.5 text-[11px] font-medium text-white/80">Đỉnh ngày: {forecast.uvMaxToday}</p>
+                        <p className="mt-0.5 text-[11px] font-medium text-white/80">
+                          Đỉnh ngày: {forecast.uvMaxToday != null ? (Math.round(forecast.uvMaxToday * 10) / 10).toFixed(1).replace(/\.0$/, '') : '--'}
+                        </p>
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <Gauge className="h-3.5 w-3.5 text-slate-200" aria-hidden /> Áp suất & Mây
                         </p>
@@ -1067,7 +1085,7 @@ export default function AlertsPage() {
                           {forecast.pressureHpa} hPa · {forecast.cloudCover}%
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-3.5 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-4 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
                         </p>
