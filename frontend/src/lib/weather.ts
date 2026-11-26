@@ -338,7 +338,7 @@ function mapWeatherApiToDongNaiWeather(
 
   const currentHour = allHours[startIdx];
   const rainNow = round1(cur.precip_mm ?? 0);
-  const rainProbNow = Math.round(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain ?? 0);
+  const rainProbNow = hourly[0]?.rainProb ?? Math.round(currentHour?.chance_of_rain ?? today?.day?.daily_chance_of_rain ?? 0);
   const rainProbMaxToday = Math.round(today?.day?.daily_chance_of_rain ?? rainProbNow);
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (allHours[startIdx + offset]?.precip_mm ?? 0), 0),
@@ -389,18 +389,26 @@ async function fetchOpenMeteoDirect(
   lng: number,
   signal?: AbortSignal,
 ): Promise<OpenMeteoPayload> {
-  const directUrl =
-    `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
+  const baseParams =
+    `latitude=${lat.toFixed(5)}&longitude=${lng.toFixed(5)}` +
     '&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m' +
     '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,precipitation,rain,uv_index,weather_code,is_day' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max' +
-    '&timezone=auto&forecast_days=7';
+    '&timezone=Asia%2FHo_Chi_Minh&forecast_days=7';
 
-  const res = await fetch(directUrl, { signal, cache: 'no-store' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const payload = (await res.json()) as OpenMeteoPayload;
-  if (payload?.current && payload?.hourly?.time?.length && payload?.daily?.time?.length) {
-    return payload;
+  const ecmwfUrl = `https://api.open-meteo.com/v1/forecast?${baseParams}&models=ecmwf_ifs025`;
+  const res = await fetch(ecmwfUrl, { signal, cache: 'no-store' });
+  if (res.ok) {
+    const payload = (await res.json()) as OpenMeteoPayload;
+    if (payload?.current && payload?.hourly?.time?.length && payload?.daily?.time?.length) {
+      return payload;
+    }
+  }
+  const fallbackRes = await fetch(`https://api.open-meteo.com/v1/forecast?${baseParams}`, { signal, cache: 'no-store' });
+  if (!fallbackRes.ok) throw new Error(`HTTP ${fallbackRes.status}`);
+  const fallbackPayload = (await fallbackRes.json()) as OpenMeteoPayload;
+  if (fallbackPayload?.current && fallbackPayload?.hourly?.time?.length && fallbackPayload?.daily?.time?.length) {
+    return fallbackPayload;
   }
   throw new Error('Incomplete Open-Meteo payload');
 }
@@ -419,11 +427,14 @@ export async function fetchDongNaiWeather(
   try {
     const clientWapiKey = getStoredWeatherApiKey();
 
-    // 1. Ưu tiên gọi Backend Proxy (/api/weather/forecast) — server dùng process.env.WEATHERAPI_KEY hoặc header X-Weather-Api-Key
+    // 1. Ưu tiên gọi Backend Proxy (/api/weather/forecast) — không cache để luôn lấy số liệu mới nhất
     try {
-      const proxyPath = apiUrl(`/api/weather/forecast?lat=${encodeURIComponent(lat.toFixed(5))}&lng=${encodeURIComponent(lng.toFixed(5))}&lang=${lang}`);
+      const proxyPath = apiUrl(
+        `/api/weather/forecast?lat=${encodeURIComponent(lat.toFixed(5))}&lng=${encodeURIComponent(lng.toFixed(5))}&lang=${lang}&_t=${Date.now()}`,
+      );
       const proxyRes = await fetch(proxyPath, {
         signal: ctrl.signal,
+        cache: 'no-store',
         headers: clientWapiKey ? { 'X-Weather-Api-Key': clientWapiKey } : undefined,
       });
       if (proxyRes.ok && (proxyRes.headers.get('content-type') ?? '').includes('application/json')) {
@@ -432,7 +443,7 @@ export async function fetchDongNaiWeather(
           return mapWeatherApiToDongNaiWeather(envPayload.weatherApi, envPayload.openMeteo, lat, lng, lang);
         }
         if (envPayload?.current && envPayload?.hourly?.time?.length && envPayload?.daily?.time?.length) {
-          return mapOpenMeteoToDongNaiWeather(envPayload, 'proxy', lat, lng, lang);
+          return mapOpenMeteoToDongNaiWeather(envPayload, lat, lng, lang);
         }
       }
     } catch (err) {
@@ -461,9 +472,9 @@ export async function fetchDongNaiWeather(
       }
     }
 
-    // 3. Fallback an toàn sang Open-Meteo
+    // 3. Fallback chuẩn xác sang Open-Meteo ECMWF
     const omDirect = await fetchOpenMeteoDirect(lat, lng, ctrl.signal);
-    return mapOpenMeteoToDongNaiWeather(omDirect, 'direct', lat, lng, lang);
+    return mapOpenMeteoToDongNaiWeather(omDirect, lat, lng, lang);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onParentAbort);
@@ -472,7 +483,6 @@ export async function fetchDongNaiWeather(
 
 function mapOpenMeteoToDongNaiWeather(
   data: OpenMeteoPayload,
-  via: 'direct' | 'proxy',
   lat: number,
   lng: number,
   lang: 'vi' | 'en',
@@ -517,7 +527,7 @@ function mapOpenMeteoToDongNaiWeather(
   const uvNow = round1(h.uv_index?.[startIdx] ?? 0);
   const uvMaxToday = round1(d.uv_index_max?.[0] ?? uvNow);
   const rainNow = round1(cur.precipitation ?? cur.rain ?? 0);
-  const rainProbNow = Math.round(h.precipitation_probability?.[startIdx] ?? 0);
+  const rainProbNow = hourly[0]?.rainProb ?? Math.round(h.precipitation_probability?.[startIdx] ?? 0);
   const rainProbMaxToday = Math.round(d.precipitation_probability_max?.[0] ?? rainProbNow);
   const rainNext3hMm = round1(
     [0, 1, 2].reduce((sum, offset) => sum + (h.precipitation?.[startIdx + offset] ?? 0), 0),
@@ -527,7 +537,7 @@ function mapOpenMeteoToDongNaiWeather(
 
   return {
     source: 'live',
-    providerLabel: via === 'direct' ? 'Open-Meteo Trực tiếp' : 'Open-Meteo (Máy chủ đồng bộ)',
+    providerLabel: 'ECMWF · Open-Meteo',
     fetchedAt: new Date().toISOString(),
     observedAt: typeof cur.time === 'string' ? cur.time : new Date().toISOString(),
     timezone: data.timezone ?? 'Asia/Ho_Chi_Minh',

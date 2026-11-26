@@ -363,6 +363,7 @@ export default function AlertsPage() {
       }
     } catch (err) {
       if (!ctrl.signal.aborted) {
+        setForecast(null);
         setForecastError(err instanceof Error ? err.message : 'Không kết nối được máy chủ khí tượng.');
       }
     } finally {
@@ -956,7 +957,7 @@ export default function AlertsPage() {
               <>
                 <section
                   aria-label="Dự báo thời tiết hiện tại theo vị trí"
-                  className="relative overflow-hidden rounded-[1.75rem] p-5 text-white shadow-lift transition-colors duration-700 sm:p-6"
+                  className="relative overflow-hidden rounded-[1.75rem] p-5 pb-6 text-white shadow-lift transition-colors duration-700 sm:p-6 sm:pb-7"
                   style={{ background: getWeatherCardGradient(forecast.kind, forecast.isDay) }}
                 >
                   <DynamicWeatherBackdrop kind={forecast.kind} isDay={forecast.isDay} />
@@ -993,24 +994,24 @@ export default function AlertsPage() {
                         <div>
                           <div className="flex items-baseline gap-2.5">
                             <span className={`mono text-4xl font-extrabold tracking-tight text-white drop-shadow-sm sm:text-5xl ${forecastLoading ? 'opacity-60' : ''}`}>
-                              {forecast.temp.toFixed(1)}°C
+                              {Math.round(forecast.temp)}°C
                             </span>
                             <span className="text-sm font-bold text-white/95">
-                              C: {forecast.tempHigh.toFixed(1)}° · T: {forecast.tempLow.toFixed(1)}°
+                              C: {Math.round(forecast.tempHigh)}° · T: {Math.round(forecast.tempLow)}°
                             </span>
                           </div>
                           <p className="mt-0.5 text-base font-bold text-white sm:text-lg">
                             {lang === 'vi' ? forecast.conditionVi : forecast.conditionEn}
                           </p>
                           <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs font-medium text-white/90">
-                            <span>Cảm giác như {forecast.feelsLike.toFixed(1)}°C</span>
+                            <span>Cảm giác như {Math.round(forecast.feelsLike)}°C</span>
                             <span className="inline-flex items-center gap-1">
                               <Sunrise className="h-3.5 w-3.5 text-amber-200" aria-hidden /> {forecast.sunrise}
                             </span>
                             <span className="inline-flex items-center gap-1">
                               <Sunset className="h-3.5 w-3.5 text-orange-200" aria-hidden /> {forecast.sunset}
                             </span>
-                            <span>Cập nhật {fmtDate(forecast.fetchedAt, true)}</span>
+                            <span>Đo lúc {fmtDate(forecast.observedAt, true)}</span>
                           </p>
                         </div>
                       </div>
@@ -1059,12 +1060,12 @@ export default function AlertsPage() {
                           {forecast.pressureHpa} hPa · {forecast.cloudCover}%
                         </p>
                       </div>
-                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 backdrop-blur-md">
+                      <div className="rounded-2xl border border-white/[0.16] bg-white/10 p-3 pb-3.5 backdrop-blur-md">
                         <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white/90">
                           <ShieldAlert className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nguy cơ ngập
                         </p>
                         <p className="mt-1 text-xs font-extrabold text-white sm:text-sm">{floodRisk}</p>
-                        <p className="mt-0.5 text-[11px] font-medium text-white/80">
+                        <p className="mt-0.5 text-[11px] leading-snug font-medium text-white/80">
                           3h tới: {forecast.rainNext3hMm}mm · Ngày: {forecast.rainSumTodayMm}mm
                         </p>
                       </div>
